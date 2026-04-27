@@ -1,0 +1,381 @@
+{
+  "version": 1,
+  "project": "gpt-image-canvas",
+  "overview": "Build a local professional AI canvas using tldraw, Hono, SQLite, and GPT Image 2. Ralph must execute one story per iteration, commit story changes, and keep secrets out of the repository.",
+  "goals": [
+    "Provide a local tldraw-based canvas for AI image creation and visual comparison.",
+    "Support GPT Image 2 text-to-image as the primary workflow.",
+    "Support single selected canvas image as a reference for image-to-image generation.",
+    "Persist projects, history, generated image metadata, and assets locally.",
+    "Offer Docker Compose as a one-command production-style local runtime."
+  ],
+  "nonGoals": [
+    "Do not support models other than gpt-image-2 in v1.",
+    "Do not implement user accounts, cloud sync, billing, multi-project management, or collaborative editing.",
+    "Do not implement mask-based inpainting or local region editing.",
+    "Do not implement arbitrary third-party request/response mapping; only support OpenAI-compatible base URLs.",
+    "Do not commit real API keys, generated assets, SQLite databases, or Ralph runtime state."
+  ],
+  "successMetrics": [
+    "A user can open the local app, type a prompt, choose a size, and generate images onto the tldraw canvas.",
+    "Generated images are written under the local data directory and remain available after restart.",
+    "The canvas snapshot and generation history restore after restart.",
+    "A selected canvas image can be used as a single reference image for a new generation.",
+    "Docker Compose can build and serve the app from one localhost port."
+  ],
+  "openQuestions": [
+    "No product-level open questions remain. If live API credentials are missing, record that the final live API smoke could not run instead of committing secrets."
+  ],
+  "stack": {
+    "packageManager": "pnpm 9.14.2 workspaces",
+    "frontend": "React + Vite + TypeScript + tldraw + Tailwind CSS + lucide-react",
+    "backend": "Hono on Node.js with TypeScript",
+    "database": "SQLite using Drizzle ORM and better-sqlite3",
+    "imageProvider": "OpenAI-compatible Images API, fixed model gpt-image-2",
+    "runtime": "Node.js 22",
+    "deploy": "Dockerfile and docker-compose.yml with a single app service",
+    "storage": "Host ./data bind-mounted to /app/data in Docker"
+  },
+  "routes": [
+    {
+      "path": "/",
+      "name": "Canvas App",
+      "purpose": "React/tldraw creative workspace served by Vite in development and by Hono in production."
+    },
+    {
+      "path": "/api/health",
+      "name": "Health Check",
+      "purpose": "Confirm the API server is running."
+    },
+    {
+      "path": "/api/config",
+      "name": "App Config",
+      "purpose": "Return fixed model, supported size presets, style presets, quality options, formats, and counts."
+    },
+    {
+      "path": "/api/project",
+      "name": "Project State",
+      "purpose": "Load and save the single default project and tldraw snapshot."
+    },
+    {
+      "path": "/api/images/generate",
+      "name": "Text To Image",
+      "purpose": "Generate one or more GPT Image 2 images from a prompt."
+    },
+    {
+      "path": "/api/images/edit",
+      "name": "Reference Image Generation",
+      "purpose": "Generate images using a single selected canvas image as reference."
+    },
+    {
+      "path": "/api/assets/:id",
+      "name": "Asset File",
+      "purpose": "Serve locally stored generated image files."
+    },
+    {
+      "path": "/api/assets/:id/download",
+      "name": "Asset Download",
+      "purpose": "Download the original generated asset."
+    }
+  ],
+  "uiNotes": [
+    "The UI language is Chinese.",
+    "The app opens directly into the working canvas; do not build a marketing landing page.",
+    "Use a full-height tldraw canvas with a fixed right-side AI panel.",
+    "Keep the canvas clean: do not place prompt labels next to generated images.",
+    "Use scene-oriented size presets with visible dimensions, plus custom width/height inputs.",
+    "Hide background and transparency controls because v1 only supports gpt-image-2.",
+    "Basic controls stay visible: prompt, style preset, size preset/custom size, count, generate/cancel.",
+    "Advanced controls are collapsible: quality and output format.",
+    "History shows recent generations with actions to locate, rerun, and download."
+  ],
+  "dataModel": [
+    {
+      "entity": "Project",
+      "fields": [
+        "id",
+        "name",
+        "snapshotJson",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    {
+      "entity": "Asset",
+      "fields": [
+        "id",
+        "fileName",
+        "relativePath",
+        "mimeType",
+        "width",
+        "height",
+        "createdAt"
+      ]
+    },
+    {
+      "entity": "GenerationRecord",
+      "fields": [
+        "id",
+        "mode",
+        "prompt",
+        "effectivePrompt",
+        "presetId",
+        "width",
+        "height",
+        "quality",
+        "outputFormat",
+        "count",
+        "status",
+        "error",
+        "referenceAssetId",
+        "createdAt"
+      ]
+    },
+    {
+      "entity": "GenerationOutput",
+      "fields": [
+        "id",
+        "generationId",
+        "status",
+        "assetId",
+        "error",
+        "createdAt"
+      ]
+    }
+  ],
+  "importFormat": {
+    "description": "Not applicable for v1. Users create and persist work locally inside the app.",
+    "example": {}
+  },
+  "rules": [
+    "Ralph must complete exactly one story per iteration and commit story changes unless explicitly run with no-commit.",
+    "Treat the current uncommitted scaffold files as draft work that US-001 should normalize, not as final implementation.",
+    "The only supported image model is gpt-image-2. Do not add model switching UI.",
+    "Read OPENAI_API_KEY, OPENAI_BASE_URL, PORT, HOST, and DATA_DIR from environment variables or .env.",
+    "Do not read the user's global Codex config for image API credentials.",
+    "Do not log or commit real API keys.",
+    "The OpenAI-compatible base URL is configurable, but request and response semantics remain OpenAI Images API-compatible.",
+    "Validate custom sizes on both frontend and backend. Reject invalid values with clear Chinese errors instead of silently changing them.",
+    "Batch generation supports counts 1, 2, and 4 with backend concurrency limited to 2. Do not restrict batch count for large images.",
+    "On partial batch failures, keep successful assets and record failed outputs.",
+    "Canceling a generation aborts the client request and prevents canceled results from being inserted into the canvas.",
+    "Deleting an image shape from the canvas does not delete its local file or history entry.",
+    "The single default project autosaves with debounce.",
+    "Docker Compose uses one app service and bind-mounts ./data to /app/data.",
+    "Every story must run pnpm typecheck and pnpm build after implementation. Frontend stories must also perform browser verification."
+  ],
+  "qualityGates": [
+    "pnpm typecheck",
+    "pnpm build"
+  ],
+  "stories": [
+    {
+      "id": "US-001",
+      "title": "Standardize repository scaffold for Ralph execution",
+      "status": "in_progress",
+      "dependsOn": [],
+      "description": "As a maintainer, I want a clean pnpm workspace, Ralph task file, and operational repository notes so subsequent Ralph stories can run deterministically.",
+      "acceptanceCriteria": [
+        "Normalize the existing draft scaffold into a valid pnpm workspace with apps/api, apps/web, and packages/shared.",
+        "Install or preserve Ralph templates under .agents/ralph and keep this PRD at .agents/tasks/prd-gpt-image-canvas.json.",
+        "Root scripts include dev, api:dev, web:dev, typecheck, build, and start.",
+        ".env.example documents OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_IMAGE_MODEL=gpt-image-2, PORT, HOST, and DATA_DIR without real secrets.",
+        ".gitignore excludes .env, .ralph, data, generated assets, databases, node_modules, and build outputs.",
+        "AGENTS.md documents pnpm, quality gates, app boundaries, and the no-secret rule.",
+        "Example: running pnpm --version reports pnpm 9.x and the workspace files are present.",
+        "Negative case: real API keys must not appear in README, .env.example, PRD, AGENTS.md, or committed files.",
+        "Verification: pnpm typecheck and pnpm build either pass or fail only because dependencies have not yet been installed; if dependencies are missing, run pnpm install and rerun."
+      ],
+      "startedAt": "2026-04-27T08:05:55.583781+00:00",
+      "completedAt": null,
+      "updatedAt": "2026-04-27T08:05:55.583781+00:00"
+    },
+    {
+      "id": "US-002",
+      "title": "Build Hono API with SQLite persistence",
+      "status": "open",
+      "dependsOn": [
+        "US-001"
+      ],
+      "description": "As a local app user, I want the API to persist my single project, generation history, and generated asset metadata in SQLite so work survives restarts.",
+      "acceptanceCriteria": [
+        "Add apps/api with Hono, @hono/node-server, dotenv, drizzle-orm, drizzle-kit, and better-sqlite3.",
+        "Create SQLite schema for Project, Asset, GenerationRecord, and GenerationOutput.",
+        "Initialize DATA_DIR, assets directory, and database file automatically at startup.",
+        "Implement GET /api/health returning ok status.",
+        "Implement GET /api/config returning model gpt-image-2, style presets, size presets, qualities, formats, and counts.",
+        "Implement GET /api/project and PUT /api/project for the single default project snapshot.",
+        "Example: a saved snapshot can be loaded again after restarting the API.",
+        "Negative case: invalid project payload returns a 400 JSON error and does not corrupt stored state.",
+        "Verification: pnpm typecheck and pnpm build pass."
+      ]
+    },
+    {
+      "id": "US-003",
+      "title": "Create React tldraw workspace shell",
+      "status": "open",
+      "dependsOn": [
+        "US-001",
+        "US-002"
+      ],
+      "description": "As a creator, I want a Chinese professional canvas interface with tldraw and an AI control panel so I can start composing images immediately.",
+      "acceptanceCriteria": [
+        "Add apps/web with React, Vite, TypeScript, tldraw, Tailwind CSS, lucide-react, and a Vite proxy to the API.",
+        "Render a full-height tldraw canvas with a fixed right-side Chinese AI panel.",
+        "Panel includes visible prompt, style preset, scene size preset, custom width/height, count, generate, and cancel controls.",
+        "Panel includes collapsible advanced controls for quality and output format.",
+        "Do not show model selection, background controls, or transparent background controls.",
+        "Example: selecting a scene preset updates the visible width and height.",
+        "Negative case: an empty prompt disables generation or shows a clear Chinese validation message.",
+        "Browser verification: run the app, load the workspace, confirm tldraw canvas and panel render without overlap.",
+        "Verification: pnpm typecheck and pnpm build pass."
+      ]
+    },
+    {
+      "id": "US-004",
+      "title": "Autosave and restore the tldraw project",
+      "status": "open",
+      "dependsOn": [
+        "US-002",
+        "US-003"
+      ],
+      "description": "As a creator, I want my canvas to autosave and restore so refreshing the app does not lose layout or work in progress.",
+      "acceptanceCriteria": [
+        "On app load, fetch /api/project and restore the saved tldraw snapshot if present.",
+        "Autosave the tldraw snapshot through PUT /api/project with debounce after canvas changes.",
+        "Show a compact save status in the AI panel or app chrome.",
+        "Do not save on every pointer movement without debounce.",
+        "Example: draw or add a shape, refresh, and the shape reappears.",
+        "Negative case: if the API save fails, the UI shows a non-blocking Chinese error and keeps the current canvas intact.",
+        "Browser verification: create a shape, refresh, and confirm it restores.",
+        "Verification: pnpm typecheck and pnpm build pass."
+      ]
+    },
+    {
+      "id": "US-005",
+      "title": "Implement GPT Image 2 provider and size validation",
+      "status": "open",
+      "dependsOn": [
+        "US-002"
+      ],
+      "description": "As a maintainer, I want a safe GPT Image 2 provider abstraction so generation requests are validated and secrets remain on the server.",
+      "acceptanceCriteria": [
+        "Implement an image provider interface for generate and edit operations, with only an OpenAI-compatible GPT Image 2 implementation.",
+        "Read OPENAI_API_KEY and OPENAI_BASE_URL from environment variables or .env; do not read global Codex config.",
+        "Hard-code or enforce model gpt-image-2 on provider calls.",
+        "Implement shared frontend/backend size validation for scene presets and custom sizes.",
+        "Return Chinese JSON errors for missing API key, invalid prompt, invalid size, unsupported provider behavior, or upstream failure.",
+        "Do not log API keys or full authorization headers.",
+        "Example: valid custom size passes validation and produces the OpenAI-compatible size value.",
+        "Negative case: invalid custom size returns 400 before contacting upstream.",
+        "Verification: pnpm typecheck and pnpm build pass."
+      ]
+    },
+    {
+      "id": "US-006",
+      "title": "Generate text-to-image assets onto the canvas",
+      "status": "open",
+      "dependsOn": [
+        "US-003",
+        "US-004",
+        "US-005"
+      ],
+      "description": "As a creator, I want to generate one or more images from a text prompt and place them on the canvas in a grid so I can compare options visually.",
+      "acceptanceCriteria": [
+        "Implement POST /api/images/generate accepting prompt, presetId, size, quality, outputFormat, and count.",
+        "Compose style presets into the effective prompt by appending the preset prompt transparently.",
+        "Execute batch requests with backend concurrency limited to 2.",
+        "Save successful image files under data/assets and metadata/history in SQLite.",
+        "Return a generation record with per-output success or failure.",
+        "Insert successful image outputs into tldraw as image assets and shapes in a neat grid centered in the current viewport.",
+        "Canceling a request prevents canceled results from being inserted into the canvas.",
+        "Example: count 4 produces up to four canvas images arranged as a grid.",
+        "Negative case: one failed output still leaves successful outputs on the canvas and records the failure.",
+        "Browser verification: submit a generation request using configured credentials and confirm image insertion when credentials are available; otherwise verify the missing-key error.",
+        "Verification: pnpm typecheck and pnpm build pass."
+      ]
+    },
+    {
+      "id": "US-007",
+      "title": "Generate from a single selected reference image",
+      "status": "open",
+      "dependsOn": [
+        "US-006"
+      ],
+      "description": "As a creator, I want to select one image on the canvas and use it as a reference for a new GPT Image 2 generation.",
+      "acceptanceCriteria": [
+        "Detect when exactly one tldraw image shape is selected and expose it as the current reference in the AI panel.",
+        "Implement POST /api/images/edit accepting prompt, size, quality, outputFormat, count, and one reference image.",
+        "Support reference images from generated assets and from user-added canvas image assets when their data can be read by the frontend.",
+        "Place edit outputs near the current viewport in the same grid style as text-to-image outputs.",
+        "Record referenceAssetId when the reference maps to a locally stored asset.",
+        "Example: selecting one image enables the reference generation mode and produces a new related image.",
+        "Negative case: selecting zero, multiple, or non-image shapes keeps reference generation disabled with a clear Chinese hint.",
+        "Browser verification: select one canvas image and confirm reference UI state; perform live edit smoke only when credentials support it.",
+        "Verification: pnpm typecheck and pnpm build pass."
+      ]
+    },
+    {
+      "id": "US-008",
+      "title": "Add generation history actions",
+      "status": "open",
+      "dependsOn": [
+        "US-006",
+        "US-007"
+      ],
+      "description": "As a creator, I want a simple persistent history so I can locate, rerun, and download previous generation results.",
+      "acceptanceCriteria": [
+        "Show recent generation records in the right panel with prompt excerpt, mode, size, status, created time, and output count.",
+        "Clicking locate moves the tldraw camera to the corresponding canvas image when it still exists.",
+        "Rerun submits a new generation with the same prompt, preset, size, quality, format, count, and reference when available.",
+        "Download opens or downloads the original locally stored asset through /api/assets/:id/download.",
+        "Deleting a canvas image shape does not delete the asset file or history record.",
+        "Example: after refresh, history still appears and download works for stored assets.",
+        "Negative case: locating a deleted canvas shape shows a Chinese not-found message instead of crashing.",
+        "Browser verification: generate or use existing history, locate an output, rerun it, and download an asset.",
+        "Verification: pnpm typecheck and pnpm build pass."
+      ]
+    },
+    {
+      "id": "US-009",
+      "title": "Package the app with Docker Compose",
+      "status": "open",
+      "dependsOn": [
+        "US-002",
+        "US-003",
+        "US-008"
+      ],
+      "description": "As a local operator, I want Docker Compose to build and serve the complete app from one localhost port with data persisted on the host.",
+      "acceptanceCriteria": [
+        "Add Dockerfile using Node.js 22 and pnpm via Corepack.",
+        "Build shared, web, and API packages in the image.",
+        "Serve the built web bundle through Hono from the same app service that serves /api.",
+        "Add docker-compose.yml with one app service, localhost port mapping, env_file .env, and ./data bind-mounted to /app/data.",
+        "Document Docker startup in README.",
+        "Example: docker compose up --build serves the app at localhost on the configured port.",
+        "Negative case: missing .env credentials does not stop the app from booting; generation endpoints return missing-key errors.",
+        "Verification: pnpm typecheck and pnpm build pass; docker compose config succeeds."
+      ]
+    },
+    {
+      "id": "US-010",
+      "title": "Run final local, Docker, and live API smoke verification",
+      "status": "open",
+      "dependsOn": [
+        "US-009"
+      ],
+      "description": "As a maintainer, I want final end-to-end verification so the Ralph build leaves a usable local professional image canvas.",
+      "acceptanceCriteria": [
+        "Run pnpm typecheck and pnpm build successfully.",
+        "Start the local dev workflow and browser-verify the canvas, AI panel, autosave, history, and download flows.",
+        "Run docker compose config and, when Docker is available, docker compose up --build long enough to confirm the app boots.",
+        "If .env has valid credentials, perform one live text-to-image smoke and one live reference-image smoke using gpt-image-2.",
+        "If credentials or provider capability are unavailable, record the exact reason in Ralph progress without committing secrets.",
+        "Update README with final setup, dev, Docker, data storage, and troubleshooting notes.",
+        "Example: a user following README can run the app and generate onto the canvas.",
+        "Negative case: missing credentials are handled as a runtime configuration problem, not as a build failure.",
+        "Verification: final story records commands run, browser findings, Docker findings, and live API smoke status."
+      ]
+    }
+  ]
+}

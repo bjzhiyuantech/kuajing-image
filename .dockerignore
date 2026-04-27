@@ -1,0 +1,14 @@
+node_modules
+.git
+.ralph
+data
+.env
+*.log
+*.db
+*.sqlite
+*.sqlite3
+dist
+build
+coverage
+apps/**/dist
+packages/**/dist
