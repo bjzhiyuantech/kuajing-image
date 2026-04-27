@@ -1,0 +1,67 @@
+import { relations } from "drizzle-orm";
+import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+
+export const projects = sqliteTable("projects", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  snapshotJson: text("snapshot_json").notNull(),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull()
+});
+
+export const assets = sqliteTable("assets", {
+  id: text("id").primaryKey(),
+  fileName: text("file_name").notNull(),
+  relativePath: text("relative_path").notNull(),
+  mimeType: text("mime_type").notNull(),
+  width: integer("width").notNull(),
+  height: integer("height").notNull(),
+  createdAt: text("created_at").notNull()
+});
+
+export const generationRecords = sqliteTable("generation_records", {
+  id: text("id").primaryKey(),
+  mode: text("mode").notNull(),
+  prompt: text("prompt").notNull(),
+  effectivePrompt: text("effective_prompt").notNull(),
+  presetId: text("preset_id").notNull(),
+  width: integer("width").notNull(),
+  height: integer("height").notNull(),
+  quality: text("quality").notNull(),
+  outputFormat: text("output_format").notNull(),
+  count: integer("count").notNull(),
+  status: text("status").notNull(),
+  error: text("error"),
+  referenceAssetId: text("reference_asset_id").references(() => assets.id),
+  createdAt: text("created_at").notNull()
+});
+
+export const generationOutputs = sqliteTable("generation_outputs", {
+  id: text("id").primaryKey(),
+  generationId: text("generation_id")
+    .notNull()
+    .references(() => generationRecords.id, { onDelete: "cascade" }),
+  status: text("status").notNull(),
+  assetId: text("asset_id").references(() => assets.id),
+  error: text("error"),
+  createdAt: text("created_at").notNull()
+});
+
+export const generationRelations = relations(generationRecords, ({ many, one }) => ({
+  outputs: many(generationOutputs),
+  referenceAsset: one(assets, {
+    fields: [generationRecords.referenceAssetId],
+    references: [assets.id]
+  })
+}));
+
+export const outputRelations = relations(generationOutputs, ({ one }) => ({
+  generation: one(generationRecords, {
+    fields: [generationOutputs.generationId],
+    references: [generationRecords.id]
+  }),
+  asset: one(assets, {
+    fields: [generationOutputs.assetId],
+    references: [assets.id]
+  })
+}));

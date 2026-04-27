@@ -1,0 +1,151 @@
+import { desc, eq, inArray } from "drizzle-orm";
+import type {
+  GeneratedAsset,
+  GenerationRecord as ApiGenerationRecord,
+  GenerationStatus,
+  ImageMode,
+  ImageQuality,
+  OutputFormat,
+  OutputStatus,
+  ProjectState
+} from "./contracts.js";
+import { db } from "./database.js";
+import { assets, generationOutputs, generationRecords, projects } from "./schema.js";
+
+export const DEFAULT_PROJECT_ID = "default";
+const DEFAULT_PROJECT_NAME = "Default Project";
+
+interface ProjectSnapshotInput {
+  name?: string;
+  snapshotJson: string;
+}
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function parseSnapshot(snapshotJson: string): unknown | null {
+  return JSON.parse(snapshotJson) as unknown;
+}
+
+export function ensureDefaultProject(): void {
+  const existing = db.select().from(projects).where(eq(projects.id, DEFAULT_PROJECT_ID)).get();
+
+  if (existing) {
+    return;
+  }
+
+  const createdAt = nowIso();
+  db.insert(projects)
+    .values({
+      id: DEFAULT_PROJECT_ID,
+      name: DEFAULT_PROJECT_NAME,
+      snapshotJson: "null",
+      createdAt,
+      updatedAt: createdAt
+    })
+    .run();
+}
+
+export function saveProjectSnapshot(input: ProjectSnapshotInput): ProjectState {
+  ensureDefaultProject();
+
+  const updatedAt = nowIso();
+  const current = db.select().from(projects).where(eq(projects.id, DEFAULT_PROJECT_ID)).get();
+
+  db.update(projects)
+    .set({
+      name: input.name ?? current?.name ?? DEFAULT_PROJECT_NAME,
+      snapshotJson: input.snapshotJson,
+      updatedAt
+    })
+    .where(eq(projects.id, DEFAULT_PROJECT_ID))
+    .run();
+
+  return getProjectState();
+}
+
+export function getProjectState(): ProjectState {
+  ensureDefaultProject();
+
+  const project = db.select().from(projects).where(eq(projects.id, DEFAULT_PROJECT_ID)).get();
+
+  if (!project) {
+    throw new Error("Default project was not initialized.");
+  }
+
+  return {
+    id: project.id,
+    name: project.name,
+    snapshot: parseSnapshot(project.snapshotJson),
+    history: getGenerationHistory(),
+    updatedAt: project.updatedAt
+  };
+}
+
+function getGenerationHistory(): ApiGenerationRecord[] {
+  const records = db.select().from(generationRecords).orderBy(desc(generationRecords.createdAt)).all();
+  if (records.length === 0) {
+    return [];
+  }
+
+  const generationIds = records.map((record) => record.id);
+  const outputs = db
+    .select()
+    .from(generationOutputs)
+    .where(inArray(generationOutputs.generationId, generationIds))
+    .orderBy(generationOutputs.createdAt)
+    .all();
+
+  const assetIds = outputs.flatMap((output) => (output.assetId ? [output.assetId] : []));
+  const assetRows =
+    assetIds.length > 0 ? db.select().from(assets).where(inArray(assets.id, assetIds)).all() : [];
+  const assetById = new Map(assetRows.map((asset) => [asset.id, asset]));
+
+  const outputsByGenerationId = new Map<string, typeof outputs>();
+  for (const output of outputs) {
+    const existing = outputsByGenerationId.get(output.generationId) ?? [];
+    existing.push(output);
+    outputsByGenerationId.set(output.generationId, existing);
+  }
+
+  return records.map((record) => ({
+    id: record.id,
+    mode: record.mode as ImageMode,
+    prompt: record.prompt,
+    effectivePrompt: record.effectivePrompt,
+    presetId: record.presetId,
+    size: {
+      width: record.width,
+      height: record.height
+    },
+    quality: record.quality as ImageQuality,
+    outputFormat: record.outputFormat as OutputFormat,
+    count: record.count,
+    status: record.status as GenerationStatus,
+    error: record.error ?? undefined,
+    referenceAssetId: record.referenceAssetId ?? undefined,
+    createdAt: record.createdAt,
+    outputs: (outputsByGenerationId.get(record.id) ?? []).map((output) => ({
+      id: output.id,
+      status: output.status as OutputStatus,
+      asset: output.assetId ? toGeneratedAsset(assetById.get(output.assetId)) : undefined,
+      error: output.error ?? undefined
+    }))
+  }));
+}
+
+function toGeneratedAsset(asset: (typeof assets.$inferSelect) | undefined): GeneratedAsset | undefined {
+  if (!asset) {
+    return undefined;
+  }
+
+  return {
+    id: asset.id,
+    url: `/api/assets/${asset.id}`,
+    fileName: asset.fileName,
+    mimeType: asset.mimeType,
+    width: asset.width,
+    height: asset.height
+  };
+}

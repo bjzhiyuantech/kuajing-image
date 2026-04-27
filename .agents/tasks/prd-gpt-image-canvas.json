@@ -172,7 +172,7 @@
     {
       "id": "US-001",
       "title": "Standardize repository scaffold for Ralph execution",
-      "status": "in_progress",
+      "status": "done",
       "dependsOn": [],
       "description": "As a maintainer, I want a clean pnpm workspace, Ralph task file, and operational repository notes so subsequent Ralph stories can run deterministically.",
       "acceptanceCriteria": [
@@ -187,13 +187,13 @@
         "Verification: pnpm typecheck and pnpm build either pass or fail only because dependencies have not yet been installed; if dependencies are missing, run pnpm install and rerun."
       ],
       "startedAt": "2026-04-27T08:05:55.583781+00:00",
-      "completedAt": null,
-      "updatedAt": "2026-04-27T08:05:55.583781+00:00"
+      "completedAt": "2026-04-27T08:14:49.888485+00:00",
+      "updatedAt": "2026-04-27T08:14:49.888485+00:00"
     },
     {
       "id": "US-002",
       "title": "Build Hono API with SQLite persistence",
-      "status": "open",
+      "status": "in_progress",
       "dependsOn": [
         "US-001"
       ],
@@ -208,7 +208,10 @@
         "Example: a saved snapshot can be loaded again after restarting the API.",
         "Negative case: invalid project payload returns a 400 JSON error and does not corrupt stored state.",
         "Verification: pnpm typecheck and pnpm build pass."
-      ]
+      ],
+      "startedAt": "2026-04-27T08:15:41.092106+00:00",
+      "completedAt": null,
+      "updatedAt": "2026-04-27T08:15:41.092106+00:00"
     },
     {
       "id": "US-003",
