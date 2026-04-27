@@ -1,0 +1,38 @@
+# Activity Log
+
+## Run Summary
+- 2026-04-27 17:18:54 | run=20260427-170454-1395 | iter=1 | mode=build | story=US-004 | duration=840s | status=success
+- 2026-04-27 17:04:23 | run=20260427-165443-933 | iter=1 | mode=build | story=US-003 | duration=580s | status=success
+- 2026-04-27 16:49:48 | run=20260427-162945-1948 | iter=1 | mode=build | story=US-003 | duration=1202s | status=error
+- 2026-04-27 16:29:12 | run=20260427-161540-820 | iter=1 | mode=build | story=US-002 | duration=811s | status=success
+- 2026-04-27 16:14:49 | run=20260427-160555-774 | iter=1 | mode=build | story=US-001 | duration=534s | status=success
+
+## Events
+
+[2026-04-27 16:05:56] ITERATION 1 start (mode=build story=US-001)
+[2026-04-27 16:14:49] ITERATION 1 end (duration=534s)
+[2026-04-27 16:15:41] ITERATION 1 start (mode=build story=US-002)
+[2026-04-27 16:29:11] ITERATION 1 end (duration=811s)
+[2026-04-27 16:29:46] ITERATION 1 start (mode=build story=US-003)
+[2026-04-27 16:44:17] Activity helper verified for US-003 after implementation and verification
+[2026-04-27 16:44:37] Start of work on US-003 recorded after initial helper invocation did not append under PowerShell
+[2026-04-27 16:44:46] Major code changes complete for US-003 web shell
+[2026-04-27 16:44:57] Tests and browser verification passed for US-003
+[2026-04-27 16:45:16] Pinned React 18 type packages for US-003
+[2026-04-27 16:45:46] Final verification gates passed for US-003 after dependency pin
+[2026-04-27 16:46:53] Updated web preset labels to Chinese for US-003
+[2026-04-27 16:48:55] Browser verification rerun passed after Chinese label update for US-003
+[2026-04-27 16:49:47] Security performance regression review complete for US-003
+[2026-04-27 16:49:47] ITERATION 1 end (duration=1202s)
+[2026-04-27 16:54:44] ITERATION 1 start (mode=build story=US-003)
+[2026-04-27 17:04:23] ITERATION 1 end (duration=580s)
+[2026-04-27 17:04:55] ITERATION 1 start (mode=build story=US-004)
+[2026-04-27 17:18:54] ITERATION 1 end (duration=840s)
+[2026-04-27 17:19:22] ITERATION 1 start (mode=build story=US-005)
+[2026-04-27 17:19:51] Start US-005 GPT Image 2 provider and size validation
+[2026-04-27 17:25:33] Implemented US-005 provider, shared size validation, and image validation routes
+[2026-04-27 17:28:02] Quieted dotenv loading after validation checks and prepared final verification
+[2026-04-27 17:30:13] Verification passed for US-005: pnpm typecheck, pnpm build, custom size, invalid size, and missing key checks
+[2026-04-27 17:31:16] Final verification passed after API dev script adjustment
+[2026-04-27 17:32:07] Security performance regression review complete for US-005
+[2026-04-27 17:34:07] Updated progress log for US-005
