@@ -51,3 +51,8 @@
 [2026-04-27 18:24:34] Final verification passed for US-007: pnpm typecheck, pnpm build, browser reference UI, missing-key edit smoke
 [2026-04-27 18:24:34] Security performance regression review complete for US-007
 [2026-04-27 18:25:48] Updated progress log for US-007
+[2026-04-27 18:55:37] ITERATION 1 start (mode=build story=US-008)
+[2026-04-27 18:56:07] Start US-008 generation history actions
+[2026-04-27 19:03:22] Implemented US-008 API download route and web history actions
+[2026-04-27 19:09:17] Verification passed: typecheck, build, browser history locate/rerun/download smoke
+[2026-04-27 19:10:08] Pre-commit audit complete: no secret logging, bounded history query, existing generation and autosave flows reviewed

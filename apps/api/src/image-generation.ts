@@ -249,7 +249,7 @@ function saveGenerationRecord(input: PersistedGenerationInput, outputs: BatchOut
   db.insert(generationRecords)
     .values({
       id: generationId,
-      mode: "generate",
+      mode: input.mode,
       prompt: input.originalPrompt,
       effectivePrompt: input.prompt,
       presetId: input.presetId,

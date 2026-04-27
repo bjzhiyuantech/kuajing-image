@@ -3,8 +3,11 @@ import {
   CheckCircle2,
   ChevronDown,
   Cloud,
+  Download,
   ImageIcon,
   Loader2,
+  MapPin,
+  RotateCcw,
   Sparkles,
   Square,
   XCircle
@@ -21,6 +24,7 @@ import {
   type TLStoreSnapshot
 } from "tldraw";
 import {
+  CUSTOM_SIZE_PRESET_ID,
   GENERATION_COUNTS,
   IMAGE_QUALITIES,
   MAX_IMAGE_DIMENSION,
@@ -32,10 +36,12 @@ import {
   type GenerationCount,
   type GenerationRecord,
   type GenerationResponse,
+  type GenerationStatus,
   type GeneratedAsset,
   type ImageQuality,
   type OutputFormat,
   type ProjectState,
+  type ReferenceImageInput,
   type SizePreset,
   type StylePresetId
 } from "@gpt-image-canvas/shared";
@@ -45,6 +51,24 @@ const MAX_REFERENCE_IMAGE_BYTES = 20 * 1024 * 1024;
 
 type PersistedSnapshot = TLEditorSnapshot | TLStoreSnapshot;
 type SaveStatus = "loading" | "saved" | "pending" | "saving" | "error";
+
+interface GenerationSubmitInput {
+  prompt: string;
+  presetId: StylePresetId;
+  sizePresetId: string;
+  size: {
+    width: number;
+    height: number;
+  };
+  quality: ImageQuality;
+  outputFormat: OutputFormat;
+  count: GenerationCount;
+}
+
+interface GenerationReferenceInput {
+  referenceImage: ReferenceImageInput;
+  referenceAssetId?: string;
+}
 
 type ReferenceSelection =
   | {
@@ -96,6 +120,20 @@ const sizePresetLabels: Record<string, string> = {
   "wide-4k": "宽屏展示 4K"
 };
 
+const modeLabels: Record<GenerationRecord["mode"], string> = {
+  generate: "文本生成",
+  edit: "参考生成"
+};
+
+const statusLabels: Record<GenerationStatus, string> = {
+  pending: "等待中",
+  running: "生成中",
+  succeeded: "已完成",
+  partial: "部分完成",
+  failed: "失败",
+  cancelled: "已取消"
+};
+
 function sizePresetLabel(preset: SizePreset): string {
   return sizePresetLabels[preset.id] ?? preset.label;
 }
@@ -118,12 +156,57 @@ function sizeValidationMessage(width: number, height: number): string {
   return result.message;
 }
 
+function generationValidationMessage(promptValue: string, widthValue: number, heightValue: number): string {
+  return promptValue.trim() ? sizeValidationMessage(widthValue, heightValue) : "请输入提示词后再生成。";
+}
+
 function isPersistedSnapshot(value: unknown): value is PersistedSnapshot {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isGenerationResponse(value: unknown): value is GenerationResponse {
   return typeof value === "object" && value !== null && "record" in value;
+}
+
+function coerceStylePresetId(value: string): StylePresetId {
+  return STYLE_PRESETS.some((preset) => preset.id === value) ? (value as StylePresetId) : "none";
+}
+
+function coerceGenerationCount(value: number): GenerationCount {
+  return GENERATION_COUNTS.includes(value as GenerationCount) ? (value as GenerationCount) : 1;
+}
+
+function sizePresetIdForSize(widthValue: number, heightValue: number): string {
+  return (
+    SIZE_PRESETS.find((preset) => preset.width === widthValue && preset.height === heightValue)?.id ?? CUSTOM_SIZE_PRESET_ID
+  );
+}
+
+function firstDownloadableAsset(record: GenerationRecord): GeneratedAsset | undefined {
+  return record.outputs.find((output) => output.status === "succeeded" && output.asset)?.asset;
+}
+
+function successfulOutputCount(record: GenerationRecord): number {
+  return record.outputs.filter((output) => output.status === "succeeded" && output.asset).length;
+}
+
+function promptExcerpt(promptValue: string): string {
+  const compact = promptValue.replace(/\s+/gu, " ").trim();
+  return compact.length > 72 ? `${compact.slice(0, 72)}...` : compact;
+}
+
+function formatCreatedTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(date);
 }
 
 function createTldrawAssetId(assetId: string): TLAssetId {
@@ -279,20 +362,50 @@ function getReferenceName(asset: TLAsset | undefined, sourceUrl: string): string
   }
 }
 
-function getLocalAssetId(asset: TLAsset | undefined, sourceUrl: string): string | undefined {
+function getLocalAssetId(asset: TLAsset | undefined, sourceUrl?: string): string | undefined {
   const localAssetId = asset?.meta && typeof asset.meta.localAssetId === "string" ? asset.meta.localAssetId : undefined;
   if (localAssetId) {
     return localAssetId;
   }
 
+  if (!sourceUrl) {
+    return undefined;
+  }
+
   try {
     const url = new URL(sourceUrl, window.location.origin);
     if (url.origin === window.location.origin) {
-      const match = /^\/api\/assets\/([^/?#]+)$/u.exec(url.pathname);
+      const match = /^\/api\/assets\/([^/?#]+)(?:\/download)?$/u.exec(url.pathname);
       return match?.[1];
     }
   } catch {
     return undefined;
+  }
+
+  return undefined;
+}
+
+function findCanvasImageShape(editor: Editor, record: GenerationRecord): TLShapeId | undefined {
+  const assetIds = new Set(
+    record.outputs.flatMap((output) => (output.status === "succeeded" && output.asset ? [output.asset.id] : []))
+  );
+  if (assetIds.size === 0) {
+    return undefined;
+  }
+
+  for (const shape of editor.getCurrentPageShapes()) {
+    if (shape.type !== "image") {
+      continue;
+    }
+
+    const imageShape = shape as TLImageShape;
+    const asset = imageShape.props.assetId ? editor.getAsset(imageShape.props.assetId) : undefined;
+    const sourceUrl = getImageSourceUrl(imageShape, asset);
+    const localAssetId = getLocalAssetId(asset, sourceUrl);
+
+    if (localAssetId && assetIds.has(localAssetId)) {
+      return imageShape.id;
+    }
   }
 
   return undefined;
@@ -350,6 +463,26 @@ async function readReferenceImage(selection: Extract<ReferenceSelection, { statu
   return {
     dataUrl: await blobToDataUrl(blob),
     fileName: fileNameWithImageExtension(selection.name, blob.type)
+  };
+}
+
+async function readStoredReferenceImage(assetId: string, signal: AbortSignal): Promise<ReferenceImageInput> {
+  const response = await fetch(`/api/assets/${encodeURIComponent(assetId)}`, { signal });
+  if (!response.ok) {
+    throw new Error("无法读取历史参考图。请确认原始资源仍然存在。");
+  }
+
+  const blob = await response.blob();
+  if (!blob.type.startsWith("image/")) {
+    throw new Error("历史参考资源不是可用的图片格式。");
+  }
+  if (blob.size > MAX_REFERENCE_IMAGE_BYTES) {
+    throw new Error("历史参考图像不能超过 20MB。");
+  }
+
+  return {
+    dataUrl: await blobToDataUrl(blob),
+    fileName: fileNameWithImageExtension(assetId, blob.type)
   };
 }
 
@@ -411,6 +544,7 @@ export function App() {
   const [saveError, setSaveError] = useState("");
   const [generationError, setGenerationError] = useState("");
   const [generationMessage, setGenerationMessage] = useState("");
+  const [generationHistory, setGenerationHistory] = useState<GenerationRecord[]>([]);
   const [referenceSelection, setReferenceSelection] = useState<ReferenceSelection>({
     status: "none",
     hint: "选择画布中的一张图片后，可用它作为参考生成新图。"
@@ -422,7 +556,7 @@ export function App() {
   const saveRequestRef = useRef(0);
 
   const trimmedPrompt = prompt.trim();
-  const promptValidationMessage = trimmedPrompt ? "" : "请输入提示词后再生成。";
+  const promptValidationMessage = prompt.trim() ? "" : "请输入提示词后再生成。";
   const dimensionValidationMessage = sizeValidationMessage(width, height);
   const validationMessage = promptValidationMessage || dimensionValidationMessage;
   const canGenerate = !validationMessage && !isGenerating;
@@ -432,6 +566,7 @@ export function App() {
     () => SIZE_PRESETS.find((preset) => preset.id === sizePresetId) ?? SIZE_PRESETS[0],
     [sizePresetId]
   );
+  const activeSizeLabel = sizePresetId === CUSTOM_SIZE_PRESET_ID ? "自定义尺寸" : sizePresetLabel(activePreset);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -453,6 +588,7 @@ export function App() {
         if (isPersistedSnapshot(project.snapshot)) {
           setProjectSnapshot(project.snapshot);
         }
+        setGenerationHistory(project.history);
         setSaveStatus("saved");
       } catch {
         if (controller.signal.aborted) {
@@ -546,6 +682,11 @@ export function App() {
   }, []);
 
   function selectScenePreset(nextPresetId: string): void {
+    if (nextPresetId === CUSTOM_SIZE_PRESET_ID) {
+      setSizePresetId(CUSTOM_SIZE_PRESET_ID);
+      return;
+    }
+
     const preset = SIZE_PRESETS.find((item) => item.id === nextPresetId);
     if (!preset) {
       return;
@@ -558,18 +699,25 @@ export function App() {
 
   function updateWidth(value: string): void {
     setWidth(normalizeDimension(value));
+    setSizePresetId(CUSTOM_SIZE_PRESET_ID);
   }
 
   function updateHeight(value: string): void {
     setHeight(normalizeDimension(value));
+    setSizePresetId(CUSTOM_SIZE_PRESET_ID);
   }
 
-  async function submitGeneration(): Promise<void> {
+  async function executeGeneration(
+    input: GenerationSubmitInput,
+    resolveReference?: (signal: AbortSignal) => Promise<GenerationReferenceInput | undefined>
+  ): Promise<void> {
     setHasSubmitted(true);
     setGenerationError("");
     setGenerationMessage("");
 
-    if (validationMessage) {
+    const inputValidationMessage = generationValidationMessage(input.prompt, input.size.width, input.size.height);
+    if (inputValidationMessage) {
+      setGenerationError(inputValidationMessage);
       return;
     }
 
@@ -587,24 +735,21 @@ export function App() {
     setIsGenerating(true);
 
     try {
-      const referenceForRequest = referenceSelection.status === "ready" ? referenceSelection : undefined;
+      const referenceForRequest = await resolveReference?.(controller.signal);
       const requestBody: Record<string, unknown> = {
-        prompt: trimmedPrompt,
-        presetId: stylePreset,
-        sizePresetId,
-        size: {
-          width,
-          height
-        },
-        quality,
-        outputFormat,
-        count
+        prompt: input.prompt.trim(),
+        presetId: input.presetId,
+        sizePresetId: input.sizePresetId,
+        size: input.size,
+        quality: input.quality,
+        outputFormat: input.outputFormat,
+        count: input.count
       };
 
       if (referenceForRequest) {
-        requestBody.referenceImage = await readReferenceImage(referenceForRequest, controller.signal);
-        if (referenceForRequest.localAssetId) {
-          requestBody.referenceAssetId = referenceForRequest.localAssetId;
+        requestBody.referenceImage = referenceForRequest.referenceImage;
+        if (referenceForRequest.referenceAssetId) {
+          requestBody.referenceAssetId = referenceForRequest.referenceAssetId;
         }
       }
 
@@ -630,6 +775,7 @@ export function App() {
         return;
       }
 
+      setGenerationHistory((history) => [body.record, ...history.filter((record) => record.id !== body.record.id)].slice(0, 20));
       const insertedCount = insertGeneratedImages(editor, body.record);
       const failedCount = body.record.outputs.filter((output) => output.status === "failed").length;
       if (insertedCount > 0) {
@@ -654,6 +800,105 @@ export function App() {
         generationAbortRef.current = null;
       }
     }
+  }
+
+  async function submitGeneration(): Promise<void> {
+    const input: GenerationSubmitInput = {
+      prompt: trimmedPrompt,
+      presetId: stylePreset,
+      sizePresetId,
+      size: {
+        width,
+        height
+      },
+      quality,
+      outputFormat,
+      count
+    };
+
+    await executeGeneration(input, async (signal) => {
+      if (referenceSelection.status !== "ready") {
+        return undefined;
+      }
+
+      return {
+        referenceImage: await readReferenceImage(referenceSelection, signal),
+        referenceAssetId: referenceSelection.localAssetId
+      };
+    });
+  }
+
+  function locateHistoryRecord(record: GenerationRecord): void {
+    setGenerationError("");
+    setGenerationMessage("");
+
+    const editor = editorRef.current;
+    if (!editor) {
+      setGenerationError("画布尚未就绪，请稍后再试。");
+      return;
+    }
+
+    const shapeId = findCanvasImageShape(editor, record);
+    if (!shapeId) {
+      setGenerationError("画布上找不到这张历史图片，可能已被删除。");
+      return;
+    }
+
+    const bounds = editor.getShapePageBounds(shapeId);
+    editor.select(shapeId);
+    if (bounds) {
+      editor.zoomToBounds(bounds, {
+        animation: { duration: 220 },
+        inset: 96
+      });
+    } else {
+      editor.zoomToSelection({ animation: { duration: 220 } });
+    }
+    setGenerationMessage("已定位到历史图像。");
+  }
+
+  async function rerunHistoryRecord(record: GenerationRecord): Promise<void> {
+    const nextPresetId = coerceStylePresetId(record.presetId);
+    const nextSizePresetId = sizePresetIdForSize(record.size.width, record.size.height);
+    const nextCount = coerceGenerationCount(record.count);
+
+    setPrompt(record.prompt);
+    setStylePreset(nextPresetId);
+    setSizePresetId(nextSizePresetId);
+    setWidth(record.size.width);
+    setHeight(record.size.height);
+    setQuality(record.quality);
+    setOutputFormat(record.outputFormat);
+    setCount(nextCount);
+
+    await executeGeneration(
+      {
+        prompt: record.prompt,
+        presetId: nextPresetId,
+        sizePresetId: nextSizePresetId,
+        size: record.size,
+        quality: record.quality,
+        outputFormat: record.outputFormat,
+        count: nextCount
+      },
+      record.referenceAssetId
+        ? async (signal) => ({
+            referenceImage: await readStoredReferenceImage(record.referenceAssetId!, signal),
+            referenceAssetId: record.referenceAssetId
+          })
+        : undefined
+    );
+  }
+
+  function downloadHistoryRecord(record: GenerationRecord): void {
+    const asset = firstDownloadableAsset(record);
+    if (!asset) {
+      setGenerationError("这条历史记录没有可下载的本地资源。");
+      return;
+    }
+
+    window.open(`/api/assets/${encodeURIComponent(asset.id)}/download`, "_blank", "noopener,noreferrer");
+    setGenerationMessage("已打开原始资源下载。");
   }
 
   function cancelGeneration(): void {
@@ -791,6 +1036,7 @@ export function App() {
                   {sizePresetOptionLabel(preset)}
                 </option>
               ))}
+              <option value={CUSTOM_SIZE_PRESET_ID}>自定义尺寸</option>
             </select>
           </label>
 
@@ -880,9 +1126,105 @@ export function App() {
           </details>
 
           <div className="rounded-md bg-neutral-100 px-3 py-3 text-xs leading-5 text-neutral-600">
-            当前尺寸：{sizePresetLabel(activePreset)}，画布输出 {Number.isNaN(width) ? "-" : width} x{" "}
+            当前尺寸：{activeSizeLabel}，画布输出 {Number.isNaN(width) ? "-" : width} x{" "}
             {Number.isNaN(height) ? "-" : height}px
           </div>
+
+          <section className="space-y-3" data-testid="generation-history">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-sm font-semibold text-neutral-950">生成历史</h2>
+              <span className="text-xs text-neutral-500">{generationHistory.length} 条</span>
+            </div>
+
+            {generationHistory.length === 0 ? (
+              <p className="rounded-md border border-dashed border-neutral-300 px-3 py-4 text-sm text-neutral-500">
+                还没有生成记录。
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {generationHistory.map((record) => {
+                  const downloadableAsset = firstDownloadableAsset(record);
+                  const totalOutputs = record.outputs.length || record.count;
+
+                  return (
+                    <article
+                      className="rounded-md border border-neutral-200 bg-white px-3 py-3 shadow-sm"
+                      data-testid="history-record"
+                      key={record.id}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <p className="min-w-0 flex-1 text-sm font-medium leading-5 text-neutral-950">
+                          {promptExcerpt(record.prompt)}
+                        </p>
+                        <span
+                          className={`rounded px-1.5 py-0.5 text-[11px] font-semibold ${
+                            record.status === "failed" ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-700"
+                          }`}
+                        >
+                          {statusLabels[record.status]}
+                        </span>
+                      </div>
+
+                      <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs leading-5 text-neutral-600">
+                        <div>
+                          <dt className="sr-only">模式</dt>
+                          <dd>{modeLabels[record.mode]}</dd>
+                        </div>
+                        <div>
+                          <dt className="sr-only">尺寸</dt>
+                          <dd>
+                            {record.size.width} x {record.size.height}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt className="sr-only">输出数量</dt>
+                          <dd>
+                            输出 {successfulOutputCount(record)} / {totalOutputs}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt className="sr-only">创建时间</dt>
+                          <dd>{formatCreatedTime(record.createdAt)}</dd>
+                        </div>
+                      </dl>
+
+                      <div className="mt-3 grid grid-cols-3 gap-2">
+                        <button
+                          className="secondary-action h-9 px-2 text-xs"
+                          type="button"
+                          data-testid="history-locate"
+                          onClick={() => locateHistoryRecord(record)}
+                        >
+                          <MapPin className="size-3.5" aria-hidden="true" />
+                          定位
+                        </button>
+                        <button
+                          className="secondary-action h-9 px-2 text-xs"
+                          type="button"
+                          data-testid="history-rerun"
+                          disabled={isGenerating}
+                          onClick={() => void rerunHistoryRecord(record)}
+                        >
+                          <RotateCcw className="size-3.5" aria-hidden="true" />
+                          重跑
+                        </button>
+                        <button
+                          className="secondary-action h-9 px-2 text-xs"
+                          type="button"
+                          data-testid="history-download"
+                          disabled={!downloadableAsset}
+                          onClick={() => downloadHistoryRecord(record)}
+                        >
+                          <Download className="size-3.5" aria-hidden="true" />
+                          下载
+                        </button>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </section>
         </div>
 
         <div className="grid grid-cols-[1fr_auto] gap-3 border-t border-neutral-200 bg-white px-5 py-4">

@@ -84,7 +84,7 @@ export function getProjectState(): ProjectState {
 }
 
 function getGenerationHistory(): ApiGenerationRecord[] {
-  const records = db.select().from(generationRecords).orderBy(desc(generationRecords.createdAt)).all();
+  const records = db.select().from(generationRecords).orderBy(desc(generationRecords.createdAt)).limit(20).all();
   if (records.length === 0) {
     return [];
   }

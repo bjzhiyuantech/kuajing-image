@@ -75,6 +75,22 @@ app.get("/api/config", (c) => {
 
 app.get("/api/project", (c) => c.json(getProjectState()));
 
+app.get("/api/assets/:id/download", async (c) => {
+  const asset = await readStoredAsset(c.req.param("id"));
+  if (!asset) {
+    return c.json(errorResponse("not_found", "找不到请求的图像资源。"), 404);
+  }
+
+  return new Response(new Uint8Array(asset.bytes), {
+    status: 200,
+    headers: {
+      "Cache-Control": "private, max-age=31536000, immutable",
+      "Content-Disposition": `attachment; filename="${downloadFileName(asset.file.fileName)}"`,
+      "Content-Type": asset.file.mimeType
+    }
+  });
+});
+
 app.get("/api/assets/:id", async (c) => {
   const asset = await readStoredAsset(c.req.param("id"));
   if (!asset) {
@@ -168,6 +184,10 @@ function errorResponse(code: string, message: string): { error: { code: string; 
       message
     }
   };
+}
+
+function downloadFileName(fileName: string): string {
+  return fileName.replace(/[^a-zA-Z0-9._-]/gu, "_");
 }
 
 type ParseResult<T> =
