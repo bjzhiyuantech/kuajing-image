@@ -4,6 +4,10 @@
 
 Local professional AI canvas built with tldraw, Hono, SQLite, and GPT Image 2.
 
+## Preview
+
+![GPT Image Canvas preview](docs/assets/app-preview.png)
+
 ## Requirements
 
 - Node.js 22 or newer.

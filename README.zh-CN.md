@@ -4,6 +4,10 @@
 
 基于 tldraw、Hono、SQLite 和 GPT Image 2 构建的本地专业 AI 画布。
 
+## 效果图
+
+![GPT Image Canvas 效果图](docs/assets/app-preview.png)
+
 ## 环境要求
 
 - Node.js 22 或更新版本。
