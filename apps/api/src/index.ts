@@ -7,7 +7,6 @@ import type { Context } from "hono";
 import { parsePreviewWidth, readStoredAssetPreview } from "./asset-preview.js";
 import {
   GENERATION_COUNTS,
-  IMAGE_MODEL,
   IMAGE_QUALITIES,
   OUTPUT_FORMATS,
   SIZE_PRESETS,
@@ -26,6 +25,7 @@ import { closeDatabase } from "./database.js";
 import {
   ProviderError,
   createOpenAIImageProvider,
+  getConfiguredImageModel,
   getOpenAIImageProviderConfig,
   type EditImageProviderInput,
   type ImageProviderInput
@@ -63,9 +63,10 @@ app.get("/api/health", (c) =>
 );
 
 app.get("/api/config", (c) => {
+  const configuredModel = getConfiguredImageModel();
   const config: AppConfig = {
-    model: IMAGE_MODEL,
-    models: [IMAGE_MODEL],
+    model: configuredModel,
+    models: [configuredModel],
     sizePresets: SIZE_PRESETS,
     stylePresets: STYLE_PRESETS,
     qualities: IMAGE_QUALITIES,

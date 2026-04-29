@@ -23,6 +23,30 @@ function resolveFromRepo(value: string): string {
   return isAbsolute(value) ? value : resolve(repoRoot, value);
 }
 
+const sqliteJournalModes = ["DELETE", "TRUNCATE", "PERSIST", "MEMORY", "WAL", "OFF"] as const;
+type SqliteJournalMode = (typeof sqliteJournalModes)[number];
+
+const sqliteLockingModes = ["NORMAL", "EXCLUSIVE"] as const;
+type SqliteLockingMode = (typeof sqliteLockingModes)[number];
+
+function parseSqliteJournalMode(value: string | undefined): SqliteJournalMode {
+  const normalized = value?.trim().toUpperCase();
+  if (!normalized) {
+    return "WAL";
+  }
+
+  return sqliteJournalModes.includes(normalized as SqliteJournalMode) ? (normalized as SqliteJournalMode) : "WAL";
+}
+
+function parseSqliteLockingMode(value: string | undefined): SqliteLockingMode {
+  const normalized = value?.trim().toUpperCase();
+  if (!normalized) {
+    return "NORMAL";
+  }
+
+  return sqliteLockingModes.includes(normalized as SqliteLockingMode) ? (normalized as SqliteLockingMode) : "NORMAL";
+}
+
 const dataDir = resolveFromRepo(process.env.DATA_DIR ?? "./data");
 
 export const runtimePaths = {
@@ -38,6 +62,11 @@ export const runtimePaths = {
 export const serverConfig = {
   host: process.env.HOST ?? "127.0.0.1",
   port: parsePort(process.env.PORT)
+};
+
+export const sqliteConfig = {
+  journalMode: parseSqliteJournalMode(process.env.SQLITE_JOURNAL_MODE),
+  lockingMode: parseSqliteLockingMode(process.env.SQLITE_LOCKING_MODE)
 };
 
 export function ensureRuntimeStorage(): void {

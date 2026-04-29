@@ -29,7 +29,7 @@ cp .env.example .env
 pnpm dev
 ```
 
-Set `OPENAI_API_KEY` in `.env` before live generation. The app uses the official OpenAI Image API with `gpt-image-2` by default. To route requests through an OpenAI-compatible endpoint, set `OPENAI_BASE_URL` in `.env`.
+Set `OPENAI_API_KEY` in `.env` before live generation. The app uses the official OpenAI Image API with `gpt-image-2` by default. To route requests through an OpenAI-compatible endpoint, set `OPENAI_BASE_URL` in `.env`; to use a different compatible image model, set `OPENAI_IMAGE_MODEL`.
 
 Open the web app at `http://localhost:5173`.
 
@@ -52,7 +52,7 @@ For UI changes, have Codex run `pnpm dev` and verify the Vite app in a browser a
 `pnpm dev` starts both services:
 
 - API: Hono on `http://127.0.0.1:8787` by default.
-- Web: Vite on `http://localhost:5173`, proxying `/api` to the API service.
+- Web: Vite on `http://localhost:5173`, proxying `/api` to the API service. The dev server uses a strict port so a stale app on `5173` cannot hide that this project failed to start.
 
 Use the right-side AI panel to enter a prompt, choose a scene size, and generate. When one image shape is selected on the canvas, the generate button switches to reference-image generation. The canvas autosaves to the local API after edits, and recent generation history provides locate, rerun, and download actions for stored outputs.
 
@@ -94,6 +94,8 @@ docker compose up --build
 
 Open the app at `http://localhost:8787` by default. Set `PORT` in `.env` before starting Docker Compose to use a different localhost port.
 
+Docker Compose also sets `SQLITE_JOURNAL_MODE=DELETE` and `SQLITE_LOCKING_MODE=EXCLUSIVE` by default. This avoids SQLite `SQLITE_IOERR_SHMOPEN` failures on bind-mounted `./data` directories in Docker Desktop while preserving projects and generated assets on the host.
+
 The Compose build accepts the same network-related build arguments used by the reference `open-managed-flow` project: `NODE_IMAGE`, `NPM_CONFIG_REGISTRY`, `APT_MIRROR`, and `APT_SECURITY_MIRROR`. The default `NODE_IMAGE` in Compose is `node:23-bullseye-slim` because it satisfies the app's `>=22` runtime requirement and is commonly available as a local cache when Docker Hub is unreachable. To force the exact Node 22 base image, run:
 
 Windows PowerShell:
@@ -131,11 +133,12 @@ The Docker Compose workflow bind-mounts host `./data` to `/app/data`, so project
 
 - Missing or empty `OPENAI_API_KEY`: the app still boots; text-to-image and reference-image requests return a missing-key JSON error. Add a valid key to `.env` and restart the API or Docker container.
 - Custom provider endpoint: set `OPENAI_BASE_URL` in `.env`, for example `https://api.example.com/v1`, then restart the API or Docker container. The endpoint must be OpenAI-compatible and support the configured image model.
-- Missing model access: confirm the OpenAI organization and project used by `OPENAI_API_KEY` can access `gpt-image-2`.
+- Missing model access: confirm the OpenAI organization and project used by `OPENAI_API_KEY` can access the configured image model. Set `OPENAI_IMAGE_MODEL` if your compatible endpoint expects a different model name.
 - High-resolution generation timeouts: upstream image requests default to 20 minutes; increase `OPENAI_IMAGE_TIMEOUT_MS` in `.env` if needed.
-- Port already in use: set `PORT` in `.env` for the API/Docker runtime, or run Vite on another port when prompted.
+- Port already in use: set `PORT` in `.env` for the API/Docker runtime. If Web port `5173` is occupied, stop the process using it, or run `pnpm web:dev -- --port 5174` explicitly and open the printed URL.
 - Docker build cannot pull the Node base image: use a locally cached image with `NODE_IMAGE=node:23-bullseye-slim docker compose up --build` on macOS/Linux or `$env:NODE_IMAGE = 'node:23-bullseye-slim'` followed by `docker compose up --build` in Windows PowerShell, or restore Docker Hub access and rerun `docker compose up --build`.
 - Docker config output includes `.env` values by default. Use `docker compose config --quiet --no-env-resolution` for validation when real credentials are present, and do not share expanded config output.
+- SQLite `SQLITE_IOERR_SHMOPEN` in Docker: keep the Compose defaults `SQLITE_JOURNAL_MODE=DELETE` and `SQLITE_LOCKING_MODE=EXCLUSIVE`, rebuild, and make sure no local API process is using the same `data/` database at the same time.
 - Stale or unwanted local state: stop the app and remove files under `data/`. This deletes local project state, history, and generated assets.
 
 ## License

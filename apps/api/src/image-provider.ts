@@ -29,7 +29,7 @@ export interface ProviderImage {
 }
 
 export interface ProviderResult {
-  model: typeof IMAGE_MODEL;
+  model: string;
   size: string;
   images: ProviderImage[];
 }
@@ -54,6 +54,7 @@ export class ProviderError extends Error {
 export interface OpenAIImageProviderConfig {
   apiKey: string;
   baseURL?: string;
+  model: string;
   timeoutMs: number;
 }
 
@@ -93,9 +94,14 @@ export function getOpenAIImageProviderConfig():
     config: {
       apiKey,
       baseURL: baseURL || undefined,
+      model: getConfiguredImageModel(),
       timeoutMs: parsePositiveInteger(process.env.OPENAI_IMAGE_TIMEOUT_MS, DEFAULT_OPENAI_IMAGE_TIMEOUT_MS)
     }
   };
+}
+
+export function getConfiguredImageModel(): string {
+  return process.env.OPENAI_IMAGE_MODEL?.trim() || IMAGE_MODEL;
 }
 
 export function createOpenAIImageProvider(config: OpenAIImageProviderConfig): ImageProvider {
@@ -105,7 +111,7 @@ export function createOpenAIImageProvider(config: OpenAIImageProviderConfig): Im
 class OpenAIImageProvider implements ImageProvider {
   private readonly client: OpenAI;
 
-  constructor(config: OpenAIImageProviderConfig) {
+  constructor(private readonly config: OpenAIImageProviderConfig) {
     this.client = new OpenAI({
       apiKey: config.apiKey,
       baseURL: config.baseURL,
@@ -117,7 +123,7 @@ class OpenAIImageProvider implements ImageProvider {
     try {
       const response = await this.client.images.generate(
         imageGenerateRequestBody({
-          model: IMAGE_MODEL,
+          model: this.config.model,
           prompt: input.prompt,
           size: input.sizeApiValue,
           quality: input.quality,
@@ -127,7 +133,7 @@ class OpenAIImageProvider implements ImageProvider {
         { signal }
       );
 
-      return normalizeProviderResponse(response, input.sizeApiValue);
+      return normalizeProviderResponse(response, input.sizeApiValue, this.config.model);
     } catch (error) {
       throw toProviderError(error);
     }
@@ -138,7 +144,7 @@ class OpenAIImageProvider implements ImageProvider {
       const reference = await dataUrlToFile(input.referenceImage);
       const response = await this.client.images.edit(
         imageEditRequestBody({
-          model: IMAGE_MODEL,
+          model: this.config.model,
           image: [reference],
           prompt: input.prompt,
           size: input.sizeApiValue,
@@ -149,7 +155,7 @@ class OpenAIImageProvider implements ImageProvider {
         { signal }
       );
 
-      return normalizeProviderResponse(response, input.sizeApiValue);
+      return normalizeProviderResponse(response, input.sizeApiValue, this.config.model);
     } catch (error) {
       throw toProviderError(error);
     }
@@ -203,7 +209,7 @@ function isAbortError(error: unknown): error is Error {
   return error instanceof APIUserAbortError || (error instanceof DOMException && error.name === "AbortError");
 }
 
-function normalizeProviderResponse(response: ImagesResponse, sizeApiValue: string): ProviderResult {
+function normalizeProviderResponse(response: ImagesResponse, sizeApiValue: string, model: string): ProviderResult {
   if (!Array.isArray(response.data) || response.data.length === 0) {
     throw new ProviderError("unsupported_provider_behavior", "OpenAI 图像服务没有返回图像结果。", 502);
   }
@@ -217,7 +223,7 @@ function normalizeProviderResponse(response: ImagesResponse, sizeApiValue: strin
   }
 
   return {
-    model: IMAGE_MODEL,
+    model,
     size: sizeApiValue,
     images
   };

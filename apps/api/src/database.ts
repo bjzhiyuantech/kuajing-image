@@ -1,13 +1,42 @@
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
-import { ensureRuntimeStorage, runtimePaths } from "./runtime.js";
+import { ensureRuntimeStorage, runtimePaths, sqliteConfig } from "./runtime.js";
 import * as schema from "./schema.js";
 
 ensureRuntimeStorage();
 
 const sqlite = new Database(runtimePaths.databaseFile);
-sqlite.pragma("foreign_keys = ON");
-sqlite.pragma("journal_mode = WAL");
+configureSqlite(sqlite);
+
+function configureSqlite(database: Database.Database): void {
+  database.pragma(`locking_mode = ${sqliteConfig.lockingMode}`);
+  database.pragma("foreign_keys = ON");
+  applyJournalMode(database);
+}
+
+function applyJournalMode(database: Database.Database): void {
+  try {
+    database.pragma(`journal_mode = ${sqliteConfig.journalMode}`);
+  } catch (error) {
+    if (sqliteConfig.journalMode !== "WAL" || !isSharedMemoryOpenError(error)) {
+      throw error;
+    }
+
+    console.warn("SQLite WAL mode is unavailable for DATA_DIR; falling back to DELETE journal mode.");
+    database.pragma("locking_mode = EXCLUSIVE");
+    database.pragma("journal_mode = DELETE");
+  }
+}
+
+function isSharedMemoryOpenError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    typeof error.code === "string" &&
+    error.code === "SQLITE_IOERR_SHMOPEN"
+  );
+}
 
 sqlite.exec(`
 CREATE TABLE IF NOT EXISTS projects (

@@ -1,6 +1,6 @@
 export const IMAGE_MODEL = "gpt-image-2" as const;
 
-export type ImageModel = typeof IMAGE_MODEL;
+export type ImageModel = string;
 export type ImageMode = "generate" | "edit";
 export type ImageQuality = "auto" | "low" | "medium" | "high";
 export type OutputFormat = "png" | "jpeg" | "webp";
