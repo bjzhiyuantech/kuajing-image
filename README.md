@@ -131,6 +131,7 @@ The Docker Compose workflow bind-mounts host `./data` to `/app/data`, so project
 
 - Missing or empty `OPENAI_API_KEY`: the app still boots; text-to-image and reference-image requests return a missing-key JSON error. Add a valid key to `.env` and restart the API or Docker container.
 - Missing model access: confirm the OpenAI organization and project used by `OPENAI_API_KEY` can access `gpt-image-2`.
+- High-resolution generation timeouts: upstream image requests default to 20 minutes; increase `OPENAI_IMAGE_TIMEOUT_MS` in `.env` if needed.
 - Port already in use: set `PORT` in `.env` for the API/Docker runtime, or run Vite on another port when prompted.
 - Docker build cannot pull the Node base image: use a locally cached image with `NODE_IMAGE=node:23-bullseye-slim docker compose up --build` on macOS/Linux or `$env:NODE_IMAGE = 'node:23-bullseye-slim'` followed by `docker compose up --build` in Windows PowerShell, or restore Docker Hub access and rerun `docker compose up --build`.
 - Docker config output includes `.env` values by default. Use `docker compose config --quiet --no-env-resolution` for validation when real credentials are present, and do not share expanded config output.
@@ -139,3 +140,7 @@ The Docker Compose workflow bind-mounts host `./data` to `/app/data`, so project
 ## License
 
 MIT
+
+## 友情链接
+
+- [LINUX DO - 新的理想型社区](https://linux.do/)

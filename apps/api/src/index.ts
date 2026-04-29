@@ -4,6 +4,7 @@ import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 import type { Context } from "hono";
+import { parsePreviewWidth, readStoredAssetPreview } from "./asset-preview.js";
 import {
   GENERATION_COUNTS,
   IMAGE_MODEL,
@@ -76,6 +77,27 @@ app.get("/api/config", (c) => {
 });
 
 app.get("/api/project", (c) => c.json(getProjectState()));
+
+app.get("/api/assets/:id/preview", async (c) => {
+  const parsedWidth = parsePreviewWidth(c.req.query("width"));
+  if (!parsedWidth.ok) {
+    return c.json(errorResponse(parsedWidth.code, parsedWidth.message), 400);
+  }
+
+  const preview = await readStoredAssetPreview(c.req.param("id"), parsedWidth.width);
+  if (!preview) {
+    return c.json(errorResponse("not_found", "Asset not found."), 404);
+  }
+
+  return new Response(new Uint8Array(preview.bytes), {
+    status: 200,
+    headers: {
+      "Cache-Control": "private, max-age=31536000, immutable",
+      "Content-Disposition": `inline; filename="${downloadFileName(c.req.param("id"))}-${preview.width}.webp"`,
+      "Content-Type": "image/webp"
+    }
+  });
+});
 
 app.get("/api/assets/:id/download", async (c) => {
   const asset = await readStoredAsset(c.req.param("id"));
@@ -218,17 +240,19 @@ type ParseResult<T> =
       error: { error: { code: string; message: string } };
     };
 
-function providerErrorJson(c: Context, error: ProviderError) {
+function providerErrorJson(_c: Context, error: ProviderError) {
   const body = errorResponse(error.code, error.message);
 
-  if (error.status === 400) {
-    return c.json(body, 400);
-  }
-  if (error.status === 500) {
-    return c.json(body, 500);
-  }
+  return new Response(JSON.stringify(body), {
+    status: providerHttpStatus(error.status),
+    headers: {
+      "Content-Type": "application/json"
+    }
+  });
+}
 
-  return c.json(body, 502);
+function providerHttpStatus(status: number): number {
+  return Number.isInteger(status) && status >= 400 && status <= 599 ? status : 502;
 }
 
 function parseGeneratePayload(input: unknown): ParseResult<ImageProviderInput> {

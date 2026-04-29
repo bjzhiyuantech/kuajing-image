@@ -30,6 +30,7 @@ export const runtimePaths = {
   packageRoot,
   dataDir,
   assetsDir: resolve(dataDir, "assets"),
+  assetPreviewsDir: resolve(dataDir, "asset-previews"),
   databaseFile: resolve(dataDir, "gpt-image-canvas.sqlite"),
   webDistDir: resolve(repoRoot, "apps/web/dist")
 };
@@ -42,4 +43,5 @@ export const serverConfig = {
 export function ensureRuntimeStorage(): void {
   mkdirSync(runtimePaths.dataDir, { recursive: true });
   mkdirSync(runtimePaths.assetsDir, { recursive: true });
+  mkdirSync(runtimePaths.assetPreviewsDir, { recursive: true });
 }

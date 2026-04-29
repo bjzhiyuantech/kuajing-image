@@ -18,12 +18,15 @@ import {
   Tldraw,
   type Editor,
   type TLAsset,
+  type TLAssetContext,
   type TLAssetId,
+  type TLAssetStore,
   type TLEditorSnapshot,
   type TLImageShape,
   type TLShapePartial,
   type TLShapeId,
-  type TLStoreSnapshot
+  type TLStoreSnapshot,
+  type TldrawOptions
 } from "tldraw";
 import {
   GENERATION_PLACEHOLDER_TYPE,
@@ -58,8 +61,23 @@ const AUTOSAVE_DEBOUNCE_MS = 1200;
 const HISTORY_COLLAPSED_LIMIT = 3;
 const MAX_REFERENCE_IMAGE_BYTES = 50 * 1024 * 1024;
 const MOBILE_DRAWER_MEDIA_QUERY = "(max-width: 1023px)";
+const ASSET_PREVIEW_WIDTHS = [256, 512, 1024, 2048] as const;
 const SUPPORTED_REFERENCE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp"]);
 const shapeUtils = [GenerationPlaceholderShapeUtil];
+const tldrawOptions = {
+  debouncedZoomThreshold: 80
+} satisfies Partial<TldrawOptions>;
+
+const canvasAssetStore: TLAssetStore = {
+  async upload(_asset, file) {
+    return {
+      src: await blobToDataUrl(file)
+    };
+  },
+  resolve(asset, context) {
+    return resolveCanvasAssetUrl(asset, context);
+  }
+};
 
 const promptStarters = [
   {
@@ -122,6 +140,13 @@ interface GenerationPlaceholderPlacement {
 interface ActiveGenerationPlaceholders {
   requestId: number;
   placements: GenerationPlaceholderPlacement[];
+}
+
+interface ActiveGenerationTask {
+  requestId: number;
+  temporaryRecordId: string;
+  controller: AbortController;
+  placeholderSet: ActiveGenerationPlaceholders;
 }
 
 type ReferenceSelection =
@@ -311,6 +336,35 @@ function successfulOutputCount(record: GenerationRecord): number {
   return record.outputs.filter((output) => output.status === "succeeded" && output.asset).length;
 }
 
+function generationModeToRecordMode(mode: GenerationMode): GenerationRecord["mode"] {
+  return mode === "reference" ? "edit" : "generate";
+}
+
+function createTemporaryGenerationRecord(input: {
+  requestId: number;
+  submitInput: GenerationSubmitInput;
+  requestMode: GenerationMode;
+  referenceAssetId?: string;
+}): GenerationRecord {
+  const promptValue = input.submitInput.prompt.trim();
+
+  return {
+    id: `local-generation-${input.requestId}`,
+    mode: generationModeToRecordMode(input.requestMode),
+    prompt: promptValue,
+    effectivePrompt: promptValue,
+    presetId: input.submitInput.presetId,
+    size: input.submitInput.size,
+    quality: input.submitInput.quality,
+    outputFormat: input.submitInput.outputFormat,
+    count: input.submitInput.count,
+    status: "running",
+    referenceAssetId: input.referenceAssetId,
+    createdAt: new Date().toISOString(),
+    outputs: []
+  };
+}
+
 function promptExcerpt(promptValue: string): string {
   const compact = promptValue.replace(/\s+/gu, " ").trim();
   return compact.length > 72 ? `${compact.slice(0, 72)}...` : compact;
@@ -375,7 +429,12 @@ function createCenteredPlacements(editor: Editor, countValue: GenerationCount, s
   });
 }
 
-function createGenerationPlaceholders(editor: Editor, input: GenerationSubmitInput, requestId: number): ActiveGenerationPlaceholders {
+function createGenerationPlaceholders(
+  editor: Editor,
+  input: GenerationSubmitInput,
+  requestId: number,
+  options: { selectPlaceholders?: boolean } = {}
+): ActiveGenerationPlaceholders {
   const placements = createCenteredPlacements(editor, input.count, input.size);
   const placeholderIds = placements.map((placement) => placement.id);
 
@@ -398,7 +457,9 @@ function createGenerationPlaceholders(editor: Editor, input: GenerationSubmitInp
     }))
   );
   editor.bringToFront(placeholderIds);
-  editor.select(...placeholderIds);
+  if (options.selectPlaceholders ?? true) {
+    editor.select(...placeholderIds);
+  }
 
   return {
     requestId,
@@ -557,6 +618,10 @@ function deleteLoadingGenerationPlaceholders(editor: Editor, placeholderSet: Act
   }
 }
 
+function firstLiveGenerationPlaceholder(editor: Editor, placeholderSet: ActiveGenerationPlaceholders): TLShapeId | undefined {
+  return placeholderSet.placements.find((placement) => isGenerationPlaceholderShape(editor.getShape(placement.id)))?.id;
+}
+
 function resolveReferenceSelection(editor: Editor): ReferenceSelection {
   const selectedShapes = editor.getSelectedShapes();
 
@@ -607,6 +672,26 @@ function resolveReferenceSelection(editor: Editor): ReferenceSelection {
     height: asset?.type === "image" ? asset.props.h : imageShape.props.h,
     hint: "已选中一张图片，将使用它作为本次参考图。"
   };
+}
+
+function areReferenceSelectionsEqual(left: ReferenceSelection, right: ReferenceSelection): boolean {
+  if (left.status !== right.status) {
+    return false;
+  }
+
+  if (left.status !== "ready" || right.status !== "ready") {
+    return left.hint === right.hint;
+  }
+
+  return (
+    left.assetId === right.assetId &&
+    left.localAssetId === right.localAssetId &&
+    left.name === right.name &&
+    left.sourceUrl === right.sourceUrl &&
+    left.width === right.width &&
+    left.height === right.height &&
+    left.hint === right.hint
+  );
 }
 
 function getImageSourceUrl(shape: TLImageShape, asset: TLAsset | undefined): string | undefined {
@@ -674,6 +759,30 @@ function getLocalAssetId(asset: TLAsset | undefined, sourceUrl?: string): string
   }
 
   return undefined;
+}
+
+function resolveCanvasAssetUrl(asset: TLAsset, context: TLAssetContext): string | null {
+  if (asset.type !== "image") {
+    return "src" in asset.props && typeof asset.props.src === "string" ? asset.props.src : null;
+  }
+
+  const sourceUrl = asset.props.src;
+  if (!sourceUrl || context.shouldResolveToOriginal) {
+    return sourceUrl || null;
+  }
+
+  const localAssetId = getLocalAssetId(asset, sourceUrl);
+  if (!localAssetId) {
+    return sourceUrl;
+  }
+
+  return `/api/assets/${encodeURIComponent(localAssetId)}/preview?width=${previewWidthForAssetContext(asset, context)}`;
+}
+
+function previewWidthForAssetContext(asset: Extract<TLAsset, { type: "image" }>, context: TLAssetContext): number {
+  const dpr = Number.isFinite(context.dpr) && context.dpr > 0 ? context.dpr : window.devicePixelRatio || 1;
+  const requestedWidth = Math.max(1, Math.ceil(asset.props.w * context.screenScale * dpr));
+  return ASSET_PREVIEW_WIDTHS.find((widthValue) => widthValue >= requestedWidth) ?? ASSET_PREVIEW_WIDTHS[ASSET_PREVIEW_WIDTHS.length - 1];
 }
 
 function findCanvasImageShape(editor: Editor, record: GenerationRecord): TLShapeId | undefined {
@@ -784,10 +893,35 @@ async function readStoredReferenceImage(assetId: string, signal: AbortSignal): P
 async function readErrorMessage(response: Response): Promise<string> {
   try {
     const body = (await response.json()) as { error?: { message?: string } };
-    return body.error?.message || `生成请求失败，状态 ${response.status}。`;
+    return body.error?.message ? `${body.error.message}（HTTP ${response.status}）` : `生成请求失败，状态 ${response.status}。`;
   } catch {
     return `生成请求失败，状态 ${response.status}。`;
   }
+}
+
+function requestGenerationNotificationPermission(): void {
+  if (typeof window === "undefined" || !("Notification" in window) || Notification.permission !== "default") {
+    return;
+  }
+
+  void Notification.requestPermission().catch(() => undefined);
+}
+
+function showGenerationCompleteNotification(record: GenerationRecord, insertedCount: number, failedCount: number): void {
+  if (typeof window === "undefined" || !("Notification" in window) || Notification.permission !== "granted") {
+    return;
+  }
+
+  const isPartial = record.status === "partial" || failedCount > 0;
+  const body = isPartial
+    ? `已插入 ${insertedCount} 张图像，${failedCount} 张失败。`
+    : `已插入 ${insertedCount} 张图像。`;
+
+  new Notification(isPartial ? "图像生成部分完成" : "图像生成完成", {
+    body,
+    icon: "/favicon.svg",
+    tag: `generation-${record.id}`
+  });
 }
 
 function saveStatusLabel(status: SaveStatus): string {
@@ -848,7 +982,7 @@ export function App() {
   const [count, setCount] = useState<GenerationCount>(1);
   const [quality, setQuality] = useState<ImageQuality>("auto");
   const [outputFormat, setOutputFormat] = useState<OutputFormat>("png");
-  const [isGenerating, setIsGenerating] = useState(false);
+  const [activeGenerationCount, setActiveGenerationCount] = useState(0);
   const [hasSubmitted, setHasSubmitted] = useState(false);
   const [isProjectLoaded, setIsProjectLoaded] = useState(false);
   const [projectSnapshot, setProjectSnapshot] = useState<PersistedSnapshot | undefined>();
@@ -865,11 +999,11 @@ export function App() {
   const panelCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const editorRef = useRef<Editor | null>(null);
   const generationModeRef = useRef<GenerationMode>("text");
-  const generationAbortRef = useRef<AbortController | null>(null);
-  const generationPlaceholdersRef = useRef<ActiveGenerationPlaceholders | null>(null);
+  const activeGenerationsRef = useRef<Map<number, ActiveGenerationTask>>(new Map());
   const generationRequestRef = useRef(0);
   const saveTimerRef = useRef<number | undefined>();
   const saveRequestRef = useRef(0);
+  const isGenerating = activeGenerationCount > 0;
 
   const trimmedPrompt = prompt.trim();
   const promptValidationMessage = prompt.trim() ? "" : "请输入提示词。";
@@ -878,7 +1012,7 @@ export function App() {
   const shouldShowValidation = Boolean(validationMessage);
   const isReferenceMode = generationMode === "reference";
   const isReferenceReady = isReferenceMode && referenceSelection.status === "ready";
-  const canGenerate = !dimensionValidationMessage && !isGenerating && (generationMode === "text" || isReferenceReady);
+  const canGenerate = !dimensionValidationMessage && (generationMode === "text" || isReferenceReady);
 
   const visibleHistory = useMemo(
     () => (isHistoryExpanded ? generationHistory : generationHistory.slice(0, HISTORY_COLLAPSED_LIMIT)),
@@ -890,7 +1024,7 @@ export function App() {
     if (isGenerating) {
       return {
         tone: "progress",
-        message: generationMode === "reference" ? `正在基于参考图生成 ${count} 张图像。` : `正在生成 ${count} 张图像。`,
+        message: `当前 ${activeGenerationCount} 个任务生成中，可继续下发新任务。`,
         testId: "generation-progress"
       };
     }
@@ -920,7 +1054,16 @@ export function App() {
     }
 
     return null;
-  }, [count, generationError, generationMessage, generationMode, isGenerating, shouldShowValidation, validationMessage]);
+  }, [activeGenerationCount, generationError, generationMessage, isGenerating, shouldShowValidation, validationMessage]);
+
+  useEffect(() => {
+    return () => {
+      for (const task of activeGenerationsRef.current.values()) {
+        task.controller.abort();
+      }
+      activeGenerationsRef.current.clear();
+    };
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1025,11 +1168,16 @@ export function App() {
 
     const editor = editorRef.current;
     if (generationMode === "reference" && editor) {
-      setReferenceSelection(resolveReferenceSelection(editor));
+      const nextSelection = resolveReferenceSelection(editor);
+      setReferenceSelection((currentSelection) =>
+        areReferenceSelectionsEqual(currentSelection, nextSelection) ? currentSelection : nextSelection
+      );
       return;
     }
 
-    setReferenceSelection(missingReferenceSelection);
+    setReferenceSelection((currentSelection) =>
+      areReferenceSelectionsEqual(currentSelection, missingReferenceSelection) ? currentSelection : missingReferenceSelection
+    );
   }, [generationMode]);
 
   const handleEditorMount = useCallback((editor: Editor) => {
@@ -1038,12 +1186,26 @@ export function App() {
       editor.user.updateUserPreferences({ isSnapMode: true });
     }
 
-    const updateReferenceSelection = (): void => {
+    let referenceSelectionFrame: number | undefined;
+    const commitReferenceSelection = (): void => {
       if (generationModeRef.current !== "reference") {
         return;
       }
 
-      setReferenceSelection(resolveReferenceSelection(editor));
+      const nextSelection = resolveReferenceSelection(editor);
+      setReferenceSelection((currentSelection) =>
+        areReferenceSelectionsEqual(currentSelection, nextSelection) ? currentSelection : nextSelection
+      );
+    };
+    const updateReferenceSelection = (): void => {
+      if (generationModeRef.current !== "reference" || referenceSelectionFrame !== undefined) {
+        return;
+      }
+
+      referenceSelectionFrame = window.requestAnimationFrame(() => {
+        referenceSelectionFrame = undefined;
+        commitReferenceSelection();
+      });
     };
 
     async function saveProject(): Promise<void> {
@@ -1081,8 +1243,8 @@ export function App() {
     const removeListener = editor.store.listen(
       () => {
         window.clearTimeout(saveTimerRef.current);
-        setSaveStatus("pending");
-        setSaveError("");
+        setSaveStatus((status) => (status === "pending" ? status : "pending"));
+        setSaveError((error) => (error ? "" : error));
         saveTimerRef.current = window.setTimeout(() => {
           void saveProject();
         }, AUTOSAVE_DEBOUNCE_MS);
@@ -1097,10 +1259,13 @@ export function App() {
       scope: "all"
     });
     editor.on("change", updateReferenceSelection);
-    updateReferenceSelection();
+    commitReferenceSelection();
 
     return () => {
       window.clearTimeout(saveTimerRef.current);
+      if (referenceSelectionFrame !== undefined) {
+        window.cancelAnimationFrame(referenceSelectionFrame);
+      }
       if (editorRef.current === editor) {
         editorRef.current = null;
       }
@@ -1146,7 +1311,8 @@ export function App() {
   async function executeGeneration(
     input: GenerationSubmitInput,
     requestMode: GenerationMode,
-    resolveReference?: (signal: AbortSignal) => Promise<GenerationReferenceInput | undefined>
+    resolveReference?: (signal: AbortSignal) => Promise<GenerationReferenceInput | undefined>,
+    referenceAssetId?: string
   ): Promise<void> {
     setHasSubmitted(true);
     setGenerationError("");
@@ -1163,19 +1329,29 @@ export function App() {
       return;
     }
 
-    generationAbortRef.current?.abort();
-    if (generationPlaceholdersRef.current) {
-      deleteLoadingGenerationPlaceholders(editor, generationPlaceholdersRef.current);
-      generationPlaceholdersRef.current = null;
-    }
+    requestGenerationNotificationPermission();
 
     const controller = new AbortController();
     const requestId = generationRequestRef.current + 1;
     generationRequestRef.current = requestId;
-    generationAbortRef.current = controller;
-    const placeholderSet = createGenerationPlaceholders(editor, input, requestId);
-    generationPlaceholdersRef.current = placeholderSet;
-    setIsGenerating(true);
+    const placeholderSet = createGenerationPlaceholders(editor, input, requestId, {
+      selectPlaceholders: requestMode !== "reference"
+    });
+    const temporaryRecord = createTemporaryGenerationRecord({
+      requestId,
+      submitInput: input,
+      requestMode,
+      referenceAssetId
+    });
+
+    activeGenerationsRef.current.set(requestId, {
+      requestId,
+      temporaryRecordId: temporaryRecord.id,
+      controller,
+      placeholderSet
+    });
+    setActiveGenerationCount(activeGenerationsRef.current.size);
+    setGenerationHistory((history) => [temporaryRecord, ...history.filter((record) => record.id !== temporaryRecord.id)].slice(0, 20));
 
     try {
       const referenceForRequest = requestMode === "reference" ? await resolveReference?.(controller.signal) : undefined;
@@ -1218,11 +1394,13 @@ export function App() {
         throw new Error("生成服务返回了无法识别的结果。");
       }
 
-      if (controller.signal.aborted || generationRequestRef.current !== requestId) {
+      if (controller.signal.aborted || !activeGenerationsRef.current.has(requestId)) {
         return;
       }
 
-      setGenerationHistory((history) => [body.record, ...history.filter((record) => record.id !== body.record.id)].slice(0, 20));
+      setGenerationHistory((history) =>
+        [body.record, ...history.filter((record) => record.id !== temporaryRecord.id && record.id !== body.record.id)].slice(0, 20)
+      );
       const insertedCount = replaceGenerationPlaceholders(editor, placeholderSet, body.record);
       const failedCount =
         body.record.outputs.filter((output) => output.status === "failed").length +
@@ -1233,22 +1411,24 @@ export function App() {
             ? `已插入 ${insertedCount} 张图像，${failedCount} 张失败。`
             : `已插入 ${insertedCount} 张图像。`
         );
+        showGenerationCompleteNotification(body.record, insertedCount, failedCount);
       } else {
         setGenerationError(body.record.error || "没有可插入的成功图像。");
       }
     } catch (error) {
-      if (controller.signal.aborted || generationRequestRef.current !== requestId) {
+      if (controller.signal.aborted || !activeGenerationsRef.current.has(requestId)) {
         return;
       }
 
       const message = error instanceof Error ? error.message : "生成失败，请重试。";
       markGenerationPlaceholdersFailed(editor, placeholderSet, message);
+      setGenerationHistory((history) =>
+        history.map((record) => (record.id === temporaryRecord.id ? { ...record, status: "failed", error: message } : record))
+      );
       setGenerationError(message);
     } finally {
-      if (generationRequestRef.current === requestId) {
-        setIsGenerating(false);
-        generationAbortRef.current = null;
-        generationPlaceholdersRef.current = null;
+      if (activeGenerationsRef.current.delete(requestId)) {
+        setActiveGenerationCount(activeGenerationsRef.current.size);
       }
     }
   }
@@ -1277,7 +1457,7 @@ export function App() {
           referenceImage: await readReferenceImage(referenceSelection, signal),
           referenceAssetId: referenceSelection.localAssetId
         };
-      });
+      }, referenceSelection.status === "ready" ? referenceSelection.localAssetId : undefined);
       return;
     }
 
@@ -1303,7 +1483,24 @@ export function App() {
 
     const shapeId = findCanvasImageShape(editor, record);
     if (!shapeId) {
-      setGenerationError("画布上找不到这张历史图片，可能已被删除。");
+      const activeTask = Array.from(activeGenerationsRef.current.values()).find((task) => task.temporaryRecordId === record.id);
+      const placeholderId = activeTask ? firstLiveGenerationPlaceholder(editor, activeTask.placeholderSet) : undefined;
+      if (!placeholderId) {
+        setGenerationError("画布上找不到这张历史图片，可能已被删除。");
+        return;
+      }
+
+      const bounds = editor.getShapePageBounds(placeholderId);
+      editor.select(placeholderId);
+      if (bounds) {
+        editor.zoomToBounds(bounds, {
+          animation: { duration: 220 },
+          inset: 96
+        });
+      } else {
+        editor.zoomToSelection({ animation: { duration: 220 } });
+      }
+      setGenerationMessage("已定位到生成中的任务。");
       return;
     }
 
@@ -1353,7 +1550,8 @@ export function App() {
             referenceImage: await readStoredReferenceImage(record.referenceAssetId!, signal),
             referenceAssetId: record.referenceAssetId
           })
-        : undefined
+        : undefined,
+      record.referenceAssetId
     );
   }
 
@@ -1368,15 +1566,26 @@ export function App() {
     setGenerationMessage("已打开原始资源下载。");
   }
 
-  function cancelGeneration(): void {
-    generationAbortRef.current?.abort();
-    const editor = editorRef.current;
-    if (editor && generationPlaceholdersRef.current) {
-      deleteLoadingGenerationPlaceholders(editor, generationPlaceholdersRef.current);
+  function cancelGeneration(requestId: number): void {
+    const task = activeGenerationsRef.current.get(requestId);
+    if (!task) {
+      return;
     }
-    generationPlaceholdersRef.current = null;
-    generationRequestRef.current += 1;
-    setIsGenerating(false);
+
+    task.controller.abort();
+    const editor = editorRef.current;
+    if (editor) {
+      deleteLoadingGenerationPlaceholders(editor, task.placeholderSet);
+    }
+
+    activeGenerationsRef.current.delete(requestId);
+    setActiveGenerationCount(activeGenerationsRef.current.size);
+    setGenerationHistory((history) =>
+      history.map((record) =>
+        record.id === task.temporaryRecordId ? { ...record, status: "cancelled", error: "已取消本次生成。" } : record
+      )
+    );
+    setGenerationError("");
     setGenerationMessage("已取消本次生成。");
   }
 
@@ -1390,7 +1599,13 @@ export function App() {
         tabIndex={-1}
       >
         {isProjectLoaded ? (
-          <Tldraw snapshot={projectSnapshot} shapeUtils={shapeUtils} onMount={handleEditorMount} />
+          <Tldraw
+            assets={canvasAssetStore}
+            options={tldrawOptions}
+            snapshot={projectSnapshot}
+            shapeUtils={shapeUtils}
+            onMount={handleEditorMount}
+          />
         ) : (
           <div className="flex h-full items-center justify-center text-sm text-neutral-500">正在载入画布...</div>
         )}
@@ -1561,7 +1776,6 @@ export function App() {
                         className="secondary-action h-8 shrink-0 px-2 text-xs"
                         type="button"
                         data-testid="cancel-reference"
-                        disabled={isGenerating}
                         onClick={cancelReferenceSelection}
                       >
                         <X className="size-3.5" aria-hidden="true" />
@@ -1722,6 +1936,8 @@ export function App() {
                   const downloadableAsset = firstDownloadableAsset(record);
                   const excerpt = promptExcerpt(record.prompt);
                   const totalOutputs = record.outputs.length || record.count;
+                  const activeTask = Array.from(activeGenerationsRef.current.values()).find((task) => task.temporaryRecordId === record.id);
+                  const isRecordRunning = record.status === "running" && Boolean(activeTask);
 
                   return (
                     <article
@@ -1775,23 +1991,36 @@ export function App() {
                           className="history-icon-action"
                           type="button"
                           data-testid="history-rerun"
-                          disabled={isGenerating}
-                          title={isGenerating ? "生成中不可重跑" : "重跑"}
+                          disabled={isRecordRunning}
+                          title={isRecordRunning ? "任务运行中" : "重跑"}
                           onClick={() => void rerunHistoryRecord(record)}
                         >
                           <RotateCcw className="size-4" aria-hidden="true" />
                         </button>
-                        <button
-                          aria-label={`下载历史记录：${excerpt}`}
-                          className="history-icon-action"
-                          type="button"
-                          data-testid="history-download"
-                          disabled={!downloadableAsset}
-                          title={downloadableAsset ? "下载" : "没有可下载的本地资源"}
-                          onClick={() => downloadHistoryRecord(record)}
-                        >
-                          <Download className="size-4" aria-hidden="true" />
-                        </button>
+                        {activeTask && record.status === "running" ? (
+                          <button
+                            aria-label={`取消生成任务：${excerpt}`}
+                            className="history-icon-action"
+                            type="button"
+                            data-testid="history-cancel"
+                            title="取消"
+                            onClick={() => cancelGeneration(activeTask.requestId)}
+                          >
+                            <XCircle className="size-4" aria-hidden="true" />
+                          </button>
+                        ) : (
+                          <button
+                            aria-label={`下载历史记录：${excerpt}`}
+                            className="history-icon-action"
+                            type="button"
+                            data-testid="history-download"
+                            disabled={!downloadableAsset}
+                            title={downloadableAsset ? "下载" : "没有可下载的本地资源"}
+                            onClick={() => downloadHistoryRecord(record)}
+                          >
+                            <Download className="size-4" aria-hidden="true" />
+                          </button>
+                        )}
                       </div>
                     </article>
                   );
@@ -1801,7 +2030,7 @@ export function App() {
           </section>
         </div>
 
-        <div className="ai-panel-actions grid grid-cols-[1fr_auto] gap-3 border-t border-neutral-200 bg-white px-5 py-4">
+        <div className="ai-panel-actions grid grid-cols-1 gap-3 border-t border-neutral-200 bg-white px-5 py-4">
           <button
             className="primary-action"
             disabled={!canGenerate}
@@ -1811,18 +2040,12 @@ export function App() {
             data-testid="generate-button"
             onClick={submitGeneration}
           >
-            {isGenerating ? (
-              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-            ) : isReferenceReady ? (
+            {isReferenceReady ? (
               <ImageIcon className="size-4" aria-hidden="true" />
             ) : (
               <Square className="size-4" aria-hidden="true" />
             )}
-            {isGenerating ? (generationMode === "reference" ? "参考生成中" : "图像生成中") : generationMode === "reference" ? "参考生成" : "提示词生成"}
-          </button>
-          <button className="secondary-action" disabled={!isGenerating} type="button" onClick={cancelGeneration}>
-            <XCircle className="size-4" aria-hidden="true" />
-            取消
+            {generationMode === "reference" ? "参考生成" : "提示词生成"}
           </button>
         </div>
       </aside>

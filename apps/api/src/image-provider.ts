@@ -1,4 +1,4 @@
-import OpenAI, { APIError, APIUserAbortError, toFile } from "openai";
+import OpenAI, { APIConnectionTimeoutError, APIError, APIUserAbortError, toFile } from "openai";
 import type { ImageEditParamsNonStreaming, ImageGenerateParamsNonStreaming, ImagesResponse } from "openai/resources/images";
 import {
   IMAGE_MODEL,
@@ -53,8 +53,10 @@ export class ProviderError extends Error {
 
 export interface OpenAIImageProviderConfig {
   apiKey: string;
+  timeoutMs: number;
 }
 
+const DEFAULT_OPENAI_IMAGE_TIMEOUT_MS = 20 * 60 * 1000;
 const MAX_REFERENCE_IMAGE_BYTES = 50 * 1024 * 1024;
 const SUPPORTED_REFERENCE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp"]);
 
@@ -86,7 +88,8 @@ export function getOpenAIImageProviderConfig():
   return {
     ok: true,
     config: {
-      apiKey
+      apiKey,
+      timeoutMs: parsePositiveInteger(process.env.OPENAI_IMAGE_TIMEOUT_MS, DEFAULT_OPENAI_IMAGE_TIMEOUT_MS)
     }
   };
 }
@@ -100,7 +103,8 @@ class OpenAIImageProvider implements ImageProvider {
 
   constructor(config: OpenAIImageProviderConfig) {
     this.client = new OpenAI({
-      apiKey: config.apiKey
+      apiKey: config.apiKey,
+      timeout: config.timeoutMs
     });
   }
 
@@ -166,8 +170,12 @@ function toProviderError(error: unknown): Error {
     return error;
   }
 
+  if (error instanceof APIConnectionTimeoutError) {
+    return new ProviderError("upstream_failure", "OpenAI 图像服务请求超时，请稍后重试或降低分辨率。", 504);
+  }
+
   if (error instanceof APIError) {
-    return new ProviderError("upstream_failure", error.message || "OpenAI 图像服务请求失败。", error.status === 400 ? 400 : 502);
+    return new ProviderError("upstream_failure", error.message || "OpenAI 图像服务请求失败。", providerHttpStatus(error.status));
   }
 
   if (error instanceof Error && error.message) {
@@ -175,6 +183,15 @@ function toProviderError(error: unknown): Error {
   }
 
   return new ProviderError("upstream_failure", "OpenAI 图像服务请求失败。", 502);
+}
+
+function providerHttpStatus(status: number | undefined): number {
+  return typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 599 ? status : 502;
+}
+
+function parsePositiveInteger(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function isAbortError(error: unknown): error is Error {
