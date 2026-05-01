@@ -130,6 +130,18 @@ docker compose up --build
 
 Docker Compose 还会默认设置 `SQLITE_JOURNAL_MODE=DELETE` 和 `SQLITE_LOCKING_MODE=EXCLUSIVE`。这样可以避开 Docker Desktop 绑定挂载 `./data` 目录时常见的 SQLite `SQLITE_IOERR_SHMOPEN` 错误，同时仍然把项目和生成资产保存在宿主机上。
 
+如需使用宿主机已经运行的 MySQL，请在 `.env` 中设置：
+
+```env
+MYSQL_HOST=host.docker.internal
+MYSQL_PORT=3306
+MYSQL_USER=你的用户
+MYSQL_PASSWORD=你的密码
+MYSQL_DATABASE=gpt_image_canvas
+```
+
+容器内不要使用 `127.0.0.1` 或 `localhost` 连接宿主机 MySQL；它们会指向 app 容器自身。Compose 已配置 `host.docker.internal` 到宿主机网关的解析。
+
 Compose 构建支持与参考项目 `open-managed-flow` 相同的网络相关 build args：`NODE_IMAGE`、`NPM_CONFIG_REGISTRY`、`APT_MIRROR` 和 `APT_SECURITY_MIRROR`。Compose 中默认的 `NODE_IMAGE` 是 `node:23-bullseye-slim`，因为它满足应用的 `>=22` 运行时要求，并且在 Docker Hub 不可用时更常见于本地缓存。如需强制使用 Node 22 基础镜像，可以运行：
 
 Windows PowerShell：

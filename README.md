@@ -130,6 +130,18 @@ Open the app at `http://localhost:8787` by default. Set `PORT` in `.env` before 
 
 Docker Compose also sets `SQLITE_JOURNAL_MODE=DELETE` and `SQLITE_LOCKING_MODE=EXCLUSIVE` by default. This avoids SQLite `SQLITE_IOERR_SHMOPEN` failures on bind-mounted `./data` directories in Docker Desktop while preserving projects and generated assets on the host.
 
+To use a MySQL server already running on the Docker host, set these values in `.env`:
+
+```env
+MYSQL_HOST=host.docker.internal
+MYSQL_PORT=3306
+MYSQL_USER=your_user
+MYSQL_PASSWORD=your_password
+MYSQL_DATABASE=gpt_image_canvas
+```
+
+Do not use `127.0.0.1` or `localhost` from inside the container for host MySQL; those point to the app container itself. Compose maps `host.docker.internal` to the host gateway.
+
 The Compose build accepts the same network-related build arguments used by the reference `open-managed-flow` project: `NODE_IMAGE`, `NPM_CONFIG_REGISTRY`, `APT_MIRROR`, and `APT_SECURITY_MIRROR`. The default `NODE_IMAGE` in Compose is `node:23-bullseye-slim` because it satisfies the app's `>=22` runtime requirement and is commonly available as a local cache when Docker Hub is unreachable. To force the exact Node 22 base image, run:
 
 Windows PowerShell:

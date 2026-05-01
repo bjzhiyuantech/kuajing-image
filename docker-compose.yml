@@ -6,8 +6,8 @@ services:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-gpt_image_canvas}
       MYSQL_USER: ${MYSQL_USER:-gpt_image_canvas}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-gpt_image_canvas}
-    ports:
-      - "${MYSQL_PORT:-3306}:3306"
+    expose:
+      - "3306"
     volumes:
       - mysql-data:/var/lib/mysql
     healthcheck:
@@ -32,8 +32,8 @@ services:
       HOST: 0.0.0.0
       PORT: ${PORT:-8787}
       DATA_DIR: /app/data
-      MYSQL_HOST: mysql
-      MYSQL_PORT: 3306
+      MYSQL_HOST: ${MYSQL_HOST:-mysql}
+      MYSQL_PORT: ${MYSQL_PORT:-3306}
       MYSQL_USER: ${MYSQL_USER:-gpt_image_canvas}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-gpt_image_canvas}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-gpt_image_canvas}
@@ -41,6 +41,8 @@ services:
       - "${PORT:-8787}:${PORT:-8787}"
     volumes:
       - ./data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       mysql:
         condition: service_healthy
