@@ -17,6 +17,7 @@ import {
   SIZE_PRESETS,
   composeEcommercePrompt,
   type EcommerceBatchGenerateResponse,
+  type EcommerceGenerationMode,
   type EcommerceSceneTemplateId,
   type GenerationRecord,
   type ImageQuality,
@@ -42,9 +43,10 @@ const defaultForm: BatchFormState = {
     color: "",
     brandTone: "premium, trustworthy, marketplace-ready"
   },
+  generationMode: "enhance",
   platform: "amazon",
   market: "us",
-  sceneTemplateIds: ["marketplace-main", "lifestyle", "feature-benefit"],
+  sceneTemplateIds: ["marketplace-main", "logo-benefit", "feature-benefit"],
   size: { width: 1024, height: 1024 },
   stylePresetId: "product",
   quality: "auto",
@@ -53,6 +55,16 @@ const defaultForm: BatchFormState = {
   referenceImageUrl: "",
   extraDirection: ""
 };
+
+const defaultSceneIdsByMode: Record<EcommerceGenerationMode, EcommerceSceneTemplateId[]> = {
+  enhance: ["marketplace-main", "logo-benefit", "feature-benefit"],
+  creative: ["lifestyle", "model-wear", "accessory-match"]
+};
+
+const generationModes: Array<{ id: EcommerceGenerationMode; label: string; hint: string }> = [
+  { id: "enhance", label: "原图增强", hint: "保留商品原貌，加 Logo、卖点文字和电商排版。" },
+  { id: "creative", label: "场景创作", hint: "依据主图生成生活方式、模特穿戴和搭配场景。" }
+];
 
 const qualityOptions: Array<{ id: ImageQuality; label: string }> = [
   { id: "auto", label: "自动" },
@@ -93,6 +105,45 @@ function createClientId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+async function referenceImageFromUrl(url: string): Promise<{ dataUrl: string; fileName?: string }> {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error("参考图读取失败，请换一张商品主图。");
+  }
+
+  const blob = await response.blob();
+  if (!blob.type.startsWith("image/")) {
+    throw new Error("参考图 URL 返回的不是图片。");
+  }
+  if (blob.size > 50 * 1024 * 1024) {
+    throw new Error("参考图超过 50MB，请换一张较小的商品主图。");
+  }
+
+  return {
+    dataUrl: await blobToDataUrl(blob),
+    fileName: fileNameFromUrl(url)
+  };
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error("参考图转换失败。"));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function fileNameFromUrl(url: string): string | undefined {
+  try {
+    const pathname = new URL(url).pathname;
+    const name = pathname.split("/").filter(Boolean).at(-1);
+    return name || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function SidePanelApp() {
   const [settings, setSettings] = useState<ExtensionSettings>(defaultSettings);
   const [form, setForm] = useState<BatchFormState>(defaultForm);
@@ -105,9 +156,14 @@ export function SidePanelApp() {
   });
   const [settingsOpen, setSettingsOpen] = useState(false);
 
+  const availableScenes = useMemo(
+    () => ECOMMERCE_SCENE_TEMPLATES.filter((template) => template.mode === form.generationMode),
+    [form.generationMode]
+  );
+
   const selectedScenes = useMemo(
-    () => ECOMMERCE_SCENE_TEMPLATES.filter((template) => form.sceneTemplateIds.includes(template.id)),
-    [form.sceneTemplateIds]
+    () => availableScenes.filter((template) => form.sceneTemplateIds.includes(template.id)),
+    [availableScenes, form.sceneTemplateIds]
   );
 
   const previewPrompt = useMemo(() => {
@@ -189,15 +245,37 @@ export function SidePanelApp() {
     });
   }
 
+  function updateGenerationMode(generationMode: EcommerceGenerationMode): void {
+    setForm((current) => ({
+      ...current,
+      generationMode,
+      sceneTemplateIds: defaultSceneIdsByMode[generationMode],
+      stylePresetId: generationMode === "enhance" ? "product" : "photoreal"
+    }));
+    setTask((current) => ({
+      ...current,
+      message: generationMode === "enhance" ? "原图增强会优先保留商品原貌。" : "场景创作会依据主图重建营销场景。"
+    }));
+  }
+
   async function submitBatch(): Promise<void> {
     const title = form.product.title.trim();
     if (!title) {
       setTask({ id: "validation", status: "failed", message: "请先填写商品标题。", records: [] });
       return;
     }
+    if (form.generationMode === "enhance" && !form.referenceImageUrl.trim()) {
+      setTask({ id: "validation", status: "failed", message: "原图增强需要参考图 URL，请先读取商品页或手动填写主图地址。", records: [] });
+      return;
+    }
 
     const taskId = createClientId();
-    setTask({ id: taskId, status: "running", message: "正在提交批量生成任务。", records: [] });
+    setTask({
+      id: taskId,
+      status: "running",
+      message: form.referenceImageUrl.trim() ? "正在读取参考图并提交批量生成任务。" : "正在提交批量生成任务。",
+      records: []
+    });
 
     const fallbackRecords = selectedScenes.map((scene): GenerationRecord => ({
       id: `${taskId}-${scene.id}`,
@@ -221,6 +299,9 @@ export function SidePanelApp() {
     }));
 
     try {
+      const referenceImage = form.referenceImageUrl.trim()
+        ? await referenceImageFromUrl(form.referenceImageUrl.trim())
+        : undefined;
       const response = await fetch(`${settings.apiBaseUrl.replace(/\/$/u, "")}/api/ecommerce/images/batch-generate`, {
         method: "POST",
         headers: {
@@ -238,6 +319,7 @@ export function SidePanelApp() {
           quality: form.quality,
           outputFormat: form.outputFormat,
           countPerScene: form.countPerScene,
+          referenceImage,
           extraDirection: form.extraDirection
         })
       });
@@ -253,11 +335,11 @@ export function SidePanelApp() {
         message: `已完成 ${body.records.length} 个场景。`,
         records: body.records
       });
-    } catch {
+    } catch (error) {
       setTask({
         id: taskId,
         status: "failed",
-        message: "后端批量接口暂不可用，已在本地生成场景 prompt 草稿。",
+        message: error instanceof Error ? `${error.message} 已在本地生成场景 prompt 草稿。` : "后端批量接口暂不可用，已在本地生成场景 prompt 草稿。",
         records: fallbackRecords
       });
     }
@@ -350,9 +432,26 @@ export function SidePanelApp() {
       </section>
 
       <section className="panel">
+        <h2>生成方式</h2>
+        <div className="mode-grid">
+          {generationModes.map((mode) => (
+            <button
+              className={form.generationMode === mode.id ? "mode-button active" : "mode-button"}
+              key={mode.id}
+              type="button"
+              onClick={() => updateGenerationMode(mode.id)}
+            >
+              <strong>{mode.label}</strong>
+              <span>{mode.hint}</span>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section className="panel">
         <h2>生成场景</h2>
         <div className="scene-grid">
-          {ECOMMERCE_SCENE_TEMPLATES.map((scene) => (
+          {availableScenes.map((scene) => (
             <button
               className={form.sceneTemplateIds.includes(scene.id) ? "scene-button active" : "scene-button"}
               key={scene.id}
@@ -416,7 +515,7 @@ export function SidePanelApp() {
             </select>
           </label>
           <label>
-            <span>参考图 URL</span>
+            <span>{form.generationMode === "enhance" ? "商品主图 URL（必填）" : "商品主图 URL"}</span>
             <input value={form.referenceImageUrl} onChange={(event) => setForm({ ...form, referenceImageUrl: event.target.value })} />
           </label>
         </div>

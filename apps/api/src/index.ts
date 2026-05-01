@@ -292,21 +292,27 @@ app.post("/api/ecommerce/images/batch-generate", async (c) => {
         sceneTemplateId,
         extraDirection: parsed.value.extraDirection
       });
-      const response = await runTextToImageGeneration(
-        tenant,
-        {
-          originalPrompt: prompt,
-          presetId: parsed.value.stylePresetId ?? "product",
-          prompt: composePrompt(prompt, parsed.value.stylePresetId ?? "product"),
-          size: parsed.value.size,
-          sizeApiValue: `${parsed.value.size.width}x${parsed.value.size.height}`,
-          quality: parsed.value.quality ?? "auto",
-          outputFormat: parsed.value.outputFormat ?? "png",
-          count: parsed.value.countPerScene ?? 1
-        },
-        provider,
-        c.req.raw.signal
-      );
+      const generationInput = {
+        originalPrompt: prompt,
+        presetId: parsed.value.stylePresetId ?? "product",
+        prompt: composePrompt(prompt, parsed.value.stylePresetId ?? "product"),
+        size: parsed.value.size,
+        sizeApiValue: `${parsed.value.size.width}x${parsed.value.size.height}`,
+        quality: parsed.value.quality ?? "auto",
+        outputFormat: parsed.value.outputFormat ?? "png",
+        count: parsed.value.countPerScene ?? 1
+      };
+      const response = parsed.value.referenceImage
+        ? await runReferenceImageGeneration(
+            tenant,
+            {
+              ...generationInput,
+              referenceImage: parsed.value.referenceImage
+            },
+            provider,
+            c.req.raw.signal
+          )
+        : await runTextToImageGeneration(tenant, generationInput, provider, c.req.raw.signal);
       records.push(response.record);
     }
 
@@ -695,8 +701,26 @@ function parseEcommerceBatchPayload(input: unknown): ParseResult<EcommerceBatchG
       quality: quality.value,
       outputFormat: outputFormat.value,
       countPerScene: count.value,
+      referenceImage: parseEcommerceReferenceImage(input.referenceImage),
       extraDirection: parseOptionalString(input.extraDirection)
     }
+  };
+}
+
+function parseEcommerceReferenceImage(value: unknown): ReferenceImageInput | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const dataUrl = value.dataUrl;
+  if (typeof dataUrl !== "string" || !dataUrl.trim()) {
+    return undefined;
+  }
+
+  const fileName = value.fileName;
+  return {
+    dataUrl,
+    fileName: typeof fileName === "string" && fileName.trim() ? fileName.trim() : undefined
   };
 }
 
@@ -767,11 +791,14 @@ function parseEcommerceSceneIds(value: unknown): ParseResult<EcommerceSceneTempl
 
   const supported: EcommerceSceneTemplateId[] = [
     "marketplace-main",
+    "logo-benefit",
+    "promo-poster",
     "lifestyle",
     "feature-benefit",
+    "model-wear",
+    "accessory-match",
     "seasonal-campaign",
-    "social-ad",
-    "comparison"
+    "social-ad"
   ];
   const sceneIds = value.flatMap((item) =>
     typeof item === "string" && supported.includes(item as EcommerceSceneTemplateId)

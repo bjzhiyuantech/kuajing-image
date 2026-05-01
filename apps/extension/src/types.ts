@@ -1,5 +1,6 @@
 import type {
   EcommerceBatchGenerateRequest,
+  EcommerceGenerationMode,
   EcommerceMarket,
   EcommercePlatform,
   EcommerceProductBrief,
@@ -26,6 +27,7 @@ export interface PageContext {
 
 export interface BatchFormState {
   product: EcommerceProductBrief;
+  generationMode: EcommerceGenerationMode;
   platform: EcommercePlatform;
   market: EcommerceMarket;
   sceneTemplateIds: EcommerceSceneTemplateId[];

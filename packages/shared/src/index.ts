@@ -10,6 +10,7 @@ export type CloudStorageProvider = "cos" | "oss";
 export type AssetCloudUploadStatus = "uploaded" | "failed";
 export type EcommercePlatform = "amazon" | "shopify" | "tiktok-shop" | "temu" | "shein" | "etsy" | "aliexpress" | "other";
 export type EcommerceMarket = "us" | "uk" | "eu" | "ca" | "au" | "jp" | "kr" | "sg" | "mx" | "br" | "global";
+export type EcommerceGenerationMode = "enhance" | "creative";
 
 export interface SizePreset {
   id: string;
@@ -99,47 +100,83 @@ export const ECOMMERCE_MARKETS = [
 export const ECOMMERCE_SCENE_TEMPLATES = [
   {
     id: "marketplace-main",
-    label: "白底主图",
+    mode: "enhance",
+    label: "白底主图优化",
     defaultSizePresetId: "square-1k",
     prompt:
-      "Create a clean marketplace main image for the product. Pure white background, product centered, realistic proportions, sharp commercial lighting, no text, no watermark, no extra props."
+      "Enhance the source product image into a clean marketplace main image. Keep the exact product identity, structure, color, material, proportions, and visible details from the reference image. Use a pure white background, product centered, realistic commercial lighting, no redesign, no added props, no watermark."
   },
   {
-    id: "lifestyle",
-    label: "生活方式图",
+    id: "logo-benefit",
+    mode: "enhance",
+    label: "Logo + 卖点图",
     defaultSizePresetId: "poster-landscape",
     prompt:
-      "Create a realistic lifestyle image showing the product in a natural usage scene. Premium e-commerce photography, authentic environment, clear product visibility, natural light, no text, no watermark."
+      "Create an e-commerce benefit image based on the source product image. Keep the product unchanged and add a clean brand-logo area plus concise selling-point text layout. Do not invent product features. Text must be large, readable, and placed outside the product. Leave logo text as an editable placeholder if no brand is provided."
   },
   {
     id: "feature-benefit",
-    label: "卖点展示图",
+    mode: "enhance",
+    label: "功能说明图",
     defaultSizePresetId: "poster-landscape",
     prompt:
-      "Create an e-commerce feature image that highlights the product's key benefit. Clean composition with clear negative space for later copy, modern commercial style, no embedded text, no logo."
+      "Create a feature explanation image from the source product image. Preserve the product exactly, then add neat callout lines, icon-like markers, and short readable feature text around the product. Do not change the product design, material, color, or proportions."
+  },
+  {
+    id: "promo-poster",
+    mode: "enhance",
+    label: "促销海报",
+    defaultSizePresetId: "poster-portrait",
+    prompt:
+      "Create a promotional marketplace poster from the source product image. Keep the product exact and build a clean commercial layout with room for discount text, brand area, and short selling points. Do not redesign the product or add misleading claims."
+  },
+  {
+    id: "lifestyle",
+    mode: "creative",
+    label: "生活方式图",
+    defaultSizePresetId: "poster-landscape",
+    prompt:
+      "Create a realistic lifestyle image using the reference product as the hero item. Preserve the product's key shape, color, material, and recognizable details while rebuilding the environment, lighting, props, and composition. Premium e-commerce photography, authentic setting, clear product visibility, no watermark."
+  },
+  {
+    id: "model-wear",
+    mode: "creative",
+    label: "国外模特穿戴图",
+    defaultSizePresetId: "poster-portrait",
+    prompt:
+      "Create a realistic overseas model usage image with the reference product worn, held, or used naturally when appropriate for the product category. Keep the product recognizable and commercially accurate. Use tasteful international e-commerce styling, natural pose, realistic lighting, no extra hands, no distorted anatomy."
+  },
+  {
+    id: "accessory-match",
+    mode: "creative",
+    label: "配饰搭配图",
+    defaultSizePresetId: "poster-landscape",
+    prompt:
+      "Create a curated accessory-matching scene around the reference product. Keep the product as the main subject and preserve its key visual features. Add complementary props, styling elements, and a premium marketplace composition without changing the product itself."
   },
   {
     id: "seasonal-campaign",
+    mode: "creative",
     label: "节日促销图",
     defaultSizePresetId: "poster-portrait",
     prompt:
-      "Create a seasonal promotional product image. Festive but not cluttered, product as the main focus, premium marketplace ad style, leave clean space for promotional text, no fake text."
+      "Create a seasonal promotional product scene using the reference product as the main subject. Festive but not cluttered, premium marketplace ad style, clean space for later promotional text, no fake text, no watermark."
   },
   {
     id: "social-ad",
+    mode: "creative",
     label: "社媒广告图",
     defaultSizePresetId: "story-9-16",
     prompt:
-      "Create a high-converting social commerce ad creative. Strong visual hook, clear product benefit, mobile-first composition, realistic lighting, no watermark, no unreadable text."
-  },
-  {
-    id: "comparison",
-    label: "对比展示图",
-    defaultSizePresetId: "poster-landscape",
-    prompt:
-      "Create a clean product comparison style image. Show the product advantage visually without misleading claims, organized composition, space for labels to be added later, no embedded text."
+      "Create a high-converting social commerce ad creative using the reference product. Strong visual hook, mobile-first composition, realistic lighting, clear product benefit, no watermark, no unreadable text."
   }
-] as const;
+] as const satisfies ReadonlyArray<{
+  id: string;
+  mode: EcommerceGenerationMode;
+  label: string;
+  defaultSizePresetId: ImageSizePresetId;
+  prompt: string;
+}>;
 
 export type EcommerceSceneTemplateId = (typeof ECOMMERCE_SCENE_TEMPLATES)[number]["id"];
 
@@ -475,10 +512,16 @@ export function composeEcommercePrompt(context: EcommercePromptContext): string 
     context.extraDirection ? `Additional direction: ${context.extraDirection.trim()}` : ""
   ].filter(Boolean);
 
+  const modeGuard =
+    template?.mode === "enhance"
+      ? "Reference image rule: treat the source product image as the single source of truth. Preserve the original product exactly. Only improve lighting, background, layout, logo area, selling-point text, callouts, and marketplace composition. Do not redesign the product."
+      : "Reference image rule: use the source product image to preserve the product's key identity, shape, color, material, and recognizable details while creating a new commercial scene.";
+
   return [
     template?.prompt ?? "Create a professional cross-border e-commerce product image.",
     `Optimize for ${platform} in the ${market} market.`,
     ...details,
-    "Keep the product accurate and commercially usable. Preserve key shape, material, and color. Avoid logos, watermarks, unreadable text, misleading claims, and extra hands or people unless explicitly requested."
+    modeGuard,
+    "Keep the result accurate and commercially usable. Avoid watermarks, unreadable text, misleading claims, and extra hands or people unless explicitly requested."
   ].join("\n");
 }

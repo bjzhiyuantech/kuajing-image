@@ -131,12 +131,54 @@ textarea:focus {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.mode-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .scene-button,
+.mode-button,
 .icon-button,
 .secondary-button,
 .primary-button {
   border-radius: 6px;
   cursor: pointer;
+}
+
+.mode-button {
+  background: #f7faf8;
+  border: 1px solid #d8e3de;
+  color: #26352e;
+  min-height: 74px;
+  padding: 10px;
+  text-align: left;
+}
+
+.mode-button strong,
+.mode-button span {
+  display: block;
+}
+
+.mode-button strong {
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.mode-button span {
+  color: #607168;
+  font-size: 11px;
+  line-height: 1.4;
+  margin-top: 5px;
+}
+
+.mode-button.active {
+  background: #e7f5ee;
+  border-color: #11936f;
+}
+
+.mode-button.active strong {
+  color: #0d644f;
 }
 
 .scene-button {
