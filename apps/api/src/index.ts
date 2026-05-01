@@ -3,10 +3,22 @@ import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
+import { desc, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { parsePreviewWidth, readStoredAssetPreview } from "./asset-preview.js";
 import { resolveRequestTenant, type RequestTenant } from "./auth-context.js";
+import {
+  AuthError,
+  getAuthSession,
+  getAuthSessionFromToken,
+  loginUser,
+  registerUser,
+  requireAdminSession,
+  requireAuthSession,
+  toMeResponse,
+  type AuthSession
+} from "./auth-service.js";
 import {
   GENERATION_COUNTS,
   IMAGE_QUALITIES,
@@ -17,6 +29,9 @@ import {
   composePrompt,
   validateSceneImageSize,
   type AppConfig,
+  type AdminAssetsResponse,
+  type AdminStatsResponse,
+  type AdminUsersResponse,
   type EcommerceBatchGenerateRequest,
   type EcommerceBatchGenerateResponse,
   type EcommerceJobListResponse,
@@ -34,6 +49,7 @@ import {
   type StylePresetId
 } from "./contracts.js";
 import { closeDatabase, ensureTenant, initializeDatabase } from "./database.js";
+import { db } from "./database.js";
 import {
   ProviderError,
   createOpenAIImageProvider,
@@ -52,7 +68,8 @@ import {
   updateEcommerceBatchJob
 } from "./ecommerce-jobs.js";
 import { deleteGalleryOutput, getGalleryImages, getProjectState, saveProjectSnapshot } from "./project-store.js";
-import { authConfig, runtimePaths, serverConfig } from "./runtime.js";
+import { runtimePaths, serverConfig } from "./runtime.js";
+import { assets, ecommerceBatchJobs, users, workspaceMembers } from "./schema.js";
 import { getStorageConfig, saveStorageConfig, testStorageConfig } from "./storage-config.js";
 
 const MAX_PROJECT_SNAPSHOT_BYTES = 100 * 1024 * 1024;
@@ -85,10 +102,16 @@ interface EcommerceBatchJob {
 }
 
 const runningEcommerceBatchJobs = new Map<string, EcommerceBatchJob>();
+const authSessions = new WeakMap<Context, AuthSession>();
+const fallbackTenants = new WeakMap<Context, RequestTenant>();
 
 export const app = new Hono();
 
 app.onError((error, c) => {
+  if (error instanceof AuthError) {
+    return c.json(errorResponse(error.code, error.message), error.status as 400 | 401 | 403 | 409 | 500);
+  }
+
   console.error(error);
   return c.json(
     {
@@ -122,6 +145,78 @@ app.get("/api/config", (c) => {
   return c.json(config);
 });
 
+app.post("/api/auth/register", async (c) => {
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+
+  const parsed = parseAuthPayload(payload.value, true);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  try {
+    return c.json(await registerUser(parsed.value));
+  } catch (error) {
+    return authErrorJson(c, error);
+  }
+});
+
+app.post("/api/auth/login", async (c) => {
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+
+  const parsed = parseAuthPayload(payload.value, false);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  try {
+    return c.json(await loginUser(parsed.value));
+  } catch (error) {
+    return authErrorJson(c, error);
+  }
+});
+
+app.get("/api/auth/me", async (c) => {
+  try {
+    return c.json(toMeResponse(await requireAuthSession(c.req.raw.headers)));
+  } catch (error) {
+    return authErrorJson(c, error);
+  }
+});
+
+app.use("/api/*", async (c, next) => {
+  const session = (await getAuthSession(c.req.raw.headers)) ?? (await getAssetQueryTokenSession(c));
+  if (session) {
+    authSessions.set(c, session);
+    await next();
+    return;
+  }
+
+  const fallbackTenant = resolveRequestTenant(c.req.raw.headers);
+  if (fallbackTenant) {
+    await ensureTenant(fallbackTenant);
+    fallbackTenants.set(c, fallbackTenant);
+    await next();
+    return;
+  }
+
+  return c.json(errorResponse("unauthorized", "请先登录，并使用 Authorization: Bearer <JWT> 访问接口。"), 401);
+});
+
+async function getAssetQueryTokenSession(c: Context): Promise<AuthSession | undefined> {
+  if (!c.req.path.startsWith("/api/assets/")) {
+    return undefined;
+  }
+
+  const token = c.req.query("token") ?? c.req.query("access_token");
+  return token ? getAuthSessionFromToken(token) : undefined;
+}
+
 app.get("/api/project", async (c) => c.json(await getProjectState(await requestTenant(c))));
 
 app.get("/api/gallery", async (c) => c.json(await getGalleryImages(await requestTenant(c))));
@@ -138,20 +233,10 @@ app.delete("/api/gallery/:outputId", async (c) => {
 });
 
 app.get("/api/storage/config", async (c) => {
-  const unauthorized = requireConfiguredApiToken(c);
-  if (unauthorized) {
-    return unauthorized;
-  }
-
   return c.json(await getStorageConfig(await requestTenant(c)));
 });
 
 app.put("/api/storage/config", async (c) => {
-  const unauthorized = requireConfiguredApiToken(c);
-  if (unauthorized) {
-    return unauthorized;
-  }
-
   const payload = await readJson(c.req.raw);
   if (!payload.ok) {
     return c.json(payload.error, 400);
@@ -170,11 +255,6 @@ app.put("/api/storage/config", async (c) => {
 });
 
 app.post("/api/storage/config/test", async (c) => {
-  const unauthorized = requireConfiguredApiToken(c);
-  if (unauthorized) {
-    return unauthorized;
-  }
-
   const payload = await readJson(c.req.raw);
   if (!payload.ok) {
     return c.json(payload.error, 400);
@@ -314,11 +394,6 @@ app.post("/api/images/edit", async (c) => {
 });
 
 app.post("/api/ecommerce/images/batch-generate", async (c) => {
-  const unauthorized = requireConfiguredApiToken(c);
-  if (unauthorized) {
-    return unauthorized;
-  }
-
   const payload = await readJson(c.req.raw);
   if (!payload.ok) {
     return c.json(payload.error, 400);
@@ -360,11 +435,6 @@ app.post("/api/ecommerce/images/batch-generate", async (c) => {
 });
 
 app.get("/api/ecommerce/images/batch-generate/:jobId", async (c) => {
-  const unauthorized = requireConfiguredApiToken(c);
-  if (unauthorized) {
-    return unauthorized;
-  }
-
   const tenant = await requestTenant(c);
   const job = await getEcommerceBatchJob(tenant, c.req.param("jobId"));
   if (!job) {
@@ -375,21 +445,11 @@ app.get("/api/ecommerce/images/batch-generate/:jobId", async (c) => {
 });
 
 app.get("/api/ecommerce/jobs", async (c) => {
-  const unauthorized = requireConfiguredApiToken(c);
-  if (unauthorized) {
-    return unauthorized;
-  }
-
   const response: EcommerceJobListResponse = await listEcommerceBatchJobs(await requestTenant(c), parseListLimit(c.req.query("limit")));
   return c.json(response);
 });
 
 app.get("/api/ecommerce/jobs/:jobId", async (c) => {
-  const unauthorized = requireConfiguredApiToken(c);
-  if (unauthorized) {
-    return unauthorized;
-  }
-
   const job = await getEcommerceBatchJob(await requestTenant(c), c.req.param("jobId"));
   if (!job) {
     return c.json(errorResponse("not_found", "批量生成任务不存在。"), 404);
@@ -399,13 +459,44 @@ app.get("/api/ecommerce/jobs/:jobId", async (c) => {
 });
 
 app.get("/api/ecommerce/stats", async (c) => {
-  const unauthorized = requireConfiguredApiToken(c);
+  const response: EcommerceStatsResponse = await getEcommerceStats(await requestTenant(c));
+  return c.json(response);
+});
+
+app.get("/api/admin/stats", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
   }
 
-  const response: EcommerceStatsResponse = await getEcommerceStats(await requestTenant(c));
-  return c.json(response);
+  return c.json(await getAdminStats());
+});
+
+app.get("/api/admin/users", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return c.json(await getAdminUsers());
+});
+
+app.get("/api/admin/ecommerce/jobs", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return c.json(await getAdminEcommerceJobs(parseListLimit(c.req.query("limit"))));
+});
+
+app.get("/api/admin/assets", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return c.json(await getAdminAssets(parseListLimit(c.req.query("limit"))));
 });
 
 async function runEcommerceBatchJob(jobId: string): Promise<void> {
@@ -602,33 +693,202 @@ function providerHttpStatus(status: number): number {
 }
 
 async function requestTenant(c: Context): Promise<RequestTenant> {
-  const tenant = resolveRequestTenant(c.req.raw.headers);
-  await ensureTenant(tenant);
-  return tenant;
+  const session = authSessions.get(c);
+  if (session) {
+    return session.tenant;
+  }
+
+  const fallbackTenant = fallbackTenants.get(c);
+  if (fallbackTenant) {
+    return fallbackTenant;
+  }
+
+  throw new AuthError("unauthorized", "请先登录，并使用 Authorization: Bearer <JWT> 访问接口。", 401);
 }
 
-function requireConfiguredApiToken(c: Context) {
-  const acceptedTokens = [authConfig.appApiToken, authConfig.adminApiToken].filter(
-    (token): token is string => typeof token === "string" && token.length > 0
-  );
-  if (acceptedTokens.length === 0) {
+async function requireAdminRoute(c: Context): Promise<Response | undefined> {
+  try {
+    const session = authSessions.get(c) ?? (await requireAdminSession(c.req.raw.headers));
+    if (session.user.role !== "admin") {
+      return c.json(errorResponse("forbidden", "需要管理员权限。"), 403);
+    }
     return undefined;
+  } catch (error) {
+    return authErrorJson(c, error);
+  }
+}
+
+function authErrorJson(c: Context, error: unknown): Response {
+  if (error instanceof AuthError) {
+    return c.json(errorResponse(error.code, error.message), error.status as 400 | 401 | 403 | 409 | 500);
   }
 
-  const authorization = c.req.raw.headers.get("authorization") ?? "";
-  const match = /^Bearer\s+(.+)$/iu.exec(authorization);
-  const token = match?.[1]?.trim();
-
-  if (token && acceptedTokens.includes(token)) {
-    return undefined;
+  if (error instanceof Error && error.message.includes("JWT_SECRET")) {
+    return c.json(errorResponse("auth_not_configured", "服务端未配置 JWT_SECRET。"), 500);
   }
 
-  return c.json(errorResponse("unauthorized", "请使用 Authorization: Bearer <token> 访问该接口。"), 401);
+  throw error;
+}
+
+async function getAdminStats(): Promise<AdminStatsResponse> {
+  const [userRows, assetRows, jobRows] = await Promise.all([
+    db.select().from(users),
+    db.select().from(assets),
+    db.select().from(ecommerceBatchJobs).orderBy(desc(ecommerceBatchJobs.createdAt))
+  ]);
+  const status: AdminStatsResponse["ecommerceJobStatus"] = {
+    pending: 0,
+    running: 0,
+    succeeded: 0,
+    partial: 0,
+    failed: 0
+  };
+
+  for (const job of jobRows) {
+    if (job.status in status) {
+      status[job.status as keyof typeof status] += 1;
+    }
+  }
+
+  return {
+    userCount: userRows.length,
+    assetCount: assetRows.length,
+    estimatedStorageBytes: assetRows.reduce((total, asset) => total + estimateAssetBytes(asset), 0),
+    ecommerceJobStatus: status,
+    recentJobs: jobRows.slice(0, 20).map((job) => ({
+      jobId: job.id,
+      status: job.status as EcommerceBatchGenerateResponse["status"],
+      message: job.message,
+      productTitle: job.productTitle,
+      platform: job.platform as EcommercePlatform,
+      market: job.market as EcommerceMarket,
+      totalScenes: job.totalScenes,
+      completedScenes: job.completedScenes,
+      succeededScenes: job.succeededScenes,
+      failedScenes: job.failedScenes,
+      createdAt: job.createdAt,
+      updatedAt: job.updatedAt,
+      completedAt: job.completedAt ?? undefined
+    }))
+  };
+}
+
+async function getAdminUsers(): Promise<AdminUsersResponse> {
+  const [userRows, memberRows] = await Promise.all([db.select().from(users), db.select().from(workspaceMembers)]);
+  const workspaceCountByUserId = new Map<string, number>();
+  for (const member of memberRows) {
+    workspaceCountByUserId.set(member.userId, (workspaceCountByUserId.get(member.userId) ?? 0) + 1);
+  }
+
+  return {
+    users: userRows.map((user) => ({
+      id: user.id,
+      email: user.email ?? "",
+      displayName: user.displayName,
+      role: user.role === "admin" ? "admin" : "user",
+      quotaTotal: Number(user.quotaTotal ?? 0),
+      quotaUsed: Number(user.quotaUsed ?? 0),
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
+      workspaceCount: workspaceCountByUserId.get(user.id) ?? 0
+    }))
+  };
+}
+
+async function getAdminEcommerceJobs(limit: number): Promise<EcommerceJobListResponse> {
+  const rows = await db.select().from(ecommerceBatchJobs).orderBy(desc(ecommerceBatchJobs.createdAt)).limit(limit);
+  return {
+    jobs: rows.map((job) => ({
+      jobId: job.id,
+      status: job.status as EcommerceBatchGenerateResponse["status"],
+      message: job.message,
+      productTitle: job.productTitle,
+      platform: job.platform as EcommercePlatform,
+      market: job.market as EcommerceMarket,
+      totalScenes: job.totalScenes,
+      completedScenes: job.completedScenes,
+      succeededScenes: job.succeededScenes,
+      failedScenes: job.failedScenes,
+      createdAt: job.createdAt,
+      updatedAt: job.updatedAt,
+      completedAt: job.completedAt ?? undefined
+    }))
+  };
+}
+
+async function getAdminAssets(limit: number): Promise<AdminAssetsResponse> {
+  const rows = await db
+    .select({
+      asset: assets,
+      user: users
+    })
+    .from(assets)
+    .leftJoin(users, eq(users.id, assets.createdByUserId))
+    .orderBy(desc(assets.createdAt))
+    .limit(limit);
+
+  return {
+    assets: rows.map(({ asset, user }) => ({
+      id: asset.id,
+      userId: asset.createdByUserId,
+      userEmail: user?.email,
+      workspaceId: asset.workspaceId,
+      fileName: asset.fileName,
+      mimeType: asset.mimeType,
+      width: asset.width,
+      height: asset.height,
+      estimatedBytes: estimateAssetBytes(asset),
+      cloudProvider: asset.cloudProvider === "cos" || asset.cloudProvider === "oss" ? asset.cloudProvider : undefined,
+      cloudStatus: asset.cloudStatus === "uploaded" || asset.cloudStatus === "failed" ? asset.cloudStatus : undefined,
+      createdAt: asset.createdAt
+    }))
+  };
+}
+
+function estimateAssetBytes(asset: typeof assets.$inferSelect): number {
+  const pixelBytes = Math.max(0, asset.width * asset.height * 4);
+  if (asset.mimeType === "image/jpeg") {
+    return Math.round(pixelBytes * 0.35);
+  }
+  if (asset.mimeType === "image/webp") {
+    return Math.round(pixelBytes * 0.25);
+  }
+  return pixelBytes;
 }
 
 function parseListLimit(value: string | undefined): number {
   const parsed = Number.parseInt(value ?? "50", 10);
   return Number.isInteger(parsed) ? Math.max(1, Math.min(parsed, 100)) : 50;
+}
+
+function parseAuthPayload(
+  input: unknown,
+  includeDisplayName: boolean
+): ParseResult<{ email: string; password: string; displayName?: string }> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_request", "请求内容必须是 JSON 对象。")
+    };
+  }
+
+  const email = stringValue(input.email)?.trim();
+  const password = stringValue(input.password);
+  if (!email || !password) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_credentials", "请输入邮箱和密码。")
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      email,
+      password,
+      displayName: includeDisplayName ? stringValue(input.displayName)?.trim() : undefined
+    }
+  };
 }
 
 function parseGeneratePayload(input: unknown): ParseResult<ImageProviderInput> {

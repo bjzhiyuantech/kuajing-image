@@ -15,9 +15,20 @@ import type {
 
 export interface ExtensionSettings {
   apiBaseUrl: string;
-  apiToken: string;
-  userId: string;
-  workspaceId: string;
+}
+
+export interface AuthUser {
+  id?: string;
+  email: string;
+  displayName?: string;
+  role?: string;
+  quotaTotal?: number;
+  quotaUsed?: number;
+}
+
+export interface ExtensionAuthState {
+  token: string;
+  user: AuthUser | null;
 }
 
 export interface PageContext {

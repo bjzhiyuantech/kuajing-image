@@ -7,10 +7,13 @@ import {
   Download,
   ImageIcon,
   Loader2,
+  LogOut,
   MapPin,
   RotateCcw,
+  ShieldCheck,
   Sparkles,
   Square,
+  User,
   X,
   XCircle
 } from "lucide-react";
@@ -63,6 +66,19 @@ import {
   type StorageTestResult,
   type StylePresetId
 } from "@gpt-image-canvas/shared";
+import { AccountPage, AdminPage, AuthScreen } from "./AuthViews";
+import {
+  authFetch,
+  clearStoredAuthToken,
+  fetchCurrentUser,
+  getStoredAuthToken,
+  isAdminUser,
+  loginWithPassword,
+  registerWithPassword,
+  storeAuthToken,
+  type AuthSession,
+  type AuthUser
+} from "./authClient";
 
 const AUTOSAVE_DEBOUNCE_MS = 1200;
 const HISTORY_COLLAPSED_LIMIT = 3;
@@ -150,7 +166,9 @@ function preloadGalleryPage(): void {
 }
 
 type PersistedSnapshot = TLEditorSnapshot | TLStoreSnapshot;
-type AppRoute = "canvas" | "gallery";
+type AppRoute = "canvas" | "gallery" | "account" | "admin";
+type AuthMode = "login" | "register";
+type AuthStatus = "checking" | "anonymous" | "authenticated";
 type SaveStatus = "loading" | "saved" | "pending" | "saving" | "error";
 type GenerationMode = "text" | "reference";
 type PanelStatusTone = "progress" | "success" | "warning" | "error";
@@ -323,11 +341,29 @@ function generationValidationMessage(promptValue: string, widthValue: number, he
 }
 
 function routeFromLocation(): AppRoute {
-  return window.location.pathname === "/gallery" ? "gallery" : "canvas";
+  if (window.location.pathname === "/gallery") {
+    return "gallery";
+  }
+  if (window.location.pathname === "/account") {
+    return "account";
+  }
+  if (window.location.pathname === "/admin") {
+    return "admin";
+  }
+  return "canvas";
 }
 
 function pathForRoute(route: AppRoute): string {
-  return route === "gallery" ? "/gallery" : "/";
+  if (route === "gallery") {
+    return "/gallery";
+  }
+  if (route === "account") {
+    return "/account";
+  }
+  if (route === "admin") {
+    return "/admin";
+  }
+  return "/";
 }
 
 function isPersistedSnapshot(value: unknown): value is PersistedSnapshot {
@@ -615,7 +651,7 @@ function createImageAsset(asset: GeneratedAsset): TLAsset {
     typeName: "asset",
     type: "image",
     props: {
-      src: asset.url,
+      src: authenticatedAssetUrl(asset.url),
       w: asset.width,
       h: asset.height,
       name: asset.fileName,
@@ -644,7 +680,7 @@ function createImageShape(
       assetId,
       w: placement.width,
       h: placement.height,
-      url: asset.url,
+      url: authenticatedAssetUrl(asset.url),
       playing: true,
       crop: null,
       flipX: false,
@@ -960,7 +996,17 @@ function resolveCanvasAssetUrl(asset: TLAsset, context: TLAssetContext): string 
 }
 
 function assetPreviewUrl(assetId: string, width: number): string {
-  return `/api/assets/${encodeURIComponent(assetId)}/preview?width=${width}`;
+  return authenticatedAssetUrl(`/api/assets/${encodeURIComponent(assetId)}/preview?width=${width}`);
+}
+
+function authenticatedAssetUrl(url: string): string {
+  const token = getStoredAuthToken();
+  if (!token) {
+    return url;
+  }
+
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}token=${encodeURIComponent(token)}`;
 }
 
 function previewWidthForAssetContext(asset: Extract<TLAsset, { type: "image" }>, context: TLAssetContext): AssetPreviewWidth {
@@ -1031,7 +1077,9 @@ async function readReferenceImage(selection: Extract<ReferenceSelection, { statu
   let response: Response;
 
   try {
-    response = await fetch(selection.sourceUrl, { signal });
+    response = selection.sourceUrl.startsWith("/api/")
+      ? await authFetch(selection.sourceUrl, { signal })
+      : await fetch(selection.sourceUrl, { signal });
   } catch {
     throw new Error("无法读取当前参考图。请确认图片来自本地生成结果或浏览器可访问的图片数据。");
   }
@@ -1055,7 +1103,7 @@ async function readReferenceImage(selection: Extract<ReferenceSelection, { statu
 }
 
 async function readStoredReferenceImage(assetId: string, signal: AbortSignal): Promise<ReferenceImageInput> {
-  const response = await fetch(`/api/assets/${encodeURIComponent(assetId)}`, { signal });
+  const response = await authFetch(`/api/assets/${encodeURIComponent(assetId)}`, { signal });
   if (!response.ok) {
     throw new Error("无法读取历史参考图。请确认原始资源仍然存在。");
   }
@@ -1232,12 +1280,16 @@ function BrandName() {
 
 function TopNavigation({
   route,
+  user,
   onNavigate,
-  onPreloadGallery
+  onPreloadGallery,
+  onLogout
 }: {
   route: AppRoute;
+  user: AuthUser;
   onNavigate: (route: AppRoute) => void;
   onPreloadGallery: () => void;
+  onLogout: () => void;
 }) {
   return (
     <header className="top-navigation">
@@ -1280,7 +1332,55 @@ function TopNavigation({
             <ImageIcon className="size-4" aria-hidden="true" />
             Gallery
           </a>
+          <a
+            aria-current={route === "account" ? "page" : undefined}
+            className="top-navigation__link"
+            data-active={route === "account"}
+            data-testid="nav-account"
+            href="/account"
+            onClick={(event) => {
+              event.preventDefault();
+              onNavigate("account");
+            }}
+          >
+            <User className="size-4" aria-hidden="true" />
+            账户
+          </a>
+          {isAdminUser(user) ? (
+            <a
+              aria-current={route === "admin" ? "page" : undefined}
+              className="top-navigation__link"
+              data-active={route === "admin"}
+              data-testid="nav-admin"
+              href="/admin"
+              onClick={(event) => {
+                event.preventDefault();
+                onNavigate("admin");
+              }}
+            >
+              <ShieldCheck className="size-4" aria-hidden="true" />
+              后台
+            </a>
+          ) : null}
         </nav>
+        <div className="top-navigation__account">
+          <button
+            className="account-chip"
+            data-testid="account-chip"
+            title={user.email}
+            type="button"
+            onClick={() => onNavigate("account")}
+          >
+            <span className="account-chip__avatar">{user.displayName.slice(0, 1).toUpperCase()}</span>
+            <span className="account-chip__copy">
+              <strong>{user.displayName}</strong>
+              <span>{user.role === "admin" || user.role === "super_admin" ? "管理员" : "成员"}</span>
+            </span>
+          </button>
+          <button aria-label="退出登录" className="logout-button" data-testid="logout-button" type="button" onClick={onLogout}>
+            <LogOut className="size-4" aria-hidden="true" />
+          </button>
+        </div>
       </div>
     </header>
   );
@@ -1304,6 +1404,9 @@ function PanelStatusIcon({ tone }: { tone: PanelStatusTone }) {
 
 export function App() {
   const [route, setRoute] = useState<AppRoute>(() => routeFromLocation());
+  const [authStatus, setAuthStatus] = useState<AuthStatus>(() => (getStoredAuthToken() ? "checking" : "anonymous"));
+  const [authMode, setAuthMode] = useState<AuthMode>("login");
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [generationMode, setGenerationMode] = useState<GenerationMode>("text");
   const [prompt, setPrompt] = useState("");
   const [stylePreset, setStylePreset] = useState<StylePresetId>("none");
@@ -1342,7 +1445,102 @@ export function App() {
   const generationRequestRef = useRef(0);
   const saveTimerRef = useRef<number | undefined>();
   const saveRequestRef = useRef(0);
+  const navigateToRoute = useCallback((nextRoute: AppRoute): void => {
+    const nextPath = pathForRoute(nextRoute);
+    if (window.location.pathname !== nextPath) {
+      window.history.pushState(null, "", nextPath);
+    }
+    setRoute(nextRoute);
+  }, []);
   const isGenerating = activeGenerationCount > 0;
+  const isAuthenticated = authStatus === "authenticated" && currentUser !== null;
+
+  const handleAuthenticated = useCallback((session: AuthSession): void => {
+    storeAuthToken(session.token);
+    setCurrentUser(session.user);
+    setAuthStatus("authenticated");
+    setSaveStatus("loading");
+    setSaveError("");
+    setIsProjectLoaded(false);
+    if (route === "admin" && !isAdminUser(session.user)) {
+      navigateToRoute("canvas");
+    }
+  }, [navigateToRoute, route]);
+
+  const handleLogout = useCallback((): void => {
+    clearStoredAuthToken();
+    setCurrentUser(null);
+    setAuthStatus("anonymous");
+    setProjectSnapshot(undefined);
+    setGenerationHistory([]);
+    setIsProjectLoaded(false);
+    setStorageConfig(null);
+    setStorageForm(defaultStorageConfigForm);
+    setGenerationError("");
+    setGenerationMessage("");
+    setGenerationWarning("");
+    if (route !== "canvas") {
+      navigateToRoute("canvas");
+    }
+  }, [navigateToRoute, route]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function restoreSession(): Promise<void> {
+      if (!getStoredAuthToken()) {
+        setAuthStatus("anonymous");
+        return;
+      }
+
+      try {
+        const user = await fetchCurrentUser();
+        if (!isMounted) {
+          return;
+        }
+        setCurrentUser(user);
+        setAuthStatus("authenticated");
+      } catch {
+        if (!isMounted) {
+          return;
+        }
+        clearStoredAuthToken();
+        setCurrentUser(null);
+        setAuthStatus("anonymous");
+      }
+    }
+
+    void restoreSession();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleUnauthorized = (): void => {
+      setCurrentUser(null);
+      setAuthStatus("anonymous");
+      setAuthMode("login");
+      setGenerationError("登录已过期，请重新登录。");
+      setGenerationMessage("");
+      setGenerationWarning("");
+      if (route !== "canvas") {
+        navigateToRoute("canvas");
+      }
+    };
+
+    window.addEventListener("auth:unauthorized", handleUnauthorized);
+    return () => {
+      window.removeEventListener("auth:unauthorized", handleUnauthorized);
+    };
+  }, [navigateToRoute, route]);
+
+  useEffect(() => {
+    if (isAuthenticated && route === "admin" && !isAdminUser(currentUser)) {
+      navigateToRoute("canvas");
+    }
+  }, [currentUser, isAuthenticated, navigateToRoute, route]);
 
   const trimmedPrompt = prompt.trim();
   const promptValidationMessage = prompt.trim() ? "" : "请输入提示词。";
@@ -1353,14 +1551,6 @@ export function App() {
   const validationMessage = promptValidationMessage || dimensionValidationMessage || referenceValidationMessage;
   const shouldShowValidation = Boolean(validationMessage);
   const canGenerate = !validationMessage;
-
-  const navigateToRoute = useCallback((nextRoute: AppRoute): void => {
-    const nextPath = pathForRoute(nextRoute);
-    if (window.location.pathname !== nextPath) {
-      window.history.pushState(null, "", nextPath);
-    }
-    setRoute(nextRoute);
-  }, []);
 
   const visibleHistory = useMemo(
     () => (isHistoryExpanded ? generationHistory : generationHistory.slice(0, HISTORY_COLLAPSED_LIMIT)),
@@ -1422,14 +1612,19 @@ export function App() {
 
   useEffect(() => {
     const updateRoute = (): void => {
-      setRoute(routeFromLocation());
+      const nextRoute = routeFromLocation();
+      if (nextRoute === "admin" && !isAdminUser(currentUser)) {
+        navigateToRoute("canvas");
+        return;
+      }
+      setRoute(nextRoute);
     };
 
     window.addEventListener("popstate", updateRoute);
     return () => {
       window.removeEventListener("popstate", updateRoute);
     };
-  }, []);
+  }, [currentUser, navigateToRoute]);
 
   useEffect(() => {
     return () => {
@@ -1441,6 +1636,11 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    if (!isAuthenticated) {
+      setIsProjectLoaded(false);
+      return;
+    }
+
     const controller = new AbortController();
 
     async function loadProject(): Promise<void> {
@@ -1448,7 +1648,7 @@ export function App() {
       setSaveError("");
 
       try {
-        const response = await fetch("/api/project", {
+        const response = await authFetch("/api/project", {
           signal: controller.signal
         });
 
@@ -1482,14 +1682,18 @@ export function App() {
     return () => {
       controller.abort();
     };
-  }, []);
+  }, [currentUser?.id, isAuthenticated]);
 
   useEffect(() => {
+    if (!isAuthenticated) {
+      return;
+    }
+
     const controller = new AbortController();
 
     async function loadStorageConfig(): Promise<void> {
       try {
-        const response = await fetch("/api/storage/config", {
+        const response = await authFetch("/api/storage/config", {
           signal: controller.signal
         });
         if (!response.ok) {
@@ -1516,7 +1720,7 @@ export function App() {
     return () => {
       controller.abort();
     };
-  }, []);
+  }, [currentUser?.id, isAuthenticated]);
 
   useEffect(() => {
     const mediaQuery = window.matchMedia(MOBILE_DRAWER_MEDIA_QUERY);
@@ -1580,7 +1784,7 @@ export function App() {
     setStorageMessage("");
 
     try {
-      const response = await fetch("/api/storage/config/test", {
+      const response = await authFetch("/api/storage/config/test", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -1617,7 +1821,7 @@ export function App() {
     setStorageMessage("");
 
     try {
-      const response = await fetch("/api/storage/config", {
+      const response = await authFetch("/api/storage/config", {
         method: "PUT",
         headers: {
           "Content-Type": "application/json"
@@ -1732,7 +1936,7 @@ export function App() {
       setSaveError("");
 
       try {
-        const response = await fetch("/api/project", {
+        const response = await authFetch("/api/project", {
           method: "PUT",
           headers: {
             "Content-Type": "application/json"
@@ -1893,7 +2097,7 @@ export function App() {
         }
       }
 
-      const response = await fetch(requestMode === "reference" ? "/api/images/edit" : "/api/images/generate", {
+      const response = await authFetch(requestMode === "reference" ? "/api/images/edit" : "/api/images/generate", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -2092,7 +2296,7 @@ export function App() {
       return;
     }
 
-    window.open(`/api/assets/${encodeURIComponent(asset.id)}/download`, "_blank", "noopener,noreferrer");
+    window.open(authenticatedAssetUrl(`/api/assets/${encodeURIComponent(asset.id)}/download`), "_blank", "noopener,noreferrer");
     setGenerationMessage("已打开原始资源下载。");
   }
 
@@ -2181,10 +2385,48 @@ export function App() {
     setGenerationWarning("");
   }
 
+  if (authStatus === "checking") {
+    return (
+      <div className="app-root">
+        <main className="auth-workspace app-view">
+          <div className="canvas-loading-state">
+            <BrandMark className="brand-mark--large" />
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-neutral-800">正在恢复登录状态</p>
+              <p className="mt-1 text-xs text-neutral-500">请稍候</p>
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <div className="app-root">
+        <AuthScreen
+          mode={authMode}
+          onAuthenticated={handleAuthenticated}
+          onLogin={loginWithPassword}
+          onModeChange={setAuthMode}
+          onRegister={registerWithPassword}
+        />
+      </div>
+    );
+  }
+
+  const resolvedRoute = route === "admin" && !isAdminUser(currentUser) ? "canvas" : route;
+
   return (
     <div className="app-root">
-      <TopNavigation route={route} onNavigate={navigateToRoute} onPreloadGallery={preloadGalleryPage} />
-      <main className="app-shell app-view relative flex min-h-0 overflow-hidden bg-neutral-950 text-neutral-900" data-active-route={route} hidden={route !== "canvas"}>
+      <TopNavigation
+        route={resolvedRoute}
+        user={currentUser}
+        onLogout={handleLogout}
+        onNavigate={navigateToRoute}
+        onPreloadGallery={preloadGalleryPage}
+      />
+      <main className="app-shell app-view relative flex min-h-0 overflow-hidden bg-neutral-950 text-neutral-900" data-active-route={resolvedRoute} hidden={resolvedRoute !== "canvas"}>
       <section
         className="relative min-w-0 flex-1 bg-neutral-100 outline-none"
         aria-label="gpt-image-canvas 创作画布"
@@ -2896,7 +3138,7 @@ export function App() {
         </div>
       ) : null}
       </main>
-      {route === "gallery" ? (
+      {resolvedRoute === "gallery" ? (
         <Suspense
           fallback={
             <main className="gallery-page app-view" data-testid="gallery-loading-page">
@@ -2907,9 +3149,11 @@ export function App() {
             </main>
           }
         >
-          <LazyGalleryPage onDeleted={removeGalleryOutputFromHistory} onReuse={reuseGalleryImage} />
+          <LazyGalleryPage fetcher={authFetch} onDeleted={removeGalleryOutputFromHistory} onReuse={reuseGalleryImage} />
         </Suspense>
       ) : null}
+      {resolvedRoute === "account" ? <AccountPage user={currentUser} /> : null}
+      {resolvedRoute === "admin" && isAdminUser(currentUser) ? <AdminPage /> : null}
     </div>
   );
 }

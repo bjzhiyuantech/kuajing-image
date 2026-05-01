@@ -17,7 +17,16 @@ export {
 
 export type {
   AppConfig,
+  AdminAssetItem,
+  AdminAssetsResponse,
+  AdminStatsResponse,
+  AdminUserItem,
+  AdminUsersResponse,
   AssetCloudUploadStatus,
+  AuthMeResponse,
+  AuthResponse,
+  AuthUser,
+  AuthWorkspace,
   CloudStorageProvider,
   EcommerceBatchGenerateRequest,
   EcommerceBatchGenerateResponse,
@@ -53,5 +62,6 @@ export type {
   StorageConfigResponse,
   StorageTestResult,
   StylePresetId,
+  UserRole,
   ValidationResult
 } from "@gpt-image-canvas/shared";

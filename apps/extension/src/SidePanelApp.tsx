@@ -6,12 +6,15 @@ import {
   ImageIcon,
   KeyRound,
   Loader2,
+  LogOut,
   RefreshCw,
   Send,
   Settings,
   Sparkles,
+  UserCircle2,
   Wand2
 } from "lucide-react";
+import type { FormEvent } from "react";
 import { useEffect, useMemo, useState } from "react";
 import {
   ECOMMERCE_MARKETS,
@@ -27,26 +30,29 @@ import {
   type OutputFormat,
   type StylePresetId
 } from "@gpt-image-canvas/shared";
-import type { BatchFormState, BatchTask, ExtensionSettings, PageContext } from "./types";
+import type { AuthUser, BatchFormState, BatchTask, ExtensionAuthState, ExtensionSettings, PageContext } from "./types";
 
 const ACTIVE_BATCH_JOB_STORAGE_KEY = "activeBatchJob";
+const AUTH_STORAGE_KEY = "auth";
 
 const defaultSettings: ExtensionSettings = {
-  apiBaseUrl: "http://127.0.0.1:8787",
-  apiToken: "",
-  userId: "demo-user",
-  workspaceId: "demo-workspace"
+  apiBaseUrl: "http://127.0.0.1:8787"
+};
+
+const defaultAuth: ExtensionAuthState = {
+  token: "",
+  user: null
 };
 
 interface StoredBatchJob {
   jobId: string;
   apiBaseUrl: string;
-  apiToken?: string;
-  userId: string;
-  workspaceId: string;
+  token?: string;
 }
 
-type ToolTab = "history" | "stats" | "settings";
+type ToolTab = "account" | "history" | "stats" | "settings";
+type AuthMode = "login" | "register";
+type PendingAuthAction = "generate" | "history" | "stats" | "job";
 
 interface EcommerceJobSummary {
   id: string;
@@ -257,6 +263,38 @@ function normalizeStatsResponse(payload: unknown): EcommerceStatsSummary {
   };
 }
 
+function normalizeUser(value: unknown): AuthUser | null {
+  const root = asRecord(value);
+  const source = asRecord(root.user ?? root.data ?? root.profile ?? value);
+  const email = firstString(source, ["email", "mail", "username"]);
+  if (!email) {
+    return null;
+  }
+
+  return {
+    id: firstString(source, ["id", "userId", "sub"]),
+    email,
+    displayName: firstString(source, ["displayName", "display_name", "name", "nickname"]),
+    role: firstString(source, ["role", "plan"]),
+    quotaTotal: firstNumber(source, ["quotaTotal", "quota_total", "totalQuota"]),
+    quotaUsed: firstNumber(source, ["quotaUsed", "quota_used", "usedQuota"])
+  };
+}
+
+function normalizeAuthResponse(payload: unknown): ExtensionAuthState {
+  const root = asRecord(payload);
+  const data = asRecord(root.data);
+  const token =
+    firstString(root, ["token", "accessToken", "access_token", "jwt"]) ??
+    firstString(data, ["token", "accessToken", "access_token", "jwt"]) ??
+    "";
+
+  return {
+    token,
+    user: normalizeUser(root) ?? normalizeUser(data)
+  };
+}
+
 function formatDateTime(value?: string): string {
   if (!value) {
     return "未知时间";
@@ -275,6 +313,12 @@ function formatDateTime(value?: string): string {
 
 export function SidePanelApp() {
   const [settings, setSettings] = useState<ExtensionSettings>(defaultSettings);
+  const [auth, setAuth] = useState<ExtensionAuthState>(defaultAuth);
+  const [authMode, setAuthMode] = useState<AuthMode>("login");
+  const [authForm, setAuthForm] = useState({ email: "", password: "", displayName: "" });
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState("");
+  const [pendingAuthAction, setPendingAuthAction] = useState<PendingAuthAction | null>(null);
   const [form, setForm] = useState<BatchFormState>(defaultForm);
   const [pageContext, setPageContext] = useState<PageContext | null>(null);
   const [task, setTask] = useState<BatchTask>({
@@ -283,7 +327,7 @@ export function SidePanelApp() {
     message: "选择场景后即可批量生成。",
     records: []
   });
-  const [activeTool, setActiveTool] = useState<ToolTab>("history");
+  const [activeTool, setActiveTool] = useState<ToolTab>("account");
   const [toolPanelOpen, setToolPanelOpen] = useState(false);
   const [historyState, setHistoryState] = useState<RemoteState<EcommerceJobSummary[]>>({
     data: [],
@@ -328,22 +372,22 @@ export function SidePanelApp() {
   }, [form]);
 
   useEffect(() => {
-    void chrome.storage.local.get(["settings", ACTIVE_BATCH_JOB_STORAGE_KEY]).then((result) => {
+    void chrome.storage.local.get(["settings", AUTH_STORAGE_KEY, ACTIVE_BATCH_JOB_STORAGE_KEY]).then((result) => {
       const nextSettings = {
         ...defaultSettings,
         ...(result.settings as Partial<ExtensionSettings> | undefined)
       };
+      const storedAuth = result[AUTH_STORAGE_KEY] as Partial<ExtensionAuthState> | undefined;
       const activeJob = result[ACTIVE_BATCH_JOB_STORAGE_KEY] as StoredBatchJob | undefined;
-      setSettings(
-        activeJob
-          ? {
-              apiBaseUrl: activeJob.apiBaseUrl,
-              apiToken: activeJob.apiToken ?? nextSettings.apiToken,
-              userId: activeJob.userId,
-              workspaceId: activeJob.workspaceId
-            }
-          : nextSettings
-      );
+      const nextAuth = {
+        token: storedAuth?.token || activeJob?.token || "",
+        user: storedAuth?.user ?? null
+      };
+      setSettings({ apiBaseUrl: activeJob?.apiBaseUrl ?? nextSettings.apiBaseUrl });
+      setAuth(nextAuth);
+      if (nextAuth.token && !nextAuth.user) {
+        void refreshMe(nextAuth.token, activeJob?.apiBaseUrl ?? nextSettings.apiBaseUrl);
+      }
       if (activeJob?.jobId) {
         setTask({
           id: activeJob.jobId,
@@ -358,6 +402,13 @@ export function SidePanelApp() {
 
   useEffect(() => {
     if (task.status !== "pending" && task.status !== "running") {
+      return;
+    }
+    if (!auth.token) {
+      setPendingAuthAction("job");
+      setActiveTool("account");
+      setToolPanelOpen(true);
+      setAuthError("请登录后继续查看服务端任务进度。");
       return;
     }
 
@@ -377,7 +428,7 @@ export function SidePanelApp() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [settings.apiBaseUrl, settings.apiToken, settings.userId, settings.workspaceId, task.id, task.status]);
+  }, [auth.token, settings.apiBaseUrl, task.id, task.status]);
 
   useEffect(() => {
     if (!toolPanelOpen) {
@@ -389,22 +440,19 @@ export function SidePanelApp() {
     if (activeTool === "stats") {
       void refreshStats();
     }
-  }, [activeTool, toolPanelOpen, settings.apiBaseUrl, settings.apiToken, settings.userId, settings.workspaceId]);
+  }, [activeTool, auth.token, toolPanelOpen, settings.apiBaseUrl]);
 
   function apiBaseUrl(): string {
     return settings.apiBaseUrl.replace(/\/$/u, "");
   }
 
-  function apiHeaders(json = false): HeadersInit {
-    const headers: Record<string, string> = {
-      "X-User-Id": settings.userId,
-      "X-Workspace-Id": settings.workspaceId
-    };
+  function apiHeaders(json = false, token = auth.token): HeadersInit {
+    const headers: Record<string, string> = {};
     if (json) {
       headers["Content-Type"] = "application/json";
     }
-    if (settings.apiToken.trim()) {
-      headers.Authorization = `Bearer ${settings.apiToken.trim()}`;
+    if (token.trim()) {
+      headers.Authorization = `Bearer ${token.trim()}`;
     }
     return headers;
   }
@@ -414,28 +462,126 @@ export function SidePanelApp() {
     await chrome.storage.local.set({ settings: nextSettings });
   }
 
-  async function pollBatchJob(jobId: string): Promise<void> {
-    const response = await fetch(`${apiBaseUrl()}/api/ecommerce/images/batch-generate/${jobId}`, {
-      headers: apiHeaders()
-    });
+  async function saveAuth(nextAuth: ExtensionAuthState): Promise<void> {
+    setAuth(nextAuth);
+    await chrome.storage.local.set({ [AUTH_STORAGE_KEY]: nextAuth });
+  }
+
+  async function clearAuth(message = "登录状态已失效，请重新登录。"): Promise<void> {
+    await chrome.storage.local.remove([AUTH_STORAGE_KEY, ACTIVE_BATCH_JOB_STORAGE_KEY]);
+    setAuth(defaultAuth);
+    setActiveTool("account");
+    setToolPanelOpen(true);
+    setAuthError(message);
+  }
+
+  function requireAuth(action: PendingAuthAction): boolean {
+    if (auth.token.trim()) {
+      return true;
+    }
+    setPendingAuthAction(action);
+    setActiveTool("account");
+    setToolPanelOpen(true);
+    setAuthMode("login");
+    setAuthError("请先登录账号，插件会使用你的个人 JWT 访问后端。");
+    return false;
+  }
+
+  async function parseResponseOrThrow(response: Response): Promise<unknown> {
+    if (response.status === 401) {
+      await clearAuth("登录已过期，请重新登录。");
+      throw new Error("登录已过期，请重新登录。");
+    }
     if (!response.ok) {
       throw new Error(await response.text());
     }
-
-    const body = (await response.json()) as EcommerceBatchGenerateResponse;
-    applyBatchJob(body);
+    return response.json();
   }
 
-  async function refreshHistory(): Promise<void> {
+  async function refreshMe(token = auth.token, baseUrl = apiBaseUrl()): Promise<AuthUser | null> {
+    if (!token.trim()) {
+      return null;
+    }
+    const response = await fetch(`${baseUrl.replace(/\/$/u, "")}/api/auth/me`, {
+      headers: {
+        Authorization: `Bearer ${token.trim()}`
+      }
+    });
+    const body = await parseResponseOrThrow(response);
+    const user = normalizeUser(body);
+    if (user) {
+      const nextAuth = { token, user };
+      setAuth(nextAuth);
+      await chrome.storage.local.set({ [AUTH_STORAGE_KEY]: nextAuth });
+    }
+    return user;
+  }
+
+  async function submitAuth(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    setAuthError("");
+    setAuthLoading(true);
+    try {
+      const response = await fetch(`${apiBaseUrl()}/api/auth/${authMode}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: authForm.email.trim(),
+          password: authForm.password,
+          displayName: authMode === "register" ? authForm.displayName.trim() || undefined : undefined
+        })
+      });
+      const body = await parseResponseOrThrow(response);
+      const nextAuth = normalizeAuthResponse(body);
+      if (!nextAuth.token) {
+        throw new Error("登录响应缺少 token。");
+      }
+      const user = nextAuth.user ?? (await refreshMe(nextAuth.token));
+      await saveAuth({ token: nextAuth.token, user });
+      setAuthForm((current) => ({ ...current, password: "" }));
+      setAuthError("");
+      const action = pendingAuthAction;
+      setPendingAuthAction(null);
+      if (action === "generate") {
+        void submitBatch(true, nextAuth.token);
+      } else if (action === "history") {
+        setActiveTool("history");
+        void refreshHistory(true, nextAuth.token);
+      } else if (action === "stats") {
+        setActiveTool("stats");
+        void refreshStats(true, nextAuth.token);
+      } else if (action === "job" && task.id !== "idle") {
+        void pollBatchJob(task.id, nextAuth.token);
+      }
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "登录失败，请稍后重试。");
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  async function pollBatchJob(jobId: string, token = auth.token): Promise<void> {
+    if (!token.trim() && !requireAuth("job")) {
+      return;
+    }
+    const response = await fetch(`${apiBaseUrl()}/api/ecommerce/images/batch-generate/${jobId}`, {
+      headers: apiHeaders(false, token)
+    });
+
+    const body = (await parseResponseOrThrow(response)) as EcommerceBatchGenerateResponse;
+    applyBatchJob(body, token);
+  }
+
+  async function refreshHistory(authAlreadyChecked = false, token = auth.token): Promise<void> {
+    if (!token.trim() && !authAlreadyChecked && !requireAuth("history")) {
+      return;
+    }
     setHistoryState((current) => ({ ...current, error: "", loading: true }));
     try {
       const response = await fetch(`${apiBaseUrl()}/api/ecommerce/jobs`, {
-        headers: apiHeaders()
+        headers: apiHeaders(false, token)
       });
-      if (!response.ok) {
-        throw new Error(await response.text());
-      }
-      const body = await response.json();
+      const body = await parseResponseOrThrow(response);
       setHistoryState({ data: normalizeJobsResponse(body), error: "", loading: false });
     } catch (error) {
       setHistoryState((current) => ({
@@ -446,16 +592,16 @@ export function SidePanelApp() {
     }
   }
 
-  async function refreshStats(): Promise<void> {
+  async function refreshStats(authAlreadyChecked = false, token = auth.token): Promise<void> {
+    if (!token.trim() && !authAlreadyChecked && !requireAuth("stats")) {
+      return;
+    }
     setStatsState((current) => ({ ...current, error: "", loading: true }));
     try {
       const response = await fetch(`${apiBaseUrl()}/api/ecommerce/stats`, {
-        headers: apiHeaders()
+        headers: apiHeaders(false, token)
       });
-      if (!response.ok) {
-        throw new Error(await response.text());
-      }
-      const body = await response.json();
+      const body = await parseResponseOrThrow(response);
       setStatsState({ data: normalizeStatsResponse(body), error: "", loading: false });
     } catch (error) {
       setStatsState((current) => ({
@@ -467,11 +613,41 @@ export function SidePanelApp() {
   }
 
   function openTool(tab: ToolTab): void {
+    if ((tab === "history" || tab === "stats") && !auth.token.trim()) {
+      setPendingAuthAction(tab);
+      setAuthMode("login");
+      setAuthError("请先登录账号，再查看个人数据。");
+      setActiveTool("account");
+      setToolPanelOpen(true);
+      return;
+    }
     setActiveTool(tab);
     setToolPanelOpen(true);
   }
 
-  function applyBatchJob(body: EcommerceBatchGenerateResponse): void {
+  function openHistoryJob(job: EcommerceJobSummary): void {
+    if (!requireAuth("job")) {
+      return;
+    }
+    setTask({
+      id: job.id,
+      status: job.status as BatchTask["status"],
+      message: job.status === "pending" || job.status === "running" ? "已切换到历史任务，正在继续轮询服务端状态。" : "已打开历史任务。",
+      records: job.records ?? [],
+      totalScenes: job.totalScenes,
+      completedScenes: job.completedScenes
+    });
+    void chrome.storage.local.set({
+      [ACTIVE_BATCH_JOB_STORAGE_KEY]: {
+        jobId: job.id,
+        apiBaseUrl: settings.apiBaseUrl,
+        token: auth.token
+      } satisfies StoredBatchJob
+    });
+    void pollBatchJob(job.id);
+  }
+
+  function applyBatchJob(body: EcommerceBatchGenerateResponse, token = auth.token): void {
     setTask({
       id: body.jobId,
       status: body.status,
@@ -489,9 +665,7 @@ export function SidePanelApp() {
         [ACTIVE_BATCH_JOB_STORAGE_KEY]: {
           jobId: body.jobId,
           apiBaseUrl: settings.apiBaseUrl,
-          apiToken: settings.apiToken,
-          userId: settings.userId,
-          workspaceId: settings.workspaceId
+          token
         } satisfies StoredBatchJob
       });
     } else {
@@ -565,7 +739,10 @@ export function SidePanelApp() {
     }));
   }
 
-  async function submitBatch(): Promise<void> {
+  async function submitBatch(authAlreadyChecked = false, token = auth.token): Promise<void> {
+    if (!token.trim() && !authAlreadyChecked && !requireAuth("generate")) {
+      return;
+    }
     const title = form.product.title.trim();
     if (!title) {
       setTask({ id: "validation", status: "failed", message: "请先填写商品标题。", records: [] });
@@ -611,7 +788,7 @@ export function SidePanelApp() {
         : undefined;
       const response = await fetch(`${apiBaseUrl()}/api/ecommerce/images/batch-generate`, {
         method: "POST",
-        headers: apiHeaders(true),
+        headers: apiHeaders(true, token),
         body: JSON.stringify({
           product: form.product,
           platform: form.platform,
@@ -627,12 +804,8 @@ export function SidePanelApp() {
         })
       });
 
-      if (!response.ok) {
-        throw new Error(await response.text());
-      }
-
-      const body = (await response.json()) as EcommerceBatchGenerateResponse;
-      applyBatchJob(body);
+      const body = (await parseResponseOrThrow(response)) as EcommerceBatchGenerateResponse;
+      applyBatchJob(body, token);
     } catch (error) {
       setTask({
         id: taskId,
@@ -650,8 +823,8 @@ export function SidePanelApp() {
           <p className="eyebrow">Cross-border image studio</p>
           <h1>跨境图片助手</h1>
         </div>
-        <button className="icon-button" title="接口设置" type="button" onClick={() => openTool("settings")}>
-          <Settings size={18} />
+        <button className="icon-button" title="账户" type="button" onClick={() => openTool("account")}>
+          <UserCircle2 size={18} />
         </button>
       </header>
 
@@ -850,9 +1023,13 @@ export function SidePanelApp() {
 
       <section className="tool-dock" aria-label="扩展工具">
         <div className="tool-tabs">
+          <button className={activeTool === "account" && toolPanelOpen ? "tool-tab active" : "tool-tab"} type="button" onClick={() => openTool("account")}>
+            <UserCircle2 size={15} />
+            账户
+          </button>
           <button className={activeTool === "history" && toolPanelOpen ? "tool-tab active" : "tool-tab"} type="button" onClick={() => openTool("history")}>
             <Clock3 size={15} />
-            历史任务
+            历史
           </button>
           <button className={activeTool === "stats" && toolPanelOpen ? "tool-tab active" : "tool-tab"} type="button" onClick={() => openTool("stats")}>
             <BarChart3 size={15} />
@@ -867,9 +1044,70 @@ export function SidePanelApp() {
         {toolPanelOpen ? (
           <div className="tool-panel">
             <div className="tool-panel-header">
-              <strong>{activeTool === "history" ? "历史任务" : activeTool === "stats" ? "统计概览" : "接口设置"}</strong>
+              <strong>{activeTool === "account" ? "账户" : activeTool === "history" ? "历史任务" : activeTool === "stats" ? "统计概览" : "设置"}</strong>
               <button className="tool-close" type="button" onClick={() => setToolPanelOpen(false)}>收起</button>
             </div>
+
+            {activeTool === "account" ? (
+              <div>
+                {auth.token ? (
+                  <div className="account-card">
+                    <div className="account-heading">
+                      <div>
+                        <strong>{auth.user?.displayName || auth.user?.email || "已登录"}</strong>
+                        <span>{auth.user?.email || "正在同步账户信息"}</span>
+                      </div>
+                      <button
+                        className="mini-button"
+                        type="button"
+                        onClick={() => {
+                          void clearAuth("已退出登录。");
+                          setAuthError("");
+                        }}
+                      >
+                        <LogOut size={13} />
+                        退出
+                      </button>
+                    </div>
+                    <div className="account-meta">
+                      <div><span>角色</span><strong>{auth.user?.role || "user"}</strong></div>
+                      <div><span>Quota</span><strong>{auth.user?.quotaUsed ?? 0}/{auth.user?.quotaTotal ?? 0}</strong></div>
+                    </div>
+                    <button className="mini-button" type="button" onClick={() => void refreshMe()}>
+                      <RefreshCw size={13} />
+                      刷新账户
+                    </button>
+                  </div>
+                ) : (
+                  <form className="auth-form" onSubmit={(event) => void submitAuth(event)}>
+                    <div className="auth-switch">
+                      <button className={authMode === "login" ? "active" : ""} type="button" onClick={() => setAuthMode("login")}>登录</button>
+                      <button className={authMode === "register" ? "active" : ""} type="button" onClick={() => setAuthMode("register")}>注册</button>
+                    </div>
+                    <label>
+                      <span>邮箱</span>
+                      <input autoComplete="email" type="email" value={authForm.email} onChange={(event) => setAuthForm({ ...authForm, email: event.target.value })} required />
+                    </label>
+                    {authMode === "register" ? (
+                      <label>
+                        <span>显示名</span>
+                        <input autoComplete="name" value={authForm.displayName} onChange={(event) => setAuthForm({ ...authForm, displayName: event.target.value })} />
+                      </label>
+                    ) : null}
+                    <label>
+                      <span>密码</span>
+                      <input autoComplete={authMode === "login" ? "current-password" : "new-password"} type="password" value={authForm.password} onChange={(event) => setAuthForm({ ...authForm, password: event.target.value })} required />
+                    </label>
+                    {authError ? <p className="tool-error">{authError}</p> : null}
+                    <button className="primary-button auth-submit" disabled={authLoading} type="submit">
+                      {authLoading ? <Loader2 className="spin" size={15} /> : <KeyRound size={15} />}
+                      {authMode === "login" ? "登录" : "注册并登录"}
+                    </button>
+                  </form>
+                )}
+                {!auth.token ? <p className="settings-note">登录后会把个人 JWT 保存在本地，并自动附加到后端请求。</p> : null}
+              </div>
+            ) : null}
 
             {activeTool === "history" ? (
               <div>
@@ -901,6 +1139,10 @@ export function SidePanelApp() {
                         </div>
                       </div>
                       <p>{job.id}</p>
+                      <button className="mini-button history-open" type="button" onClick={() => openHistoryJob(job)}>
+                        <RefreshCw size={13} />
+                        打开/刷新
+                      </button>
                       {assets.length > 0 ? (
                         <div className="asset-list">
                           {assets.slice(0, 6).map((asset) => (
@@ -943,28 +1185,9 @@ export function SidePanelApp() {
               <div>
                 <label>
                   <span>后端 API</span>
-                  <input value={settings.apiBaseUrl} onChange={(event) => void saveSettings({ ...settings, apiBaseUrl: event.target.value })} />
+                  <input value={settings.apiBaseUrl} onChange={(event) => void saveSettings({ apiBaseUrl: event.target.value })} />
                 </label>
-                <label>
-                  <span>API Token</span>
-                  <input
-                    type="password"
-                    value={settings.apiToken}
-                    placeholder="为空时不发送 Authorization"
-                    onChange={(event) => void saveSettings({ ...settings, apiToken: event.target.value })}
-                  />
-                </label>
-                <div className="two-col">
-                  <label>
-                    <span>User</span>
-                    <input value={settings.userId} onChange={(event) => void saveSettings({ ...settings, userId: event.target.value })} />
-                  </label>
-                  <label>
-                    <span>Workspace</span>
-                    <input value={settings.workspaceId} onChange={(event) => void saveSettings({ ...settings, workspaceId: event.target.value })} />
-                  </label>
-                </div>
-                <p className="settings-note">保存后，后端请求会自动携带当前账号信息；Token 为空时保持 demo 兼容。</p>
+                <p className="settings-note">登录后插件会使用当前账号访问后端，历史任务和统计按账号隔离。</p>
               </div>
             ) : null}
           </div>

@@ -1,17 +1,27 @@
 import { relations } from "drizzle-orm";
-import { index, int, longtext, mysqlTable, text, uniqueIndex, varchar } from "drizzle-orm/mysql-core";
+import { bigint, index, int, longtext, mysqlTable, text, uniqueIndex, varchar } from "drizzle-orm/mysql-core";
 
 const id = (name: string) => varchar(name, { length: 64 });
 const isoDate = (name: string) => varchar(name, { length: 32 });
 const shortText = (name: string, length = 255) => varchar(name, { length });
 
-export const users = mysqlTable("users", {
-  id: id("id").primaryKey(),
-  email: shortText("email"),
-  displayName: shortText("display_name").notNull(),
-  createdAt: isoDate("created_at").notNull(),
-  updatedAt: isoDate("updated_at").notNull()
-});
+export const users = mysqlTable(
+  "users",
+  {
+    id: id("id").primaryKey(),
+    email: shortText("email").notNull(),
+    passwordHash: shortText("password_hash", 512).notNull(),
+    displayName: shortText("display_name").notNull(),
+    role: shortText("role", 32).notNull(),
+    quotaTotal: bigint("quota_total", { mode: "number" }).notNull(),
+    quotaUsed: bigint("quota_used", { mode: "number" }).notNull(),
+    createdAt: isoDate("created_at").notNull(),
+    updatedAt: isoDate("updated_at").notNull()
+  },
+  (table) => ({
+    emailIdx: uniqueIndex("users_email_unique_idx").on(table.email)
+  })
+);
 
 export const workspaces = mysqlTable("workspaces", {
   id: id("id").primaryKey(),

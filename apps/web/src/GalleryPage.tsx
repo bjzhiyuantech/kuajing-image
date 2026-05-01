@@ -24,8 +24,10 @@ import {
   type GalleryResponse,
   type StylePresetId
 } from "@gpt-image-canvas/shared";
+import { getStoredAuthToken } from "./authClient";
 
 interface GalleryPageProps {
+  fetcher: typeof fetch;
   onDeleted: (outputId: string) => void;
   onReuse: (item: GalleryImageItem) => void;
 }
@@ -58,7 +60,7 @@ const sizePresetLabels: Record<string, string> = {
   "wide-4k": "宽屏展示 4K"
 };
 
-export function GalleryPage({ onDeleted, onReuse }: GalleryPageProps) {
+export function GalleryPage({ fetcher, onDeleted, onReuse }: GalleryPageProps) {
   const [items, setItems] = useState<GalleryImageItem[]>([]);
   const [query, setQuery] = useState("");
   const [isLoading, setIsLoading] = useState(true);
@@ -78,7 +80,7 @@ export function GalleryPage({ onDeleted, onReuse }: GalleryPageProps) {
       setError("");
 
       try {
-        const response = await fetch("/api/gallery", {
+        const response = await fetcher("/api/gallery", {
           signal: controller.signal
         });
         if (!response.ok) {
@@ -185,7 +187,7 @@ export function GalleryPage({ onDeleted, onReuse }: GalleryPageProps) {
   }
 
   function downloadItem(item: GalleryImageItem): void {
-    window.open(`/api/assets/${encodeURIComponent(item.asset.id)}/download`, "_blank", "noopener,noreferrer");
+    window.open(authenticatedAssetUrl(`/api/assets/${encodeURIComponent(item.asset.id)}/download`), "_blank", "noopener,noreferrer");
     showStatus("已打开原图下载。");
   }
 
@@ -199,7 +201,7 @@ export function GalleryPage({ onDeleted, onReuse }: GalleryPageProps) {
     setError("");
 
     try {
-      const response = await fetch(`/api/gallery/${encodeURIComponent(item.outputId)}`, {
+      const response = await fetcher(`/api/gallery/${encodeURIComponent(item.outputId)}`, {
         method: "DELETE"
       });
       if (!response.ok) {
@@ -616,7 +618,7 @@ function GalleryDetailDialog({
               alt={item.prompt}
               className="gallery-modal__image"
               height={item.asset.height}
-              src={item.asset.url}
+              src={authenticatedAssetUrl(item.asset.url)}
               width={item.asset.width}
             />
           </div>
@@ -707,7 +709,17 @@ function DeleteGalleryDialog({
 }
 
 function assetPreviewUrl(assetId: string, width: number): string {
-  return `/api/assets/${encodeURIComponent(assetId)}/preview?width=${width}`;
+  return authenticatedAssetUrl(`/api/assets/${encodeURIComponent(assetId)}/preview?width=${width}`);
+}
+
+function authenticatedAssetUrl(url: string): string {
+  const token = getStoredAuthToken();
+  if (!token) {
+    return url;
+  }
+
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}token=${encodeURIComponent(token)}`;
 }
 
 function modeLabel(mode: GalleryImageItem["mode"]): string {

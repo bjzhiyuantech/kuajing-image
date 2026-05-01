@@ -408,6 +408,71 @@ export interface AppConfig {
   counts: readonly GenerationCount[];
 }
 
+export type UserRole = "user" | "admin";
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  displayName: string;
+  role: UserRole;
+  quotaTotal: number;
+  quotaUsed: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AuthWorkspace {
+  id: string;
+  name: string;
+  role: string;
+}
+
+export interface AuthResponse {
+  user: AuthUser;
+  workspace: AuthWorkspace;
+  token: string;
+}
+
+export interface AuthMeResponse {
+  user: AuthUser;
+  workspace: AuthWorkspace;
+}
+
+export interface AdminStatsResponse {
+  userCount: number;
+  assetCount: number;
+  estimatedStorageBytes: number;
+  ecommerceJobStatus: Record<EcommerceBatchJobStatus, number>;
+  recentJobs: EcommerceJobSummary[];
+}
+
+export interface AdminUserItem extends AuthUser {
+  workspaceCount: number;
+}
+
+export interface AdminUsersResponse {
+  users: AdminUserItem[];
+}
+
+export interface AdminAssetItem {
+  id: string;
+  userId: string;
+  userEmail?: string;
+  workspaceId: string;
+  fileName: string;
+  mimeType: string;
+  width: number;
+  height: number;
+  estimatedBytes: number;
+  cloudProvider?: CloudStorageProvider;
+  cloudStatus?: AssetCloudUploadStatus;
+  createdAt: string;
+}
+
+export interface AdminAssetsResponse {
+  assets: AdminAssetItem[];
+}
+
 export interface MaskedSecret {
   hasSecret: boolean;
   value?: string;

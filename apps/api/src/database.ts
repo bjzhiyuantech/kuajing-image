@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
 import { drizzle } from "drizzle-orm/mysql2";
 import { createPool, type Pool, type PoolOptions } from "mysql2/promise";
+import type { RowDataPacket } from "mysql2";
+import { hashPassword } from "./auth-crypto.js";
 import { DEMO_USER_ID, DEMO_WORKSPACE_ID, type RequestTenant } from "./auth-context.js";
-import { ensureRuntimeStorage, mysqlConfig } from "./runtime.js";
+import { authConfig, ensureRuntimeStorage, mysqlConfig } from "./runtime.js";
 import * as schema from "./schema.js";
 
 ensureRuntimeStorage();
@@ -15,7 +17,10 @@ export async function initializeDatabase(): Promise<void> {
   try {
     await pool.query("SELECT 1");
     await createSchema();
-    await ensureDemoTenant();
+    await ensureConfiguredAdmin();
+    if (authConfig.allowDemoAuth) {
+      await ensureDemoTenant();
+    }
   } catch (error) {
     throw new Error(`MySQL initialization failed. ${formatMysqlConfig()} ${formatErrorSummary(error)}`);
   }
@@ -43,12 +48,18 @@ async function createSchema(): Promise<void> {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id VARCHAR(64) PRIMARY KEY,
-      email VARCHAR(255),
+      email VARCHAR(255) NOT NULL,
+      password_hash VARCHAR(512) NOT NULL DEFAULT '',
       display_name VARCHAR(255) NOT NULL,
+      role VARCHAR(32) NOT NULL DEFAULT 'user',
+      quota_total BIGINT NOT NULL DEFAULT 0,
+      quota_used BIGINT NOT NULL DEFAULT 0,
       created_at VARCHAR(32) NOT NULL,
-      updated_at VARCHAR(32) NOT NULL
+      updated_at VARCHAR(32) NOT NULL,
+      UNIQUE KEY users_email_unique_idx (email)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
+  await migrateUsersTable();
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS workspaces (
@@ -225,9 +236,37 @@ async function ensureDemoTenant(): Promise<void> {
     userId: DEMO_USER_ID,
     workspaceId: DEMO_WORKSPACE_ID,
     email: "demo@example.local",
+    passwordHash: "",
     displayName: "Demo User",
+    userRole: "user",
     workspaceName: "Demo Workspace",
     role: "owner",
+    quotaTotal: 0,
+    quotaUsed: 0,
+    now
+  });
+}
+
+async function ensureConfiguredAdmin(): Promise<void> {
+  if (!authConfig.adminEmail || !authConfig.adminPassword) {
+    return;
+  }
+
+  const email = authConfig.adminEmail.toLowerCase();
+  const userId = (await findUserIdByEmail(email)) ?? stableId("admin-user", email);
+  const workspaceId = stableId("admin-workspace", email);
+  const now = new Date().toISOString();
+  await upsertTenantRows({
+    userId,
+    workspaceId,
+    email,
+    passwordHash: hashPassword(authConfig.adminPassword),
+    displayName: authConfig.adminDisplayName,
+    userRole: "admin",
+    workspaceName: `${authConfig.adminDisplayName}'s Workspace`,
+    role: "owner",
+    quotaTotal: 0,
+    quotaUsed: 0,
     now
   });
 }
@@ -236,18 +275,39 @@ async function upsertTenantRows(input: {
   userId: string;
   workspaceId: string;
   email: string | null;
+  passwordHash?: string;
   displayName: string;
+  userRole?: "user" | "admin";
   workspaceName: string;
   role: string;
+  quotaTotal?: number;
+  quotaUsed?: number;
   now: string;
 }): Promise<void> {
   await pool.query(
     `
-      INSERT INTO users (id, email, display_name, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?)
-      ON DUPLICATE KEY UPDATE display_name = VALUES(display_name), updated_at = VALUES(updated_at)
+      INSERT INTO users (id, email, password_hash, display_name, role, quota_total, quota_used, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE
+        email = VALUES(email),
+        password_hash = IF(VALUES(password_hash) <> '', VALUES(password_hash), password_hash),
+        display_name = VALUES(display_name),
+        role = VALUES(role),
+        quota_total = VALUES(quota_total),
+        quota_used = VALUES(quota_used),
+        updated_at = VALUES(updated_at)
     `,
-    [input.userId, input.email, input.displayName, input.now, input.now]
+    [
+      input.userId,
+      input.email,
+      input.passwordHash ?? "",
+      input.displayName,
+      input.userRole ?? "user",
+      input.quotaTotal ?? 0,
+      input.quotaUsed ?? 0,
+      input.now,
+      input.now
+    ]
   );
 
   await pool.query(
@@ -271,6 +331,86 @@ async function upsertTenantRows(input: {
 
 function workspaceMemberId(workspaceId: string, userId: string): string {
   return createHash("sha256").update(`${workspaceId}:${userId}`).digest("hex");
+}
+
+function stableId(prefix: string, value: string): string {
+  return createHash("sha256").update(`${prefix}:${value}`).digest("hex");
+}
+
+async function migrateUsersTable(): Promise<void> {
+  await addColumnIfMissing("users", "password_hash", "VARCHAR(512) NOT NULL DEFAULT ''");
+  await addColumnIfMissing("users", "role", "VARCHAR(32) NOT NULL DEFAULT 'user'");
+  await addColumnIfMissing("users", "quota_total", "BIGINT NOT NULL DEFAULT 0");
+  await addColumnIfMissing("users", "quota_used", "BIGINT NOT NULL DEFAULT 0");
+  await normalizeDuplicateUserEmails();
+  await addIndexIfMissing("users", "users_email_unique_idx", "UNIQUE KEY users_email_unique_idx (email)");
+}
+
+async function addColumnIfMissing(tableName: string, columnName: string, definition: string): Promise<void> {
+  if (await columnExists(tableName, columnName)) {
+    return;
+  }
+
+  await pool.query(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+}
+
+async function addIndexIfMissing(tableName: string, indexName: string, definition: string): Promise<void> {
+  if (await indexExists(tableName, indexName)) {
+    return;
+  }
+
+  await pool.query(`ALTER TABLE ${tableName} ADD ${definition}`);
+}
+
+async function columnExists(tableName: string, columnName: string): Promise<boolean> {
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `
+      SELECT COUNT(*) AS count
+      FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?
+    `,
+    [tableName, columnName]
+  );
+  return Number(rows[0]?.count ?? 0) > 0;
+}
+
+async function indexExists(tableName: string, indexName: string): Promise<boolean> {
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `
+      SELECT COUNT(*) AS count
+      FROM information_schema.STATISTICS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ?
+    `,
+    [tableName, indexName]
+  );
+  return Number(rows[0]?.count ?? 0) > 0;
+}
+
+async function normalizeDuplicateUserEmails(): Promise<void> {
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `
+      SELECT id, email
+      FROM users
+      WHERE email IS NOT NULL AND email <> ''
+      ORDER BY email, created_at, id
+    `
+  );
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const email = String(row.email).toLowerCase();
+    if (!seen.has(email)) {
+      seen.add(email);
+      continue;
+    }
+
+    await pool.query("UPDATE users SET email = NULL WHERE id = ?", [row.id]);
+  }
+}
+
+async function findUserIdByEmail(email: string): Promise<string | undefined> {
+  const [rows] = await pool.query<RowDataPacket[]>("SELECT id FROM users WHERE email = ? LIMIT 1", [email]);
+  const id = rows[0]?.id;
+  return typeof id === "string" ? id : undefined;
 }
 
 function createMysqlPool(): Pool {

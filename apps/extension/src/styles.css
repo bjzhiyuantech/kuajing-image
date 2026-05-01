@@ -31,6 +31,7 @@ textarea {
 .tool-panel-header,
 .tool-actions,
 .mini-button,
+.account-heading,
 .history-card-top,
 .progress-row {
   align-items: center;
@@ -365,11 +366,11 @@ textarea:focus {
   color: #52635a;
   cursor: pointer;
   flex: 1;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
   justify-content: center;
   min-height: 34px;
-  padding: 0 6px;
+  padding: 0 4px;
 }
 
 .tool-tab.active {
@@ -386,6 +387,99 @@ textarea:focus {
   max-height: 54vh;
   overflow: auto;
   padding: 12px;
+}
+
+.auth-form {
+  margin: 0;
+}
+
+.auth-switch {
+  background: #f1f5f3;
+  border: 1px solid #dfe6e2;
+  border-radius: 7px;
+  display: grid;
+  gap: 4px;
+  grid-template-columns: 1fr 1fr;
+  padding: 4px;
+}
+
+.auth-switch button {
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  color: #52635a;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  min-height: 30px;
+}
+
+.auth-switch button.active {
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgb(28 37 32 / 8%);
+  color: #0d6b52;
+}
+
+.auth-submit {
+  justify-content: center;
+  margin-top: 10px;
+  width: 100%;
+}
+
+.account-card {
+  background: #f7faf8;
+  border: 1px solid #e4ebe7;
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.account-heading {
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.account-heading strong {
+  color: #17201c;
+  display: block;
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.account-heading span {
+  color: #66766d;
+  display: block;
+  font-size: 11px;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}
+
+.account-meta {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  margin: 10px 0;
+}
+
+.account-meta div {
+  background: #ffffff;
+  border: 1px solid #e4ebe7;
+  border-radius: 7px;
+  padding: 8px;
+}
+
+.account-meta span {
+  color: #66766d;
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.account-meta strong {
+  color: #17201c;
+  display: block;
+  font-size: 13px;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
 }
 
 .tool-panel-header {
@@ -478,6 +572,10 @@ textarea:focus {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.history-open {
+  margin-top: 8px;
 }
 
 .progress-row {

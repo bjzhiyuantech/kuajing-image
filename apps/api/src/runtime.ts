@@ -49,8 +49,11 @@ export const mysqlConfig = {
 };
 
 export const authConfig = {
-  appApiToken: emptyToUndefined(process.env.APP_API_TOKEN),
-  adminApiToken: emptyToUndefined(process.env.ADMIN_API_TOKEN)
+  jwtSecret: emptyToUndefined(process.env.JWT_SECRET),
+  allowDemoAuth: process.env.ALLOW_DEMO_AUTH === "true",
+  adminEmail: emptyToUndefined(process.env.ADMIN_EMAIL),
+  adminPassword: emptyToUndefined(process.env.ADMIN_PASSWORD),
+  adminDisplayName: emptyToUndefined(process.env.ADMIN_DISPLAY_NAME) ?? "Administrator"
 };
 
 export function ensureRuntimeStorage(): void {
