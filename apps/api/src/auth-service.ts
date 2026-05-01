@@ -55,8 +55,10 @@ export async function registerUser(input: RegisterInput): Promise<AuthResponse> 
         planId: DEFAULT_PLAN_ID,
         quotaTotal: DEFAULT_IMAGE_QUOTA,
         quotaUsed: 0,
+        balanceCents: 0,
         storageQuotaBytes: DEFAULT_STORAGE_QUOTA_BYTES,
         storageUsedBytes: 0,
+        currency: "CNY",
         createdAt: now,
         updatedAt: now
       });
@@ -93,8 +95,10 @@ export async function registerUser(input: RegisterInput): Promise<AuthResponse> 
       planId: DEFAULT_PLAN_ID,
       quotaTotal: DEFAULT_IMAGE_QUOTA,
       quotaUsed: 0,
+      balanceCents: 0,
       storageQuotaBytes: DEFAULT_STORAGE_QUOTA_BYTES,
       storageUsedBytes: 0,
+      currency: "CNY",
       createdAt: now,
       updatedAt: now
     }, { name: DEFAULT_PLAN_NAME }),
@@ -265,6 +269,8 @@ function toAuthUser(row: typeof users.$inferSelect, plan?: Pick<typeof subscript
     planName: plan?.name,
     quotaTotal: Number(row.quotaTotal ?? 0),
     quotaUsed: Number(row.quotaUsed ?? 0),
+    balanceCents: Number(row.balanceCents ?? 0),
+    currency: row.currency ?? "CNY",
     storageQuotaBytes: Number(row.storageQuotaBytes ?? 0),
     storageUsedBytes: Number(row.storageUsedBytes ?? 0),
     createdAt: row.createdAt,

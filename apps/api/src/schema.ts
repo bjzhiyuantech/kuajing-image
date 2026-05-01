@@ -16,8 +16,10 @@ export const users = mysqlTable(
     planId: id("plan_id"),
     quotaTotal: bigint("quota_total", { mode: "number" }).notNull(),
     quotaUsed: bigint("quota_used", { mode: "number" }).notNull(),
+    balanceCents: bigint("balance_cents", { mode: "number" }).notNull(),
     storageQuotaBytes: bigint("storage_quota_bytes", { mode: "number" }).notNull(),
     storageUsedBytes: bigint("storage_used_bytes", { mode: "number" }).notNull(),
+    currency: shortText("currency", 16).notNull(),
     createdAt: isoDate("created_at").notNull(),
     updatedAt: isoDate("updated_at").notNull()
   },
@@ -26,6 +28,13 @@ export const users = mysqlTable(
     planIdx: index("users_plan_id_idx").on(table.planId)
   })
 );
+
+export const systemSettings = mysqlTable("system_settings", {
+  key: varchar("setting_key", { length: 128 }).primaryKey(),
+  valueJson: longtext("value_json").notNull(),
+  createdAt: isoDate("created_at").notNull(),
+  updatedAt: isoDate("updated_at").notNull()
+});
 
 export const subscriptionPlans = mysqlTable(
   "subscription_plans",
@@ -45,6 +54,41 @@ export const subscriptionPlans = mysqlTable(
   },
   (table) => ({
     enabledSortIdx: index("subscription_plans_enabled_sort_idx").on(table.enabled, table.sortOrder)
+  })
+);
+
+export const billingTransactions = mysqlTable(
+  "billing_transactions",
+  {
+    id: id("id").primaryKey(),
+    userId: id("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    workspaceId: id("workspace_id"),
+    type: shortText("type", 64).notNull(),
+    title: shortText("title", 255).notNull(),
+    status: shortText("status", 32).notNull(),
+    amountCents: bigint("amount_cents", { mode: "number" }).notNull(),
+    balanceBeforeCents: bigint("balance_before_cents", { mode: "number" }).notNull(),
+    balanceAfterCents: bigint("balance_after_cents", { mode: "number" }).notNull(),
+    quotaBefore: bigint("quota_before", { mode: "number" }).notNull(),
+    quotaAfter: bigint("quota_after", { mode: "number" }).notNull(),
+    quotaConsumed: bigint("quota_consumed", { mode: "number" }).notNull(),
+    imageCount: int("image_count").notNull(),
+    quotaCount: int("quota_count").notNull(),
+    unitPriceCents: bigint("unit_price_cents", { mode: "number" }).notNull(),
+    currency: shortText("currency", 16).notNull(),
+    relatedId: id("generation_id"),
+    note: text("note"),
+    createdByUserId: id("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    metadataJson: longtext("metadata_json"),
+    createdAt: isoDate("created_at").notNull()
+  },
+  (table) => ({
+    userCreatedAtIdx: index("billing_transactions_user_created_at_idx").on(table.userId, table.createdAt),
+    workspaceCreatedAtIdx: index("billing_transactions_workspace_created_at_idx").on(table.workspaceId, table.createdAt),
+    generationIdx: index("billing_transactions_generation_id_idx").on(table.relatedId),
+    typeCreatedAtIdx: index("billing_transactions_type_created_at_idx").on(table.type, table.createdAt)
   })
 );
 

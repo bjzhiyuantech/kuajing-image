@@ -129,8 +129,10 @@ async function createSchema(): Promise<void> {
       plan_id VARCHAR(64),
       quota_total BIGINT NOT NULL DEFAULT 0,
       quota_used BIGINT NOT NULL DEFAULT 0,
+      balance_cents BIGINT NOT NULL DEFAULT 0,
       storage_quota_bytes BIGINT NOT NULL DEFAULT 0,
       storage_used_bytes BIGINT NOT NULL DEFAULT 0,
+      currency VARCHAR(16) NOT NULL DEFAULT 'CNY',
       created_at VARCHAR(32) NOT NULL,
       updated_at VARCHAR(32) NOT NULL,
       UNIQUE KEY users_email_unique_idx (email),
@@ -138,6 +140,16 @@ async function createSchema(): Promise<void> {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
   await migrateUsersTable();
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS system_settings (
+      setting_key VARCHAR(128) PRIMARY KEY,
+      value_json LONGTEXT NOT NULL,
+      created_at VARCHAR(32) NOT NULL,
+      updated_at VARCHAR(32) NOT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+  await seedDefaultSystemSettings();
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS workspaces (
@@ -269,6 +281,40 @@ async function createSchema(): Promise<void> {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS billing_transactions (
+      id VARCHAR(64) PRIMARY KEY,
+      user_id VARCHAR(64) NOT NULL,
+      workspace_id VARCHAR(64),
+      generation_id VARCHAR(64),
+      type VARCHAR(64) NOT NULL,
+      title VARCHAR(255) NOT NULL,
+      status VARCHAR(32) NOT NULL,
+      currency VARCHAR(16) NOT NULL DEFAULT 'CNY',
+      amount_cents BIGINT NOT NULL DEFAULT 0,
+      balance_before_cents BIGINT NOT NULL DEFAULT 0,
+      balance_after_cents BIGINT NOT NULL DEFAULT 0,
+      quota_before BIGINT NOT NULL DEFAULT 0,
+      quota_after BIGINT NOT NULL DEFAULT 0,
+      quota_consumed BIGINT NOT NULL DEFAULT 0,
+      image_count INT NOT NULL DEFAULT 0,
+      quota_count INT NOT NULL DEFAULT 0,
+      unit_price_cents BIGINT NOT NULL DEFAULT 0,
+      note TEXT,
+      created_by_user_id VARCHAR(64),
+      metadata_json LONGTEXT,
+      created_at VARCHAR(32) NOT NULL,
+      KEY billing_transactions_user_created_at_idx (user_id, created_at),
+      KEY billing_transactions_workspace_created_at_idx (workspace_id, created_at),
+      KEY billing_transactions_generation_id_idx (generation_id),
+      KEY billing_transactions_type_created_at_idx (type, created_at),
+      CONSTRAINT billing_transactions_user_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      CONSTRAINT billing_transactions_workspace_fk FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE SET NULL,
+      CONSTRAINT billing_transactions_created_by_user_fk FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+  await migrateBillingTransactionsTable();
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS ecommerce_batch_jobs (
       id VARCHAR(64) PRIMARY KEY,
       workspace_id VARCHAR(64) NOT NULL,
@@ -322,6 +368,7 @@ async function ensureDemoTenant(): Promise<void> {
     planId: DEFAULT_PLAN_ID,
     quotaTotal: defaultSubscriptionPlans[0].imageQuota,
     quotaUsed: 0,
+    balanceCents: 0,
     storageQuotaBytes: defaultSubscriptionPlans[0].storageQuotaBytes,
     storageUsedBytes: 0,
     now
@@ -349,6 +396,7 @@ async function ensureConfiguredAdmin(): Promise<void> {
     planId: DEFAULT_PLAN_ID,
     quotaTotal: defaultSubscriptionPlans[0].imageQuota,
     quotaUsed: 0,
+    balanceCents: 0,
     storageQuotaBytes: defaultSubscriptionPlans[0].storageQuotaBytes,
     storageUsedBytes: 0,
     now
@@ -367,14 +415,15 @@ async function upsertTenantRows(input: {
   planId?: string | null;
   quotaTotal?: number;
   quotaUsed?: number;
+  balanceCents?: number;
   storageQuotaBytes?: number;
   storageUsedBytes?: number;
   now: string;
 }): Promise<void> {
   await pool.query(
     `
-      INSERT INTO users (id, email, password_hash, display_name, role, plan_id, quota_total, quota_used, storage_quota_bytes, storage_used_bytes, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO users (id, email, password_hash, display_name, role, plan_id, quota_total, quota_used, balance_cents, storage_quota_bytes, storage_used_bytes, currency, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
         email = VALUES(email),
         password_hash = IF(VALUES(password_hash) <> '', VALUES(password_hash), password_hash),
@@ -383,8 +432,10 @@ async function upsertTenantRows(input: {
         plan_id = IF(plan_id IS NULL OR plan_id = '', VALUES(plan_id), plan_id),
         quota_total = IF(quota_total = 0, VALUES(quota_total), quota_total),
         quota_used = quota_used,
+        balance_cents = balance_cents,
         storage_quota_bytes = IF(storage_quota_bytes = 0, VALUES(storage_quota_bytes), storage_quota_bytes),
         storage_used_bytes = storage_used_bytes,
+        currency = IF(currency IS NULL OR currency = '', VALUES(currency), currency),
         updated_at = VALUES(updated_at)
     `,
     [
@@ -396,8 +447,10 @@ async function upsertTenantRows(input: {
       input.planId ?? DEFAULT_PLAN_ID,
       input.quotaTotal ?? defaultSubscriptionPlans[0].imageQuota,
       input.quotaUsed ?? 0,
+      input.balanceCents ?? 0,
       input.storageQuotaBytes ?? defaultSubscriptionPlans[0].storageQuotaBytes,
       input.storageUsedBytes ?? 0,
+      "CNY",
       input.now,
       input.now
     ]
@@ -436,8 +489,10 @@ async function migrateUsersTable(): Promise<void> {
   await addColumnIfMissing("users", "plan_id", "VARCHAR(64)");
   await addColumnIfMissing("users", "quota_total", "BIGINT NOT NULL DEFAULT 0");
   await addColumnIfMissing("users", "quota_used", "BIGINT NOT NULL DEFAULT 0");
+  await addColumnIfMissing("users", "balance_cents", "BIGINT NOT NULL DEFAULT 0");
   await addColumnIfMissing("users", "storage_quota_bytes", "BIGINT NOT NULL DEFAULT 0");
   await addColumnIfMissing("users", "storage_used_bytes", "BIGINT NOT NULL DEFAULT 0");
+  await addColumnIfMissing("users", "currency", "VARCHAR(16) NOT NULL DEFAULT 'CNY'");
   await normalizeDuplicateUserEmails();
   await addIndexIfMissing("users", "users_email_unique_idx", "UNIQUE KEY users_email_unique_idx (email)");
   await addIndexIfMissing("users", "users_plan_id_idx", "KEY users_plan_id_idx (plan_id)");
@@ -445,6 +500,75 @@ async function migrateUsersTable(): Promise<void> {
     "UPDATE users SET plan_id = ?, quota_total = IF(quota_total = 0, ?, quota_total), storage_quota_bytes = IF(storage_quota_bytes = 0, ?, storage_quota_bytes) WHERE plan_id IS NULL OR plan_id = ''",
     [DEFAULT_PLAN_ID, defaultSubscriptionPlans[0].imageQuota, defaultSubscriptionPlans[0].storageQuotaBytes]
   );
+}
+
+async function migrateBillingTransactionsTable(): Promise<void> {
+  await addColumnIfMissing("billing_transactions", "workspace_id", "VARCHAR(64)");
+  await addColumnIfMissing("billing_transactions", "generation_id", "VARCHAR(64)");
+  await addColumnIfMissing("billing_transactions", "currency", "VARCHAR(16) NOT NULL DEFAULT 'CNY'");
+  await addColumnIfMissing("billing_transactions", "amount_cents", "BIGINT NOT NULL DEFAULT 0");
+  await addColumnIfMissing("billing_transactions", "balance_before_cents", "BIGINT NOT NULL DEFAULT 0");
+  await addColumnIfMissing("billing_transactions", "balance_after_cents", "BIGINT NOT NULL DEFAULT 0");
+  await addColumnIfMissing("billing_transactions", "quota_before", "BIGINT NOT NULL DEFAULT 0");
+  await addColumnIfMissing("billing_transactions", "quota_after", "BIGINT NOT NULL DEFAULT 0");
+  await addColumnIfMissing("billing_transactions", "quota_consumed", "BIGINT NOT NULL DEFAULT 0");
+  await addColumnIfMissing("billing_transactions", "image_count", "INT NOT NULL DEFAULT 0");
+  await addColumnIfMissing("billing_transactions", "quota_count", "INT NOT NULL DEFAULT 0");
+  await addColumnIfMissing("billing_transactions", "unit_price_cents", "BIGINT NOT NULL DEFAULT 0");
+  await addColumnIfMissing("billing_transactions", "note", "TEXT");
+  await addColumnIfMissing("billing_transactions", "created_by_user_id", "VARCHAR(64)");
+  await addColumnIfMissing("billing_transactions", "metadata_json", "LONGTEXT");
+  await addIndexIfMissing(
+    "billing_transactions",
+    "billing_transactions_user_created_at_idx",
+    "KEY billing_transactions_user_created_at_idx (user_id, created_at)"
+  );
+  await addIndexIfMissing(
+    "billing_transactions",
+    "billing_transactions_workspace_created_at_idx",
+    "KEY billing_transactions_workspace_created_at_idx (workspace_id, created_at)"
+  );
+  await addIndexIfMissing(
+    "billing_transactions",
+    "billing_transactions_generation_id_idx",
+    "KEY billing_transactions_generation_id_idx (generation_id)"
+  );
+  await addIndexIfMissing(
+    "billing_transactions",
+    "billing_transactions_type_created_at_idx",
+    "KEY billing_transactions_type_created_at_idx (type, created_at)"
+  );
+}
+
+async function seedDefaultSystemSettings(): Promise<void> {
+  const now = new Date().toISOString();
+  const defaults = [
+    ["billing.imageUnitPrice", { imageUnitPriceCents: 0, currency: "CNY" }],
+    [
+      "payment.alipay",
+      {
+        enabled: false,
+        appId: "",
+        privateKey: "",
+        publicKey: "",
+        notifyUrl: "",
+        returnUrl: "",
+        gateway: "https://openapi.alipay.com/gateway.do",
+        signType: "RSA2"
+      }
+    ]
+  ] as const;
+
+  for (const [key, value] of defaults) {
+    await pool.query(
+      `
+        INSERT INTO system_settings (setting_key, value_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE setting_key = setting_key
+      `,
+      [key, JSON.stringify(value), now, now]
+    );
+  }
 }
 
 async function migrateSubscriptionPlansTable(): Promise<void> {

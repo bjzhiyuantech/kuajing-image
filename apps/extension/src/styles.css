@@ -644,6 +644,11 @@ textarea:focus {
   margin-bottom: 8px;
 }
 
+.tool-actions.compact {
+  margin-bottom: 10px;
+  font-weight: 800;
+}
+
 .mini-button {
   background: #ffffff;
   border: 1px solid #ccd7d1;
@@ -720,6 +725,42 @@ textarea:focus {
   color: #17201c;
   display: block;
   font-size: 13px;
+}
+
+.billing-ledger-list {
+  display: grid;
+  gap: 8px;
+}
+
+.billing-ledger-item {
+  align-items: start;
+  background: #ffffff;
+  border: 1px solid #e4ebe7;
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 9px;
+}
+
+.billing-ledger-item div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.billing-ledger-item div:last-child {
+  text-align: right;
+}
+
+.billing-ledger-item strong {
+  font-size: 12px;
+}
+
+.billing-ledger-item span {
+  color: #66766d;
+  font-size: 11px;
+  overflow-wrap: anywhere;
 }
 
 .quota-row {
@@ -821,6 +862,28 @@ textarea:focus {
 
 .history-open {
   margin-top: 8px;
+}
+
+.source-link {
+  align-items: center;
+  color: #0d6b52;
+  display: inline-flex;
+  font-size: 11px;
+  font-weight: 800;
+  gap: 5px;
+  margin-top: 8px;
+  max-width: 100%;
+  text-decoration: none;
+}
+
+.source-link span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-link:hover {
+  text-decoration: underline;
 }
 
 .progress-row {

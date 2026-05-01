@@ -30,9 +30,12 @@ import {
   validateSceneImageSize,
   type AppConfig,
   type AdminAssetsResponse,
+  type AdminAdjustBalanceRequest,
   type AdminPlansResponse,
   type AdminStatsResponse,
   type AdminUsersResponse,
+  type SaveAlipayConfigRequest,
+  type SaveBillingSettingsRequest,
   type EcommerceBatchGenerateRequest,
   type EcommerceBatchGenerateResponse,
   type EcommerceJobListResponse,
@@ -52,6 +55,16 @@ import {
 } from "./contracts.js";
 import { closeDatabase, ensureTenant, initializeDatabase } from "./database.js";
 import { db } from "./database.js";
+import {
+  BillingError,
+  adjustUserBalance,
+  getAlipayConfig,
+  getBillingSettings,
+  listAdminBillingTransactions,
+  listUserBillingTransactions,
+  saveAlipayConfig,
+  saveBillingSettings
+} from "./billing.js";
 import {
   ProviderError,
   createOpenAIImageProvider,
@@ -115,6 +128,9 @@ export const app = new Hono();
 app.onError((error, c) => {
   if (error instanceof AuthError) {
     return c.json(errorResponse(error.code, error.message), error.status as 400 | 401 | 403 | 404 | 409 | 500);
+  }
+  if (error instanceof BillingError) {
+    return c.json(errorResponse(error.code, error.message), error.status as 400 | 401 | 402 | 403 | 404 | 409 | 500);
   }
 
   console.error(error);
@@ -468,6 +484,10 @@ app.get("/api/ecommerce/stats", async (c) => {
   return c.json(response);
 });
 
+app.get("/api/billing/transactions", async (c) => {
+  return c.json(await listUserBillingTransactions(await requestTenant(c), parseListLimit(c.req.query("limit"))));
+});
+
 app.get("/api/admin/stats", async (c) => {
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
@@ -493,6 +513,71 @@ app.get("/api/admin/plans", async (c) => {
   }
 
   return c.json(await getAdminPlans());
+});
+
+app.get("/api/admin/billing/settings", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return c.json(await getBillingSettings());
+});
+
+app.put("/api/admin/billing/settings", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+
+  const parsed = parseBillingSettingsPayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  return c.json(await saveBillingSettings(parsed.value));
+});
+
+app.get("/api/admin/payment/alipay", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return c.json(await getAlipayConfig());
+});
+
+app.put("/api/admin/payment/alipay", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+
+  const parsed = parseAlipayConfigPayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  return c.json(await saveAlipayConfig(parsed.value));
+});
+
+app.get("/api/admin/billing/transactions", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return c.json(await listAdminBillingTransactions(parseListLimit(c.req.query("limit"))));
 });
 
 app.post("/api/admin/plans", async (c) => {
@@ -641,6 +726,32 @@ app.put("/api/admin/users/:userId/quota", async (c) => {
     .where(eq(users.id, userId));
 
   return c.json({ user: await getAdminUserOrThrow(userId) });
+});
+
+app.put("/api/admin/users/:userId/balance", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+
+  const parsed = parseBalanceAdjustmentPayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  const session = authSessions.get(c) ?? (await requireAdminSession(c.req.raw.headers));
+  await adjustUserBalance({
+    userId: c.req.param("userId"),
+    adminUserId: session.user.id,
+    ...parsed.value
+  });
+
+  return c.json({ user: await getAdminUserOrThrow(c.req.param("userId")) });
 });
 
 app.get("/api/admin/ecommerce/jobs", async (c) => {
@@ -1042,6 +1153,8 @@ function toAdminUserItem(
     planName: plan?.name,
     quotaTotal: Number(user.quotaTotal ?? 0),
     quotaUsed: Number(user.quotaUsed ?? 0),
+    balanceCents: Number(user.balanceCents ?? 0),
+    currency: user.currency ?? "CNY",
     storageQuotaBytes: Number(user.storageQuotaBytes ?? 0),
     storageUsedBytes: Math.max(Number(user.storageUsedBytes ?? 0), estimatedStorageUsedBytes),
     createdAt: user.createdAt,
@@ -1381,6 +1494,118 @@ function parseQuotaPayload(input: unknown): ParseResult<Partial<{
   };
 }
 
+function parseBalanceAdjustmentPayload(input: unknown): ParseResult<AdminAdjustBalanceRequest> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_balance_adjustment", "余额调整内容必须是 JSON 对象。")
+    };
+  }
+
+  const value: AdminAdjustBalanceRequest = {};
+  if (Object.hasOwn(input, "balanceCents")) {
+    const balanceCents = parseNonNegativeInteger(input.balanceCents);
+    if (balanceCents === undefined) {
+      return {
+        ok: false,
+        error: errorResponse("invalid_balance_adjustment", "余额必须是非负整数分。")
+      };
+    }
+    value.balanceCents = balanceCents;
+  }
+
+  if (Object.hasOwn(input, "deltaCents")) {
+    if (typeof input.deltaCents !== "number" || !Number.isSafeInteger(input.deltaCents) || input.deltaCents === 0) {
+      return {
+        ok: false,
+        error: errorResponse("invalid_balance_adjustment", "余额增减值必须是非零整数分。")
+      };
+    }
+    value.deltaCents = input.deltaCents;
+  }
+
+  if (Object.hasOwn(input, "note")) {
+    value.note = parseNullableLimitedString(input.note, 1000) ?? undefined;
+  }
+
+  if (value.balanceCents === undefined && value.deltaCents === undefined) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_balance_adjustment", "请提供 balanceCents 或 deltaCents。")
+    };
+  }
+
+  return {
+    ok: true,
+    value
+  };
+}
+
+function parseBillingSettingsPayload(input: unknown): ParseResult<SaveBillingSettingsRequest> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_billing_settings", "计费设置内容必须是 JSON 对象。")
+    };
+  }
+
+  const imageUnitPriceCents = parseNonNegativeInteger(input.imageUnitPriceCents);
+  if (imageUnitPriceCents === undefined) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_billing_settings", "单张生图费用必须是非负整数分。")
+    };
+  }
+
+  const currency = Object.hasOwn(input, "currency") ? parseLimitedString(input.currency, MAX_CURRENCY_LENGTH)?.toUpperCase() : undefined;
+  if (Object.hasOwn(input, "currency") && !currency) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_billing_settings", "币种不能为空，且不能超过 16 个字符。")
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      imageUnitPriceCents,
+      currency
+    }
+  };
+}
+
+function parseAlipayConfigPayload(input: unknown): ParseResult<SaveAlipayConfigRequest> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_alipay_config", "支付宝配置内容必须是 JSON 对象。")
+    };
+  }
+
+  if (typeof input.enabled !== "boolean") {
+    return {
+      ok: false,
+      error: errorResponse("invalid_alipay_config", "enabled 必须是布尔值。")
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      enabled: input.enabled,
+      appId: stringValue(input.appId),
+      privateKey: stringValue(input.privateKey),
+      preservePrivateKey: input.preservePrivateKey === true,
+      publicKey: stringValue(input.publicKey),
+      preservePublicKey: input.preservePublicKey === true,
+      notifyUrl: stringValue(input.notifyUrl),
+      returnUrl: stringValue(input.returnUrl),
+      gateway: stringValue(input.gateway),
+      signType: stringValue(input.signType)
+    }
+  };
+}
+
 function parseGeneratePayload(input: unknown): ParseResult<ImageProviderInput> {
   const base = parseBaseImagePayload(input);
   if (!base.ok) {
@@ -1663,6 +1888,7 @@ function parseEcommerceBatchPayload(input: unknown): ParseResult<ResolvedEcommer
       quality: quality.value,
       outputFormat: outputFormat.value,
       countPerScene: count.value,
+      sourcePageUrl: parseOptionalString(input.sourcePageUrl),
       referenceImage: parseEcommerceReferenceImage(input.referenceImage),
       extraDirection: parseOptionalString(input.extraDirection)
     }

@@ -27,6 +27,7 @@ export interface PersistedEcommerceBatchRequest {
   platform: EcommercePlatform;
   market: EcommerceMarket;
   sceneTemplateIds: EcommerceSceneTemplateId[];
+  sourcePageUrl?: string;
   size: ImageSize;
   stylePresetId: StylePresetId;
   quality: ImageQuality;
@@ -230,8 +231,18 @@ function toJobSummary(row: typeof ecommerceBatchJobs.$inferSelect): EcommerceJob
     failedScenes: row.failedScenes,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
-    completedAt: row.completedAt ?? undefined
+    completedAt: row.completedAt ?? undefined,
+    sourcePageUrl: parseStoredRequest(row.requestJson).sourcePageUrl
   };
+}
+
+function parseStoredRequest(requestJson: string): Partial<PersistedEcommerceBatchRequest> {
+  try {
+    const parsed = JSON.parse(requestJson) as unknown;
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? (parsed as Partial<PersistedEcommerceBatchRequest>) : {};
+  } catch {
+    return {};
+  }
 }
 
 function parseRecords(recordsJson: string): GenerationRecord[] {

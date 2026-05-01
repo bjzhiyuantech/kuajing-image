@@ -2,6 +2,7 @@ import {
   AlertTriangle,
   BarChart3,
   CheckCircle2,
+  CreditCard,
   Database,
   HardDrive,
   ImageIcon,
@@ -11,11 +12,13 @@ import {
   Package,
   Pencil,
   Plus,
+  Receipt,
   Save,
   ShieldCheck,
   Sparkles,
   User,
-  Users
+  Users,
+  Wallet
 } from "lucide-react";
 import type React from "react";
 import { Fragment, useEffect, useMemo, useState } from "react";
@@ -284,6 +287,9 @@ export function AdminPage() {
   const [plans, setPlans] = useState<AdminPlanRow[]>([]);
   const [jobs, setJobs] = useState<AdminJobRow[]>([]);
   const [assets, setAssets] = useState<AdminAssetRow[]>([]);
+  const [billingSettings, setBillingSettings] = useState<BillingSettingsFormState>(createBillingSettingsForm());
+  const [alipaySettings, setAlipaySettings] = useState<AlipayFormState>(createAlipayForm());
+  const [transactions, setTransactions] = useState<BillingTransactionRow[]>([]);
   const [planDrafts, setPlanDrafts] = useState<Record<string, PlanFormState>>({});
   const [newPlan, setNewPlan] = useState<PlanFormState>(createEmptyPlanForm());
   const [expandedUserId, setExpandedUserId] = useState("");
@@ -291,6 +297,7 @@ export function AdminPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [savingPlanId, setSavingPlanId] = useState("");
   const [savingUserId, setSavingUserId] = useState("");
+  const [savingBilling, setSavingBilling] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
@@ -301,12 +308,15 @@ export function AdminPage() {
       setNotice("");
     }
     try {
-      const [statsResponse, usersResponse, jobsResponse, assetsResponse, plansResponse] = await Promise.all([
+      const [statsResponse, usersResponse, jobsResponse, assetsResponse, plansResponse, billingResponse, alipayResponse, transactionsResponse] = await Promise.all([
         authFetch("/api/admin/stats"),
         authFetch("/api/admin/users"),
         authFetch("/api/admin/ecommerce/jobs"),
         authFetch("/api/admin/assets"),
-        authFetch("/api/admin/plans")
+        authFetch("/api/admin/plans"),
+        authFetch("/api/admin/billing/settings"),
+        authFetch("/api/admin/payment/alipay"),
+        authFetch("/api/admin/billing/transactions?limit=50")
       ]);
 
       const responses = [statsResponse, usersResponse, jobsResponse, assetsResponse];
@@ -323,6 +333,15 @@ export function AdminPage() {
       setStats(parseAdminStats(statsBody));
       const parsedUsers = parseUsers(usersBody);
       const parsedPlans = plansResponse.ok ? parsePlans(await plansResponse.json()) : [];
+      if (billingResponse.ok) {
+        setBillingSettings(parseBillingSettingsForm(await billingResponse.json()));
+      }
+      if (alipayResponse.ok) {
+        setAlipaySettings(parseAlipayForm(await alipayResponse.json()));
+      }
+      if (transactionsResponse.ok) {
+        setTransactions(parseBillingTransactions(await transactionsResponse.json()));
+      }
       setUsers(parsedUsers);
       setPlans(parsedPlans);
       setPlanDrafts(Object.fromEntries(parsedPlans.map((plan) => [plan.id, planToForm(plan)])));
@@ -418,12 +437,82 @@ export function AdminPage() {
         throw new Error(await readApiError(quotaResponse, "用户额度保存失败。"));
       }
 
+      const balanceCents = moneyToCents(draft.balance);
+      if (balanceCents !== null && balanceCents !== (user.balanceCents ?? 0)) {
+        const balanceResponse = await authFetch(`/api/admin/users/${encodeURIComponent(user.id)}/balance`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ balanceCents, note: "后台用户管理调整" })
+        });
+        if (!balanceResponse.ok) {
+          throw new Error(await readApiError(balanceResponse, "用户余额保存失败。"));
+        }
+      }
+
       setNotice("用户额度已保存。");
       await loadAdminData({ preserveNotice: true });
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "用户额度保存失败。");
     } finally {
       setSavingUserId("");
+    }
+  }
+
+  async function saveBillingSettings(): Promise<void> {
+    setSavingBilling("settings");
+    setError("");
+    setNotice("");
+    try {
+      const response = await authFetch("/api/admin/billing/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          imageUnitPriceCents: moneyToCents(billingSettings.imageUnitPrice) ?? 0,
+          currency: billingSettings.currency || "CNY"
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "计费设置保存失败。"));
+      }
+      setNotice("计费设置已保存。");
+      await loadAdminData({ preserveNotice: true });
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "计费设置保存失败。");
+    } finally {
+      setSavingBilling("");
+    }
+  }
+
+  async function saveAlipaySettings(): Promise<void> {
+    setSavingBilling("alipay");
+    setError("");
+    setNotice("");
+    try {
+      const response = await authFetch("/api/admin/payment/alipay", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          enabled: alipaySettings.enabled,
+          appId: alipaySettings.appId,
+          privateKey: alipaySettings.privateKey,
+          preservePrivateKey: !alipaySettings.privateKey.trim() && alipaySettings.privateKeySaved,
+          publicKey: alipaySettings.publicKey,
+          preservePublicKey: !alipaySettings.publicKey.trim() && alipaySettings.publicKeySaved,
+          notifyUrl: alipaySettings.notifyUrl,
+          returnUrl: alipaySettings.returnUrl,
+          gateway: alipaySettings.gateway,
+          signType: alipaySettings.signType
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "支付宝配置保存失败。"));
+      }
+      setNotice("支付宝配置已保存。");
+      await loadAdminData({ preserveNotice: true });
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "支付宝配置保存失败。");
+    } finally {
+      setSavingBilling("");
     }
   }
 
@@ -470,6 +559,77 @@ export function AdminPage() {
             </div>
           ))}
         </div>
+
+        <section className="admin-table-card admin-billing-card" aria-labelledby="billing-config-title">
+          <div className="admin-table-card__title">
+            <CreditCard className="size-4" aria-hidden="true" />
+            <h2 id="billing-config-title">计费与支付配置</h2>
+          </div>
+          <div className="admin-billing-grid">
+            <div className="admin-form-panel">
+              <div>
+                <p className="settings-eyebrow">Price</p>
+                <h3>单张生图费用</h3>
+              </div>
+              <label>
+                <span>无套餐/额度不足时，每张从余额扣除</span>
+                <input
+                  className="admin-input"
+                  inputMode="decimal"
+                  value={billingSettings.imageUnitPrice}
+                  onChange={(event) => setBillingSettings({ ...billingSettings, imageUnitPrice: event.target.value })}
+                />
+              </label>
+              <label>
+                <span>币种</span>
+                <input
+                  className="admin-input"
+                  value={billingSettings.currency}
+                  onChange={(event) => setBillingSettings({ ...billingSettings, currency: event.target.value.toUpperCase() })}
+                />
+              </label>
+              <button className="primary-action h-10" disabled={savingBilling === "settings"} type="button" onClick={() => void saveBillingSettings()}>
+                {savingBilling === "settings" ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Save className="size-4" aria-hidden="true" />}
+                保存计费
+              </button>
+            </div>
+
+            <div className="admin-form-panel">
+              <div className="admin-form-panel__title-row">
+                <div>
+                  <p className="settings-eyebrow">Alipay</p>
+                  <h3>支付宝支付</h3>
+                </div>
+                <label className="admin-switch">
+                  <input
+                    checked={alipaySettings.enabled}
+                    type="checkbox"
+                    onChange={(event) => setAlipaySettings({ ...alipaySettings, enabled: event.target.checked })}
+                  />
+                  <span>{alipaySettings.enabled ? "启用" : "关闭"}</span>
+                </label>
+              </div>
+              <div className="admin-form-grid admin-form-grid--two">
+                <label><span>App ID</span><input className="admin-input" value={alipaySettings.appId} onChange={(event) => setAlipaySettings({ ...alipaySettings, appId: event.target.value })} /></label>
+                <label><span>网关</span><input className="admin-input" value={alipaySettings.gateway} onChange={(event) => setAlipaySettings({ ...alipaySettings, gateway: event.target.value })} /></label>
+                <label><span>异步通知 URL</span><input className="admin-input" value={alipaySettings.notifyUrl} onChange={(event) => setAlipaySettings({ ...alipaySettings, notifyUrl: event.target.value })} /></label>
+                <label><span>返回 URL</span><input className="admin-input" value={alipaySettings.returnUrl} onChange={(event) => setAlipaySettings({ ...alipaySettings, returnUrl: event.target.value })} /></label>
+              </div>
+              <label>
+                <span>应用私钥 {alipaySettings.privateKeySaved ? "（已保存，留空不覆盖）" : ""}</span>
+                <textarea className="admin-textarea admin-secret-textarea" value={alipaySettings.privateKey} onChange={(event) => setAlipaySettings({ ...alipaySettings, privateKey: event.target.value })} />
+              </label>
+              <label>
+                <span>支付宝公钥 {alipaySettings.publicKeySaved ? "（已保存，留空不覆盖）" : ""}</span>
+                <textarea className="admin-textarea admin-secret-textarea" value={alipaySettings.publicKey} onChange={(event) => setAlipaySettings({ ...alipaySettings, publicKey: event.target.value })} />
+              </label>
+              <button className="secondary-action h-10" disabled={savingBilling === "alipay"} type="button" onClick={() => void saveAlipaySettings()}>
+                {savingBilling === "alipay" ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <CreditCard className="size-4" aria-hidden="true" />}
+                保存支付宝
+              </button>
+            </div>
+          </div>
+        </section>
 
         <section className="admin-table-card" aria-labelledby="plans-table-title">
           <div className="admin-table-card__title">
@@ -608,6 +768,7 @@ export function AdminPage() {
                   <th>显示名</th>
                   <th>角色</th>
                   <th>套餐</th>
+                  <th>余额</th>
                   <th>生图额度</th>
                   <th>存储空间</th>
                   <th>创建时间</th>
@@ -626,6 +787,7 @@ export function AdminPage() {
                           <td>{user.displayName || "-"}</td>
                           <td>{roleLabel(user.role)}</td>
                           <td>{user.planName || user.planId || "未设置"}</td>
+                          <td>{formatMoney(user.balanceCents ?? 0, "CNY")}</td>
                           <td>{quotaLabel(user)}</td>
                           <td>{storageLabel(user)}</td>
                           <td>{formatDateTime(user.createdAt)}</td>
@@ -645,7 +807,7 @@ export function AdminPage() {
                         </tr>
                         {isExpanded ? (
                           <tr className="admin-expanded-row">
-                            <td colSpan={8}>
+                            <td colSpan={9}>
                               <div className="admin-user-form">
                                 <label>
                                   <span>套餐</span>
@@ -663,6 +825,17 @@ export function AdminPage() {
                                       </option>
                                     ))}
                                   </select>
+                                </label>
+                                <label>
+                                  <span>账户余额</span>
+                                  <input
+                                    className="admin-input"
+                                    inputMode="decimal"
+                                    value={draft.balance}
+                                    onChange={(event) =>
+                                      setUserDrafts((drafts) => ({ ...drafts, [user.id]: { ...draft, balance: event.target.value } }))
+                                    }
+                                  />
                                 </label>
                                 <label>
                                   <span>生图总额度</span>
@@ -732,13 +905,28 @@ export function AdminPage() {
                   })
                 ) : (
                   <tr>
-                    <td colSpan={8}>暂无用户</td>
+                    <td colSpan={9}>暂无用户</td>
                   </tr>
                 )}
               </tbody>
             </table>
           </div>
         </section>
+        <DataTable
+          columns={["时间", "用户", "类型", "图片", "金额", "余额", "说明"]}
+          emptyLabel="暂无扣费明细"
+          icon={<Receipt className="size-4" aria-hidden="true" />}
+          rows={transactions.map((item) => [
+            formatDateTime(item.createdAt),
+            item.userEmail || item.userId || "-",
+            billingTypeLabel(item.type),
+            item.imageCount ? `${item.imageCount}` : "-",
+            formatMoney(item.amountCents, item.currency),
+            formatMoney(item.balanceAfterCents ?? 0, item.currency),
+            item.note || item.title
+          ])}
+          title="生图 / 扣费明细"
+        />
         <DataTable
           columns={["任务", "状态", "商品", "进度", "更新时间"]}
           emptyLabel="暂无任务"
@@ -766,11 +954,23 @@ function InfoTile({ icon, label, value }: { icon: React.ReactNode; label: string
   );
 }
 
-function DataTable({ columns, emptyLabel, rows, title }: { columns: string[]; emptyLabel: string; rows: string[][]; title: string }) {
+function DataTable({
+  columns,
+  emptyLabel,
+  icon,
+  rows,
+  title
+}: {
+  columns: string[];
+  emptyLabel: string;
+  icon?: React.ReactNode;
+  rows: string[][];
+  title: string;
+}) {
   return (
     <section className="admin-table-card" aria-labelledby={`${title}-table-title`}>
       <div className="admin-table-card__title">
-        <Database className="size-4" aria-hidden="true" />
+        {icon ?? <Database className="size-4" aria-hidden="true" />}
         <h2 id={`${title}-table-title`}>{title}</h2>
       </div>
       <div className="admin-table-wrap">
@@ -838,6 +1038,7 @@ interface AdminUserRow {
   planName?: string;
   quotaTotal?: number;
   quotaUsed?: number;
+  balanceCents?: number;
   storageQuotaBytes?: number;
   storageUsedBytes?: number;
   createdAt: string;
@@ -868,10 +1069,43 @@ interface PlanFormState {
 
 interface UserQuotaFormState {
   planId: string;
+  balance: string;
   quotaTotal: string;
   quotaUsed: string;
   storageQuotaGb: string;
   storageUsedGb: string;
+}
+
+interface BillingSettingsFormState {
+  imageUnitPrice: string;
+  currency: string;
+}
+
+interface AlipayFormState {
+  enabled: boolean;
+  appId: string;
+  privateKey: string;
+  privateKeySaved: boolean;
+  publicKey: string;
+  publicKeySaved: boolean;
+  notifyUrl: string;
+  returnUrl: string;
+  gateway: string;
+  signType: string;
+}
+
+interface BillingTransactionRow {
+  id: string;
+  userId?: string;
+  userEmail?: string;
+  type: string;
+  title: string;
+  amountCents: number;
+  currency: string;
+  balanceAfterCents?: number;
+  imageCount?: number;
+  note?: string;
+  createdAt: string;
 }
 
 interface AdminJobRow {
@@ -975,6 +1209,7 @@ function parseUsers(value: unknown): AdminUserRow[] {
     planName: stringFrom(item.planName ?? item.plan_name ?? (isRecord(item.plan) ? item.plan.name : undefined)),
     quotaTotal: numberFrom(item.quota_total ?? item.quotaTotal),
     quotaUsed: numberFrom(item.quota_used ?? item.quotaUsed),
+    balanceCents: numberFrom(item.balance_cents ?? item.balanceCents ?? item.balance),
     storageQuotaBytes: numberFrom(item.storage_quota_bytes ?? item.storageQuotaBytes ?? (isRecord(item.storage) ? item.storage.quotaBytes : undefined)),
     storageUsedBytes: numberFrom(item.storage_used_bytes ?? item.storageUsedBytes ?? (isRecord(item.storage) ? item.storage.usedBytes : undefined)),
     createdAt: stringFrom(item.createdAt) || stringFrom(item.created_at)
@@ -1020,6 +1255,48 @@ function parseAssets(value: unknown): AdminAssetRow[] {
   }));
 }
 
+function parseBillingSettingsForm(value: unknown): BillingSettingsFormState {
+  const settings = firstRecord(value, "settings") ?? (isRecord(value) ? value : {});
+  return {
+    imageUnitPrice: centsToMoneyInput(numberFrom(settings.imageUnitPriceCents ?? settings.singleImagePriceCents) ?? 0),
+    currency: stringFrom(settings.currency) || "CNY"
+  };
+}
+
+function parseAlipayForm(value: unknown): AlipayFormState {
+  const alipay = firstRecord(value, "alipay") ?? (isRecord(value) ? value : {});
+  const privateKey = isRecord(alipay.privateKey) ? alipay.privateKey : {};
+  const publicKey = isRecord(alipay.publicKey) ? alipay.publicKey : {};
+  return {
+    enabled: booleanFrom(alipay.enabled, false),
+    appId: stringFrom(alipay.appId),
+    privateKey: "",
+    privateKeySaved: booleanFrom(privateKey.hasSecret, false),
+    publicKey: "",
+    publicKeySaved: booleanFrom(publicKey.hasSecret, false),
+    notifyUrl: stringFrom(alipay.notifyUrl),
+    returnUrl: stringFrom(alipay.returnUrl),
+    gateway: stringFrom(alipay.gateway) || "https://openapi.alipay.com/gateway.do",
+    signType: stringFrom(alipay.signType) || "RSA2"
+  };
+}
+
+function parseBillingTransactions(value: unknown): BillingTransactionRow[] {
+  return arrayFrom(value, ["transactions", "items"]).map((item, index) => ({
+    id: stringFrom(item.id) || `transaction-${index}`,
+    userId: stringFrom(item.userId ?? item.user_id),
+    userEmail: stringFrom(item.userEmail ?? item.user_email),
+    type: stringFrom(item.type) || "-",
+    title: stringFrom(item.title) || "-",
+    amountCents: numberFrom(item.amountCents ?? item.amount_cents) ?? 0,
+    currency: stringFrom(item.currency) || "CNY",
+    balanceAfterCents: numberFrom(item.balanceAfterCents ?? item.balance_after_cents),
+    imageCount: numberFrom(item.imageCount ?? item.image_count),
+    note: stringFrom(item.note),
+    createdAt: stringFrom(item.createdAt) || stringFrom(item.created_at)
+  }));
+}
+
 function arrayFrom(value: unknown, keys: string[]): Record<string, unknown>[] {
   const source = Array.isArray(value)
     ? value
@@ -1047,6 +1324,29 @@ function storageLabel(user: Pick<AdminUserRow, "storageQuotaBytes" | "storageUse
 }
 
 const NEW_PLAN_ID = "__new_plan__";
+
+function createBillingSettingsForm(): BillingSettingsFormState {
+  return {
+    imageUnitPrice: "0",
+    currency: "CNY"
+  };
+}
+
+function createAlipayForm(): AlipayFormState {
+  return {
+    enabled: false,
+    appId: "",
+    privateKey: "",
+    privateKeySaved: false,
+    publicKey: "",
+    publicKeySaved: false,
+    notifyUrl: "",
+    returnUrl: "",
+    gateway: "https://openapi.alipay.com/gateway.do",
+    signType: "RSA2"
+  };
+}
+
 const fallbackBillingPlans: BillingPlan[] = [
   {
     id: "starter",
@@ -1116,6 +1416,7 @@ function planFormToPayload(form: PlanFormState): Record<string, unknown> {
 function userToQuotaForm(user: AdminUserRow): UserQuotaFormState {
   return {
     planId: user.planId ?? "",
+    balance: centsToMoneyInput(user.balanceCents ?? 0),
     quotaTotal: stringFromNumber(user.quotaTotal),
     quotaUsed: stringFromNumber(user.quotaUsed ?? 0),
     storageQuotaGb: bytesToGbInput(user.storageQuotaBytes),
@@ -1149,6 +1450,14 @@ function roleLabel(role: string): string {
     return "管理员";
   }
   return "成员";
+}
+
+function billingTypeLabel(type: string): string {
+  if (type === "generation") return "生图扣费";
+  if (type === "admin_adjustment") return "后台调整";
+  if (type === "recharge") return "充值";
+  if (type === "plan_purchase") return "套餐购买";
+  return type || "-";
 }
 
 function formatDateTime(value: string): string {
@@ -1284,4 +1593,11 @@ function bytesToGbInput(value: number | undefined): string {
 function moneyToCents(value: string): number | null {
   const numericValue = nullableNumber(value);
   return numericValue === null ? null : Math.round(numericValue * 100);
+}
+
+function centsToMoneyInput(value: number): string {
+  if (!Number.isFinite(value)) {
+    return "0";
+  }
+  return String(Number((value / 100).toFixed(2)));
 }

@@ -434,6 +434,8 @@ export interface AuthUser {
   planName?: string;
   quotaTotal: number;
   quotaUsed: number;
+  balanceCents: number;
+  currency?: string;
   storageQuotaBytes: number;
   storageUsedBytes: number;
   createdAt: string;
@@ -479,6 +481,56 @@ export interface AdminPlansResponse {
   plans: Plan[];
 }
 
+export interface BillingSettings {
+  imageUnitPriceCents: number;
+  currency: string;
+  updatedAt?: string;
+}
+
+export interface AdminBillingSettingsResponse {
+  settings: BillingSettings;
+}
+
+export interface SaveBillingSettingsRequest {
+  imageUnitPriceCents: number;
+  currency?: string;
+}
+
+export interface AlipayConfigView {
+  enabled: boolean;
+  appId: string;
+  privateKey: MaskedSecret;
+  publicKey: MaskedSecret;
+  notifyUrl: string;
+  returnUrl: string;
+  gateway: string;
+  signType: "RSA2" | "RSA" | string;
+  updatedAt?: string;
+}
+
+export interface AdminAlipayConfigResponse {
+  alipay: AlipayConfigView;
+}
+
+export interface SaveAlipayConfigRequest {
+  enabled: boolean;
+  appId?: string;
+  privateKey?: string;
+  preservePrivateKey?: boolean;
+  publicKey?: string;
+  preservePublicKey?: boolean;
+  notifyUrl?: string;
+  returnUrl?: string;
+  gateway?: string;
+  signType?: "RSA2" | "RSA" | string;
+}
+
+export interface AdminAdjustBalanceRequest {
+  balanceCents?: number;
+  deltaCents?: number;
+  note?: string;
+}
+
 export interface BillingPlan extends Plan {
   recommended?: boolean;
   purchaseUrl?: string;
@@ -505,12 +557,29 @@ export interface BillingStorageUsage {
 
 export interface BillingTransaction {
   id: string;
-  type: "plan_purchase" | "recharge" | "generation" | string;
+  userId?: string;
+  userEmail?: string;
+  workspaceId?: string;
+  generationId?: string;
+  type: "plan_purchase" | "recharge" | "generation" | "admin_adjustment" | string;
   title: string;
-  amountCents?: number;
+  amountCents: number;
+  currency: string;
+  balanceBeforeCents?: number;
+  balanceAfterCents?: number;
+  quotaBefore?: number;
+  quotaAfter?: number;
+  quotaConsumed?: number;
   imageCount?: number;
+  unitPriceCents?: number;
+  note?: string;
   status: "pending" | "succeeded" | "failed" | "cancelled" | "paid" | string;
+  createdByUserId?: string;
   createdAt: string;
+}
+
+export interface BillingTransactionsResponse {
+  transactions: BillingTransaction[];
 }
 
 export interface BillingSummaryResponse {
@@ -628,6 +697,7 @@ export interface EcommerceBatchGenerateRequest {
   platform: EcommercePlatform;
   market: EcommerceMarket;
   sceneTemplateIds: EcommerceSceneTemplateId[];
+  sourcePageUrl?: string;
   sizePresetId?: ImageSizePresetId;
   size?: ImageSize;
   stylePresetId?: StylePresetId;
@@ -666,6 +736,7 @@ export interface EcommerceJobSummary {
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
+  sourcePageUrl?: string;
 }
 
 export interface EcommerceJobListResponse {

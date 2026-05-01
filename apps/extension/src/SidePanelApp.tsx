@@ -30,6 +30,7 @@ import {
   ECOMMERCE_SCENE_TEMPLATES,
   SIZE_PRESETS,
   composeEcommercePrompt,
+  type BillingTransaction,
   type BillingPlan,
   type EcommerceBatchGenerateResponse,
   type EcommerceGenerationMode,
@@ -103,6 +104,7 @@ interface EcommerceJobSummary {
   createdAt?: string;
   updatedAt?: string;
   completedAt?: string;
+  sourcePageUrl?: string;
   totalScenes?: number;
   completedScenes?: number;
   progress?: number;
@@ -122,6 +124,7 @@ interface BillingOverview {
   currency: string;
   currentPlan?: BillingPlan;
   plans: BillingPlan[];
+  transactions: BillingTransaction[];
   quotaTotal: number;
   quotaUsed: number;
   packageTotal?: number;
@@ -313,6 +316,7 @@ function normalizeJobsResponse(payload: unknown): EcommerceJobSummary[] {
       createdAt: firstString(source, ["createdAt", "created_at"]),
       updatedAt: firstString(source, ["updatedAt", "updated_at"]),
       completedAt: firstString(source, ["completedAt", "completed_at"]),
+      sourcePageUrl: firstString(source, ["sourcePageUrl", "source_page_url", "productUrl", "product_url", "pageUrl", "page_url"]),
       totalScenes,
       completedScenes,
       progress,
@@ -365,6 +369,8 @@ function normalizeBillingResponse(payload: unknown, user: AuthUser | null): Bill
   const balance = asRecord(data.balance ?? root.balance);
   const usage = asRecord(data.usage ?? root.usage ?? data.quota ?? root.quota);
   const currentPlan = normalizePlan(data.currentPlan ?? data.plan ?? root.currentPlan ?? root.plan);
+  const transactions = normalizeBillingTransactions(data.transactions ?? root.transactions);
+  const latestBalance = transactions.find((transaction) => typeof transaction.balanceAfterCents === "number")?.balanceAfterCents;
   const planItems = Array.isArray(data.plans)
     ? data.plans
     : Array.isArray(root.plans)
@@ -377,11 +383,13 @@ function normalizeBillingResponse(payload: unknown, user: AuthUser | null): Bill
     balanceCents:
       firstNumber(balance, ["balanceCents", "amountCents", "availableCents"]) ??
       firstNumber(data, ["balanceCents", "balance", "availableBalance"]) ??
+      latestBalance ??
       user?.balanceCents ??
       0,
     currency: firstString(balance, ["currency"]) ?? firstString(data, ["currency"]) ?? user?.currency ?? "CNY",
     currentPlan: currentPlan ?? undefined,
     plans: planItems.map((item, index) => normalizePlan(item, index)).filter((plan): plan is BillingPlan => Boolean(plan)),
+    transactions,
     quotaTotal: firstNumber(usage, ["quotaTotal", "total", "imageQuota"]) ?? user?.quotaTotal ?? 0,
     quotaUsed: firstNumber(usage, ["quotaUsed", "used", "usedQuota"]) ?? user?.quotaUsed ?? 0,
     packageTotal: firstNumber(usage, ["packageTotal", "planQuota", "packageQuota"]) ?? user?.packageTotal,
@@ -391,6 +399,35 @@ function normalizeBillingResponse(payload: unknown, user: AuthUser | null): Bill
       user?.packageRemaining ??
       Math.max((user?.quotaTotal ?? 0) - (user?.quotaUsed ?? 0), 0)
   };
+}
+
+function normalizeBillingTransactions(value: unknown): BillingTransaction[] {
+  const items = Array.isArray(value) ? value : [];
+  return items.map((item, index) => {
+    const source = asRecord(item);
+    return {
+      id: firstString(source, ["id"]) ?? `transaction-${index}`,
+      userId: firstString(source, ["userId", "user_id"]),
+      userEmail: firstString(source, ["userEmail", "user_email"]),
+      workspaceId: firstString(source, ["workspaceId", "workspace_id"]),
+      generationId: firstString(source, ["generationId", "generation_id"]),
+      type: firstString(source, ["type"]) ?? "-",
+      title: firstString(source, ["title"]) ?? "-",
+      amountCents: firstNumber(source, ["amountCents", "amount_cents"]) ?? 0,
+      currency: firstString(source, ["currency"]) ?? "CNY",
+      balanceBeforeCents: firstNumber(source, ["balanceBeforeCents", "balance_before_cents"]),
+      balanceAfterCents: firstNumber(source, ["balanceAfterCents", "balance_after_cents"]),
+      quotaBefore: firstNumber(source, ["quotaBefore", "quota_before"]),
+      quotaAfter: firstNumber(source, ["quotaAfter", "quota_after"]),
+      quotaConsumed: firstNumber(source, ["quotaConsumed", "quota_consumed"]),
+      imageCount: firstNumber(source, ["imageCount", "image_count"]),
+      unitPriceCents: firstNumber(source, ["unitPriceCents", "unit_price_cents"]),
+      note: firstString(source, ["note"]),
+      status: firstString(source, ["status"]) ?? "-",
+      createdByUserId: firstString(source, ["createdByUserId", "created_by_user_id"]),
+      createdAt: firstString(source, ["createdAt", "created_at"]) ?? ""
+    };
+  });
 }
 
 function formatMoney(cents: number, currency = "CNY"): string {
@@ -412,6 +449,14 @@ function planBenefits(plan: BillingPlan): string[] {
   const source = asRecord(plan.benefits);
   const features = source.features;
   return Array.isArray(features) ? features.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).slice(0, 3) : [];
+}
+
+function billingTransactionLabel(type: string): string {
+  if (type === "generation") return "生图扣费";
+  if (type === "admin_adjustment") return "后台调整";
+  if (type === "recharge") return "充值";
+  if (type === "plan_purchase") return "套餐购买";
+  return type || "明细";
 }
 
 function normalizeUser(value: unknown): AuthUser | null {
@@ -469,6 +514,15 @@ function formatDateTime(value?: string): string {
   });
 }
 
+function formatSourceUrl(url: string): string {
+  try {
+    const parsedUrl = new URL(url);
+    return `${parsedUrl.hostname}${parsedUrl.pathname}`;
+  } catch {
+    return url;
+  }
+}
+
 export function SidePanelApp() {
   const [settings, setSettings] = useState<ExtensionSettings>(defaultSettings);
   const [auth, setAuth] = useState<ExtensionAuthState>(defaultAuth);
@@ -508,6 +562,7 @@ export function SidePanelApp() {
       balanceCents: 0,
       currency: "CNY",
       plans: MOCK_BILLING_PLANS,
+      transactions: [],
       quotaTotal: 0,
       quotaUsed: 0
     },
@@ -884,12 +939,25 @@ export function SidePanelApp() {
     if (!token.trim() && !authAlreadyChecked && !requireAuth("billing")) {
       return;
     }
-    setBillingState({
-      data: normalizeBillingResponse({}, auth.user),
-      error: "",
-      loading: false
-    });
-    setBillingAction("套餐购买、支付宝充值和更多权益会在支付接口接入后开放。");
+    setBillingState((current) => ({ ...current, error: "", loading: true }));
+    try {
+      const response = await fetch(`${apiBaseUrl()}/api/billing/transactions?limit=20`, {
+        headers: apiHeaders(false, token)
+      });
+      const body = await parseResponseOrThrow(response);
+      setBillingState({
+        data: normalizeBillingResponse(body, auth.user),
+        error: "",
+        loading: false
+      });
+      setBillingAction("支付宝充值和套餐在线购买会在支付下单接口接入后开放；当前余额由后台调整。");
+    } catch (error) {
+      setBillingState({
+        data: normalizeBillingResponse({}, auth.user),
+        error: error instanceof Error ? error.message : "计费明细读取失败。",
+        loading: false
+      });
+    }
   }
 
   async function submitRecharge(): Promise<void> {
@@ -1169,6 +1237,7 @@ export function SidePanelApp() {
           platform: form.platform,
           market: form.market,
           sceneTemplateIds: form.sceneTemplateIds,
+          sourcePageUrl: pageContext?.url,
           size: form.size,
           stylePresetId: form.stylePresetId,
           quality: form.quality,
@@ -1640,6 +1709,30 @@ export function SidePanelApp() {
                     </article>
                   ))}
                 </div>
+                <div className="billing-usage-card">
+                  <div className="tool-actions compact">
+                    <span>生图与扣费明细</span>
+                    <CreditCard size={13} />
+                  </div>
+                  {billingState.data.transactions.length === 0 ? (
+                    <p className="tool-empty">暂无扣费明细。</p>
+                  ) : (
+                    <div className="billing-ledger-list">
+                      {billingState.data.transactions.slice(0, 8).map((transaction) => (
+                        <article className="billing-ledger-item" key={transaction.id}>
+                          <div>
+                            <strong>{billingTransactionLabel(transaction.type)}</strong>
+                            <span>{transaction.note || transaction.title}</span>
+                          </div>
+                          <div>
+                            <strong>{formatMoney(transaction.amountCents, transaction.currency)}</strong>
+                            <span>{formatDateTime(transaction.createdAt)}</span>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                </div>
                 {billingAction ? <p className="settings-note">{billingAction}</p> : null}
               </div>
             ) : null}
@@ -1678,6 +1771,14 @@ export function SidePanelApp() {
                         <RefreshCw size={13} />
                         打开/刷新
                       </button>
+                      {job.sourcePageUrl ? (
+                        <a className="source-link" href={job.sourcePageUrl} target="_blank" rel="noreferrer" title={job.sourcePageUrl}>
+                          <ExternalLink size={13} />
+                          <span>{formatSourceUrl(job.sourcePageUrl)}</span>
+                        </a>
+                      ) : (
+                        <span className="muted-line">暂无来源商品链接</span>
+                      )}
                       {assets.length > 0 ? (
                         <div className="asset-list">
                           {assets.slice(0, 6).map((asset) => (

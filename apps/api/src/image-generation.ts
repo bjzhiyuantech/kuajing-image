@@ -29,6 +29,7 @@ import {
 } from "./asset-storage.js";
 import { runtimePaths } from "./runtime.js";
 import { assets, generationOutputs, generationRecords } from "./schema.js";
+import { attachGenerationToCharge, reserveGenerationCharge } from "./billing.js";
 import { getActiveStorageConfig } from "./storage-config.js";
 
 const BATCH_CONCURRENCY = 2;
@@ -84,6 +85,7 @@ export async function runTextToImageGeneration(
   provider: ImageProvider,
   signal?: AbortSignal
 ): Promise<GenerationResponse> {
+  const charge = await reserveGenerationCharge({ tenant, imageCount: input.count });
   const outputs = await mapWithConcurrency(
     Array.from({ length: input.count }, (_, index) => index),
     BATCH_CONCURRENCY,
@@ -98,6 +100,7 @@ export async function runTextToImageGeneration(
     },
     outputs
   );
+  await attachGenerationToCharge(charge.transactionId, record.id);
 
   return {
     record
@@ -110,6 +113,7 @@ export async function runReferenceImageGeneration(
   provider: ImageProvider,
   signal?: AbortSignal
 ): Promise<GenerationResponse> {
+  const charge = await reserveGenerationCharge({ tenant, imageCount: input.count });
   const outputs = await mapWithConcurrency(
     Array.from({ length: input.count }, (_, index) => index),
     BATCH_CONCURRENCY,
@@ -124,6 +128,7 @@ export async function runReferenceImageGeneration(
     },
     outputs
   );
+  await attachGenerationToCharge(charge.transactionId, record.id);
 
   return {
     record
