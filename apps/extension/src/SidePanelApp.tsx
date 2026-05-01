@@ -3,6 +3,7 @@ import {
   CheckCircle2,
   Clock3,
   Download,
+  Edit3,
   ImageIcon,
   KeyRound,
   Loader2,
@@ -11,8 +12,10 @@ import {
   Send,
   Settings,
   Sparkles,
+  Trash2,
   UserCircle2,
-  Wand2
+  Wand2,
+  X
 } from "lucide-react";
 import type { FormEvent } from "react";
 import { useEffect, useMemo, useState } from "react";
@@ -25,9 +28,12 @@ import {
   type EcommerceBatchGenerateResponse,
   type EcommerceGenerationMode,
   type EcommerceSceneTemplateId,
+  type GeneratedAsset,
   type GenerationRecord,
+  type GenerationResponse,
   type ImageQuality,
   type OutputFormat,
+  type ReferenceImageInput,
   type StylePresetId
 } from "@gpt-image-canvas/shared";
 import type { AuthUser, BatchFormState, BatchTask, ExtensionAuthState, ExtensionSettings, PageContext } from "./types";
@@ -76,6 +82,19 @@ interface EcommerceStatsSummary {
 
 interface RemoteState<T> {
   data: T;
+  error: string;
+  loading: boolean;
+}
+
+interface ResultImageItem {
+  key: string;
+  record: GenerationRecord;
+  asset: GeneratedAsset;
+}
+
+interface EditImageDialogState {
+  item: ResultImageItem;
+  prompt: string;
   error: string;
   loading: boolean;
 }
@@ -134,6 +153,8 @@ const styleOptions: Array<{ id: StylePresetId; label: string }> = [
   { id: "illustration", label: "精致插画" },
   { id: "none", label: "无风格" }
 ];
+
+const isApiAssetUrl = (url: string): boolean => url.startsWith("/api/assets/");
 
 function createClientId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -345,6 +366,9 @@ export function SidePanelApp() {
     error: "",
     loading: false
   });
+  const [hiddenResultKeys, setHiddenResultKeys] = useState<Set<string>>(() => new Set());
+  const [localResultRecords, setLocalResultRecords] = useState<GenerationRecord[]>([]);
+  const [editDialog, setEditDialog] = useState<EditImageDialogState | null>(null);
 
   const availableScenes = useMemo(
     () => ECOMMERCE_SCENE_TEMPLATES.filter((template) => template.mode === form.generationMode),
@@ -355,6 +379,19 @@ export function SidePanelApp() {
     () => availableScenes.filter((template) => form.sceneTemplateIds.includes(template.id)),
     [availableScenes, form.sceneTemplateIds]
   );
+
+  const resultImages = useMemo(() => {
+    const records = [...task.records, ...localResultRecords];
+    return records.flatMap((record) =>
+      record.outputs.flatMap((output) => {
+        if (!output.asset) {
+          return [];
+        }
+        const key = `${record.id}:${output.id}:${output.asset.id}`;
+        return hiddenResultKeys.has(key) ? [] : [{ key, record, asset: output.asset }];
+      })
+    );
+  }, [hiddenResultKeys, localResultRecords, task.records]);
 
   const previewPrompt = useMemo(() => {
     const firstScene = form.sceneTemplateIds[0];
@@ -460,12 +497,28 @@ export function SidePanelApp() {
   function authenticatedApiUrl(path: string, token = auth.token): string {
     const url = `${apiBaseUrl()}${path}`;
     const trimmedToken = token.trim();
-    if (!trimmedToken || !path.startsWith("/api/assets/")) {
+    if (!trimmedToken || !isApiAssetUrl(path)) {
       return url;
     }
 
     const separator = url.includes("?") ? "&" : "?";
     return `${url}${separator}token=${encodeURIComponent(trimmedToken)}`;
+  }
+
+  function assetPreviewUrl(asset: GeneratedAsset, width = 512): string {
+    if (!isApiAssetUrl(asset.url)) {
+      return asset.url;
+    }
+
+    return authenticatedApiUrl(`/api/assets/${encodeURIComponent(asset.id)}/preview?width=${width}`);
+  }
+
+  function assetDownloadUrl(asset: GeneratedAsset): string {
+    if (!isApiAssetUrl(asset.url)) {
+      return asset.url;
+    }
+
+    return authenticatedApiUrl(`/api/assets/${encodeURIComponent(asset.id)}/download`);
   }
 
   async function saveSettings(nextSettings: ExtensionSettings): Promise<void> {
@@ -507,6 +560,26 @@ export function SidePanelApp() {
       throw new Error(await response.text());
     }
     return response.json();
+  }
+
+  async function fetchAssetAsReferenceImage(asset: GeneratedAsset): Promise<ReferenceImageInput> {
+    const response = await fetch(assetDownloadUrl(asset));
+    if (!response.ok) {
+      throw new Error("原图读取失败，请稍后重试。");
+    }
+
+    const blob = await response.blob();
+    if (!blob.type.startsWith("image/")) {
+      throw new Error("原图资源不是可用图片。");
+    }
+    if (blob.size > 50 * 1024 * 1024) {
+      throw new Error("原图超过 50MB，无法作为参考图重新生成。");
+    }
+
+    return {
+      dataUrl: await blobToDataUrl(blob),
+      fileName: asset.fileName
+    };
   }
 
   async function refreshMe(token = auth.token, baseUrl = apiBaseUrl()): Promise<AuthUser | null> {
@@ -658,7 +731,76 @@ export function SidePanelApp() {
     void pollBatchJob(job.id);
   }
 
+  function hideResultImage(key: string): void {
+    setHiddenResultKeys((current) => {
+      const next = new Set(current);
+      next.add(key);
+      return next;
+    });
+  }
+
+  function openEditImageDialog(item: ResultImageItem): void {
+    setEditDialog({
+      item,
+      prompt: item.record.prompt,
+      error: "",
+      loading: false
+    });
+  }
+
+  async function submitEditImage(): Promise<void> {
+    if (!editDialog) {
+      return;
+    }
+    if (!auth.token.trim() && !requireAuth("generate")) {
+      return;
+    }
+
+    const prompt = editDialog.prompt.trim();
+    if (!prompt) {
+      setEditDialog({ ...editDialog, error: "请输入提示词。", loading: false });
+      return;
+    }
+
+    setEditDialog({ ...editDialog, error: "", loading: true });
+    try {
+      const referenceImage = await fetchAssetAsReferenceImage(editDialog.item.asset);
+      const response = await fetch(`${apiBaseUrl()}/api/images/edit`, {
+        method: "POST",
+        headers: apiHeaders(true),
+        body: JSON.stringify({
+          prompt,
+          presetId: editDialog.item.record.presetId || form.stylePresetId,
+          size: editDialog.item.record.size,
+          quality: editDialog.item.record.quality,
+          outputFormat: editDialog.item.record.outputFormat,
+          count: 1,
+          referenceImage
+        })
+      });
+      const body = (await parseResponseOrThrow(response)) as GenerationResponse;
+      setLocalResultRecords((current) => [...current, body.record]);
+      setTask((current) => ({
+        ...current,
+        message: "已根据修改后的提示词重新生成，并追加到当前结果列表。"
+      }));
+      setEditDialog(null);
+    } catch (error) {
+      setEditDialog((current) =>
+        current
+          ? {
+              ...current,
+              error: error instanceof Error ? error.message : "重新生成失败，请稍后重试。",
+              loading: false
+            }
+          : current
+      );
+    }
+  }
+
   function applyBatchJob(body: EcommerceBatchGenerateResponse, token = auth.token): void {
+    setHiddenResultKeys(new Set());
+    setLocalResultRecords([]);
     setTask({
       id: body.jobId,
       status: body.status,
@@ -765,6 +907,8 @@ export function SidePanelApp() {
     }
 
     const taskId = createClientId();
+    setHiddenResultKeys(new Set());
+    setLocalResultRecords([]);
     setTask({
       id: taskId,
       status: "running",
@@ -1015,22 +1159,78 @@ export function SidePanelApp() {
           {task.status === "succeeded" ? <CheckCircle2 size={16} /> : task.status === "running" ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
           {task.message}
         </div>
-        {task.records.map((record) => (
-          <article className="result-card" key={record.id}>
-            <div>
-              <p>{record.prompt}</p>
-              <span>{record.size.width} x {record.size.height} · {record.outputFormat}</span>
-            </div>
-            {record.outputs.flatMap((output) => output.asset ? [output.asset] : []).map((asset) => (
-              <a className="asset-link" href={authenticatedApiUrl(asset.url)} key={asset.id} target="_blank" rel="noreferrer">
-                <ImageIcon size={14} />
-                预览
-                <Download size={14} />
-              </a>
+        {resultImages.length > 0 ? (
+          <div className="result-grid">
+            {resultImages.map((item) => (
+              <article className="result-image-card" key={item.key}>
+                <a className="result-image-preview" href={assetDownloadUrl(item.asset)} target="_blank" rel="noreferrer">
+                  <img alt={item.record.prompt} height={item.asset.height} src={assetPreviewUrl(item.asset)} width={item.asset.width} />
+                </a>
+                <div className="result-image-meta">
+                  <span>{item.asset.width} x {item.asset.height} · {item.record.outputFormat}</span>
+                  <div className="result-actions">
+                    <a className="mini-button icon-mini" href={assetDownloadUrl(item.asset)} target="_blank" rel="noreferrer" title="预览">
+                      <ImageIcon size={13} />
+                    </a>
+                    <a className="mini-button icon-mini" href={assetDownloadUrl(item.asset)} target="_blank" rel="noreferrer" title="下载">
+                      <Download size={13} />
+                    </a>
+                    <button className="mini-button icon-mini" type="button" title="修改重新生成" onClick={() => openEditImageDialog(item)}>
+                      <Edit3 size={13} />
+                    </button>
+                    <button className="mini-button icon-mini danger-mini" type="button" title="从当前列表移除" onClick={() => hideResultImage(item.key)}>
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                </div>
+              </article>
             ))}
-          </article>
-        ))}
+          </div>
+        ) : (
+          <p className="result-empty">{task.status === "running" ? "图片生成中，完成后会显示在这里。" : "生成成功的图片会显示在这里。"}</p>
+        )}
       </section>
+
+      {editDialog ? (
+        <div className="edit-modal" role="dialog" aria-modal="true" aria-labelledby="edit-image-title">
+          <div className="edit-modal-card">
+            <div className="edit-modal-header">
+              <div>
+                <strong id="edit-image-title">修改提示词重新生成</strong>
+                <span>会以当前图片为参考生成一张新图，并追加到列表。</span>
+              </div>
+              <button className="mini-button icon-mini" disabled={editDialog.loading} type="button" onClick={() => setEditDialog(null)}>
+                <X size={14} />
+              </button>
+            </div>
+            <img
+              alt="当前参考图"
+              className="edit-modal-preview"
+              height={editDialog.item.asset.height}
+              src={assetPreviewUrl(editDialog.item.asset)}
+              width={editDialog.item.asset.width}
+            />
+            <label>
+              <span>提示词</span>
+              <textarea
+                rows={7}
+                value={editDialog.prompt}
+                onChange={(event) => setEditDialog({ ...editDialog, prompt: event.target.value, error: "" })}
+              />
+            </label>
+            {editDialog.error ? <p className="tool-error">{editDialog.error}</p> : null}
+            <div className="edit-modal-actions">
+              <button className="mini-button" disabled={editDialog.loading} type="button" onClick={() => setEditDialog(null)}>
+                取消
+              </button>
+              <button className="primary-button" disabled={editDialog.loading} type="button" onClick={() => void submitEditImage()}>
+                {editDialog.loading ? <Loader2 className="spin" size={15} /> : <Wand2 size={15} />}
+                重新生成
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <section className="tool-dock" aria-label="扩展工具">
         <div className="tool-tabs">
