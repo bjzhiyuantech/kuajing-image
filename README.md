@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-Local professional AI canvas built with tldraw, Hono, SQLite, and GPT Image 2. Version `v0.1.0` adds Tencent Cloud COS backup, PackyCode / `gpt-image` response compatibility, and workflow polish for generated assets.
+Local professional AI canvas built with tldraw, Hono, SQLite, and GPT Image 2. Version `v0.1.1` supports Alibaba Cloud OSS / Tencent Cloud COS backup, PackyCode / `gpt-image` response compatibility, and workflow polish for generated assets.
 
 ## Preview
 
@@ -12,7 +12,7 @@ Local professional AI canvas built with tldraw, Hono, SQLite, and GPT Image 2. V
 
 - AI canvas powered by tldraw with prompt-to-image and reference-image generation.
 - Local-first storage for generated images and project snapshots.
-- Optional Tencent Cloud COS backup for newly generated images.
+- Optional Alibaba Cloud OSS / Tencent Cloud COS backup for newly generated images.
 - Generation history with locate, rerun, download, and cloud upload status.
 - OpenAI-compatible image endpoint support, including PackyCode / `gpt-image` style responses.
 
@@ -88,7 +88,7 @@ For UI changes, have Codex run `pnpm dev` and verify the Vite app in a browser a
 
 Use the right-side AI panel to enter a prompt, choose a scene size, and generate. When one image shape is selected on the canvas, the generate button switches to reference-image generation. The canvas autosaves to the local API after edits, and recent generation history provides locate, rerun, and download actions for stored outputs.
 
-The AI panel also includes a cloud storage button. Enable COS there when you want new generated images to be written locally and uploaded to COS.
+The AI panel also includes a cloud storage button. Enable OSS or COS there when you want new generated images to be written locally and uploaded to cloud storage.
 
 Before completing changes, run:
 
@@ -147,13 +147,19 @@ NODE_IMAGE=node:22-bookworm-slim docker compose up --build
 
 `OPENAI_API_KEY` may be left empty for local boot checks. The app still starts, and generation endpoints return a missing-key JSON error until credentials are configured.
 
-## Tencent Cloud COS Backup
+## Cloud Storage Backup
 
-Generated images are always saved locally first. When COS is enabled from the in-app cloud storage dialog, new generated images are also uploaded to:
+Generated images are always saved locally first. When OSS or COS is enabled from the in-app cloud storage dialog, new generated images are also uploaded to:
 
 ```text
 <key-prefix>/YYYY/MM/<assetId>.<ext>
 ```
+
+The default OSS form values are read from `.env`:
+
+- `OSS_DEFAULT_BUCKET`
+- `OSS_DEFAULT_REGION`
+- `OSS_DEFAULT_KEY_PREFIX`
 
 The default COS form values are read from `.env`:
 
@@ -161,7 +167,7 @@ The default COS form values are read from `.env`:
 - `COS_DEFAULT_REGION`
 - `COS_DEFAULT_KEY_PREFIX`
 
-Saving COS settings performs a test upload and delete before persisting the configuration. `SecretKey` is stored in the local SQLite database because the app has no server-side account system yet, but GET responses only return a masked secret indicator.
+Saving OSS / COS settings performs a test upload and delete before persisting the configuration. AccessKey Secret / SecretKey values are stored in the local database because the app has no server-side account system yet, but GET responses only return a masked secret indicator.
 
 Cloud upload failures do not fail image generation. The asset remains available locally, and the UI marks the history item with the cloud backup failure.
 
@@ -169,7 +175,7 @@ Cloud upload failures do not fail image generation. The asset remains available 
 
 Runtime state is stored under `DATA_DIR`, which defaults to `./data` locally and `/app/data` in Docker. The directory contains:
 
-- `gpt-image-canvas.sqlite` for the default project, generation history, asset metadata, cloud upload metadata, and optional COS settings.
+- `gpt-image-canvas.sqlite` for the default project, generation history, asset metadata, cloud upload metadata, and optional cloud storage settings.
 - `assets/` for generated image files.
 
 The Docker Compose workflow bind-mounts host `./data` to `/app/data`, so projects and generated assets survive container rebuilds. Do not commit `.env`, `data/`, generated images, SQLite files, or build output.
@@ -177,7 +183,7 @@ The Docker Compose workflow bind-mounts host `./data` to `/app/data`, so project
 ## Security / Privacy Notes
 
 - Secrets are read only from `.env` or runtime environment variables. Never commit `.env`, expanded Docker Compose config output, shell history containing keys, or logs that include secret values.
-- COS SecretKey values saved from the UI are stored locally in SQLite and are masked by the settings API. Treat `data/gpt-image-canvas.sqlite` as sensitive when COS is configured.
+- OSS AccessKey Secret / COS SecretKey values saved from the UI are stored locally and are masked by the settings API. Treat runtime data as sensitive when cloud storage is configured.
 - Prompts, project state, generated assets, and SQLite data are local runtime data under `DATA_DIR`. Treat `data/` as private unless you intentionally export specific assets.
 - Before publishing a branch, check `git status --short` and confirm only source, docs, and intended metadata are staged. `.env`, `.ralph/`, `.codex-temp/`, `data/`, generated images, SQLite databases, and build output should stay untracked.
 - If a real API key was ever committed, rotate that key first. Git ignore rules prevent future leaks, but they do not remove secrets from existing Git history.

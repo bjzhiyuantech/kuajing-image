@@ -20,15 +20,16 @@ import {
   type ProviderImage
 } from "./image-provider.js";
 import {
+  type CloudAssetLocation,
   CosAssetStorageAdapter,
   LocalAssetStorageAdapter,
-  buildCosObjectKey,
+  OssAssetStorageAdapter,
+  buildCloudObjectKey,
   storageErrorMessage,
-  type CosAssetLocation
 } from "./asset-storage.js";
 import { runtimePaths } from "./runtime.js";
 import { assets, generationOutputs, generationRecords } from "./schema.js";
-import { getActiveCosStorageConfig } from "./storage-config.js";
+import { getActiveStorageConfig } from "./storage-config.js";
 
 const BATCH_CONCURRENCY = 2;
 const localAssetStorage = new LocalAssetStorageAdapter();
@@ -38,7 +39,7 @@ interface StoredAssetFile {
   fileName: string;
   filePath: string;
   mimeType: string;
-  cloud?: CosAssetLocation;
+  cloud?: CloudAssetLocation & { provider: "cos" | "oss" };
 }
 
 interface BatchOutputResult {
@@ -55,7 +56,7 @@ interface SavedProviderImage {
 }
 
 interface AssetCloudStorageRecord {
-  provider: "cos";
+  provider: "cos" | "oss";
   bucket: string;
   region: string;
   objectKey: string;
@@ -149,7 +150,7 @@ export async function getStoredAssetFile(tenant: RequestTenant, assetId: string)
     fileName: asset.fileName,
     filePath,
     mimeType: asset.mimeType,
-    cloud: toCosAssetLocation(asset)
+    cloud: toCloudAssetLocation(asset)
   };
 }
 
@@ -419,13 +420,15 @@ async function saveAssetToConfiguredCloud(tenant: RequestTenant, input: {
   mimeType: string;
   createdAt: string;
 }): Promise<AssetCloudStorageRecord | undefined> {
-  const config = await getActiveCosStorageConfig(tenant);
-  if (!config) {
+  const activeStorage = await getActiveStorageConfig(tenant);
+  if (!activeStorage) {
     return undefined;
   }
 
-  const objectKey = buildCosObjectKey(config.keyPrefix, input.fileName, input.createdAt);
-  const adapter = new CosAssetStorageAdapter(config);
+  const config = activeStorage.config;
+  const objectKey = buildCloudObjectKey(config.keyPrefix, input.fileName, input.createdAt);
+  const adapter =
+    activeStorage.provider === "cos" ? new CosAssetStorageAdapter(activeStorage.config) : new OssAssetStorageAdapter(activeStorage.config);
 
   try {
     const result = await adapter.putObject({
@@ -435,7 +438,7 @@ async function saveAssetToConfiguredCloud(tenant: RequestTenant, input: {
     });
 
     return {
-      provider: "cos",
+      provider: activeStorage.provider,
       bucket: config.bucket,
       region: config.region,
       objectKey,
@@ -446,7 +449,7 @@ async function saveAssetToConfiguredCloud(tenant: RequestTenant, input: {
     };
   } catch (error) {
     return {
-      provider: "cos",
+      provider: activeStorage.provider,
       bucket: config.bucket,
       region: config.region,
       objectKey,
@@ -456,22 +459,24 @@ async function saveAssetToConfiguredCloud(tenant: RequestTenant, input: {
   }
 }
 
-async function readCloudAsset(tenant: RequestTenant, location: CosAssetLocation | undefined): Promise<Buffer | undefined> {
-  const config = await getActiveCosStorageConfig(tenant);
-  if (!location || !config) {
+async function readCloudAsset(tenant: RequestTenant, location: (CloudAssetLocation & { provider: "cos" | "oss" }) | undefined): Promise<Buffer | undefined> {
+  const activeStorage = await getActiveStorageConfig(tenant);
+  if (!location || !activeStorage || activeStorage.provider !== location.provider) {
     return undefined;
   }
 
   try {
-    return await new CosAssetStorageAdapter(config).getObject(location);
+    return activeStorage.provider === "cos"
+      ? await new CosAssetStorageAdapter(activeStorage.config).getObject(location)
+      : await new OssAssetStorageAdapter(activeStorage.config).getObject(location);
   } catch {
     return undefined;
   }
 }
 
-function toCosAssetLocation(asset: typeof assets.$inferSelect): CosAssetLocation | undefined {
+function toCloudAssetLocation(asset: typeof assets.$inferSelect): (CloudAssetLocation & { provider: "cos" | "oss" }) | undefined {
   if (
-    asset.cloudProvider !== "cos" ||
+    (asset.cloudProvider !== "cos" && asset.cloudProvider !== "oss") ||
     asset.cloudStatus !== "uploaded" ||
     !asset.cloudBucket ||
     !asset.cloudRegion ||
@@ -481,6 +486,7 @@ function toCosAssetLocation(asset: typeof assets.$inferSelect): CosAssetLocation
   }
 
   return {
+    provider: asset.cloudProvider,
     bucket: asset.cloudBucket,
     region: asset.cloudRegion,
     key: asset.cloudObjectKey

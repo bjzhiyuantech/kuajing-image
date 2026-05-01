@@ -46,6 +46,7 @@ import {
   STYLE_PRESETS,
   validateImageSize,
   type GalleryImageItem,
+  type CloudStorageProvider,
   type GenerationCount,
   type GenerationRecord,
   type GenerationResponse,
@@ -84,6 +85,17 @@ const TLDRAW_LICENSE_KEY =
 
 const defaultStorageConfigForm: StorageConfigFormState = {
   enabled: false,
+  provider: "oss",
+  secretId: "",
+  secretKey: "",
+  bucket: "",
+  region: "oss-cn-hangzhou",
+  keyPrefix: "gpt-image-canvas/assets"
+};
+
+const defaultCosStorageConfigForm: StorageConfigFormState = {
+  enabled: false,
+  provider: "cos",
   secretId: "",
   secretKey: "",
   bucket: "source-1253253332",
@@ -191,6 +203,7 @@ interface ActiveGenerationTask {
 
 interface StorageConfigFormState {
   enabled: boolean;
+  provider: CloudStorageProvider;
   secretId: string;
   secretKey: string;
   bucket: string;
@@ -1057,8 +1070,21 @@ function storageConfigToForm(config: StorageConfigResponse | null): StorageConfi
     return defaultStorageConfigForm;
   }
 
+  if (config.provider === "oss") {
+    return {
+      enabled: config.enabled,
+      provider: "oss",
+      secretId: config.oss.accessKeyId,
+      secretKey: config.oss.accessKeySecret.value ?? "",
+      bucket: config.oss.bucket,
+      region: config.oss.region,
+      keyPrefix: config.oss.keyPrefix
+    };
+  }
+
   return {
     enabled: config.enabled,
+    provider: "cos",
     secretId: config.cos.secretId,
     secretKey: config.cos.secretKey.value ?? "",
     bucket: config.cos.bucket,
@@ -1071,6 +1097,21 @@ function storageConfigRequestBody(
   form: StorageConfigFormState,
   options: { preserveSecret: boolean; forceEnabled?: boolean }
 ): SaveStorageConfigRequest {
+  if (form.provider === "oss") {
+    return {
+      enabled: options.forceEnabled ?? form.enabled,
+      provider: "oss",
+      oss: {
+        accessKeyId: form.secretId.trim(),
+        accessKeySecret: options.preserveSecret ? undefined : form.secretKey,
+        preserveSecret: options.preserveSecret,
+        bucket: form.bucket.trim(),
+        region: form.region.trim(),
+        keyPrefix: form.keyPrefix.trim()
+      }
+    };
+  }
+
   return {
     enabled: options.forceEnabled ?? form.enabled,
     provider: "cos",
@@ -1083,6 +1124,14 @@ function storageConfigRequestBody(
       keyPrefix: form.keyPrefix.trim()
     }
   };
+}
+
+function storageFormSecretHasSavedValue(config: StorageConfigResponse | null, form: StorageConfigFormState): boolean {
+  if (!config || config.provider !== form.provider) {
+    return false;
+  }
+
+  return form.provider === "oss" ? config.oss.accessKeySecret.hasSecret : config.cos.secretKey.hasSecret;
 }
 
 function requestGenerationNotificationPermission(): void {
@@ -1495,6 +1544,18 @@ export function App() {
     setStorageMessage("");
   }
 
+  function updateStorageProvider(provider: CloudStorageProvider): void {
+    const nextDefaults = provider === "oss" ? defaultStorageConfigForm : defaultCosStorageConfigForm;
+    setStorageForm((current) => ({
+      ...nextDefaults,
+      enabled: current.enabled,
+      provider
+    }));
+    setStorageSecretTouched(false);
+    setStorageError("");
+    setStorageMessage("");
+  }
+
   async function testStorageSettings(): Promise<void> {
     setIsStorageTesting(true);
     setStorageError("");
@@ -1508,7 +1569,7 @@ export function App() {
         },
         body: JSON.stringify(
           storageConfigRequestBody(storageForm, {
-            preserveSecret: !storageSecretTouched && Boolean(storageConfig?.cos.secretKey.hasSecret),
+            preserveSecret: !storageSecretTouched && storageFormSecretHasSavedValue(storageConfig, storageForm),
             forceEnabled: true
           })
         )
@@ -1545,7 +1606,7 @@ export function App() {
         },
         body: JSON.stringify(
           storageConfigRequestBody(storageForm, {
-            preserveSecret: !storageSecretTouched && Boolean(storageConfig?.cos.secretKey.hasSecret)
+            preserveSecret: !storageSecretTouched && storageFormSecretHasSavedValue(storageConfig, storageForm)
           })
         )
       });
@@ -2674,7 +2735,7 @@ export function App() {
                 <h2 className="text-base font-semibold text-neutral-950" id="storage-dialog-title">
                   云存储设置
                 </h2>
-                <p className="mt-1 text-xs leading-5 text-neutral-500">腾讯云 COS，生成图本地保存后同步上传。</p>
+                <p className="mt-1 text-xs leading-5 text-neutral-500">支持阿里云 OSS / 腾讯云 COS，生成图本地保存后同步上传。</p>
               </div>
               <button
                 aria-label="关闭云存储设置"
@@ -2700,7 +2761,7 @@ export function App() {
 
               <label className="flex items-center justify-between gap-3 rounded-md border border-neutral-200 px-3 py-3">
                 <span className="min-w-0">
-                  <span className="block text-sm font-semibold text-neutral-900">启用 COS 双写</span>
+                  <span className="block text-sm font-semibold text-neutral-900">启用云存储双写</span>
                   <span className="mt-0.5 block text-xs leading-5 text-neutral-500">关闭后新图只写本地，已有云端对象保留。</span>
                 </span>
                 <input
@@ -2716,7 +2777,21 @@ export function App() {
 
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <label className="block sm:col-span-2">
-                  <span className="control-label">SecretId</span>
+                  <span className="control-label">Provider</span>
+                  <select
+                    className="field-control"
+                    data-testid="storage-provider"
+                    id="storage-provider"
+                    name="storageProvider"
+                    value={storageForm.provider}
+                    onChange={(event) => updateStorageProvider(event.target.value === "cos" ? "cos" : "oss")}
+                  >
+                    <option value="oss">阿里云 OSS</option>
+                    <option value="cos">腾讯云 COS</option>
+                  </select>
+                </label>
+                <label className="block sm:col-span-2">
+                  <span className="control-label">{storageForm.provider === "oss" ? "AccessKey ID" : "SecretId"}</span>
                   <input
                     className="field-control"
                     data-testid="storage-secret-id"
@@ -2727,7 +2802,7 @@ export function App() {
                   />
                 </label>
                 <label className="block sm:col-span-2">
-                  <span className="control-label">SecretKey</span>
+                  <span className="control-label">{storageForm.provider === "oss" ? "AccessKey Secret" : "SecretKey"}</span>
                   <input
                     className="field-control"
                     data-testid="storage-secret-key"

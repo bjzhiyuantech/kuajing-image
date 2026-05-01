@@ -15,6 +15,7 @@
   "dependencies": {
     "@gpt-image-canvas/shared": "workspace:^",
     "@hono/node-server": "^2.0.0",
+    "ali-oss": "^6.23.0",
     "cos-nodejs-sdk-v5": "^2.15.4",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",

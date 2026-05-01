@@ -6,7 +6,7 @@ export type ImageQuality = "auto" | "low" | "medium" | "high";
 export type OutputFormat = "png" | "jpeg" | "webp";
 export type GenerationStatus = "pending" | "running" | "succeeded" | "partial" | "failed" | "cancelled";
 export type OutputStatus = "succeeded" | "failed";
-export type CloudStorageProvider = "cos";
+export type CloudStorageProvider = "cos" | "oss";
 export type AssetCloudUploadStatus = "uploaded" | "failed";
 export type EcommercePlatform = "amazon" | "shopify" | "tiktok-shop" | "temu" | "shein" | "etsy" | "aliexpress" | "other";
 export type EcommerceMarket = "us" | "uk" | "eu" | "ca" | "au" | "jp" | "kr" | "sg" | "mx" | "br" | "global";
@@ -384,10 +384,19 @@ export interface CosStorageConfigView {
   keyPrefix: string;
 }
 
+export interface OssStorageConfigView {
+  accessKeyId: string;
+  accessKeySecret: MaskedSecret;
+  bucket: string;
+  region: string;
+  keyPrefix: string;
+}
+
 export interface StorageConfigResponse {
   enabled: boolean;
   provider: CloudStorageProvider;
   cos: CosStorageConfigView;
+  oss: OssStorageConfigView;
 }
 
 export interface SaveCosStorageConfig {
@@ -399,10 +408,20 @@ export interface SaveCosStorageConfig {
   keyPrefix: string;
 }
 
+export interface SaveOssStorageConfig {
+  accessKeyId: string;
+  accessKeySecret?: string;
+  preserveSecret?: boolean;
+  bucket: string;
+  region: string;
+  keyPrefix: string;
+}
+
 export interface SaveStorageConfigRequest {
   enabled: boolean;
   provider: CloudStorageProvider;
   cos?: SaveCosStorageConfig;
+  oss?: SaveOssStorageConfig;
 }
 
 export interface StorageTestResult {

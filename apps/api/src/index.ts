@@ -479,22 +479,47 @@ function parseStorageConfigPayload(input: unknown): ParseResult<SaveStorageConfi
     };
   }
 
+  const provider = parseOptionalString(input.provider) ?? "cos";
+  if (provider !== "cos" && provider !== "oss") {
+    return {
+      ok: false,
+      error: errorResponse("invalid_storage_provider", "Only Tencent COS and Alibaba Cloud OSS storage are supported.")
+    };
+  }
+
   const enabled = input.enabled === true;
   if (!enabled) {
     return {
       ok: true,
       value: {
         enabled: false,
-        provider: "cos"
+        provider
       }
     };
   }
 
-  const provider = parseOptionalString(input.provider) ?? "cos";
-  if (provider !== "cos") {
+  if (provider === "oss") {
+    if (!isRecord(input.oss)) {
+      return {
+        ok: false,
+        error: errorResponse("invalid_storage_config", "OSS config must be a JSON object.")
+      };
+    }
+
     return {
-      ok: false,
-      error: errorResponse("invalid_storage_provider", "Only Tencent COS storage is supported.")
+      ok: true,
+      value: {
+        enabled: true,
+        provider: "oss",
+        oss: {
+          accessKeyId: stringValue(input.oss.accessKeyId) ?? "",
+          accessKeySecret: stringValue(input.oss.accessKeySecret),
+          preserveSecret: input.oss.preserveSecret === true,
+          bucket: stringValue(input.oss.bucket) ?? "",
+          region: stringValue(input.oss.region) ?? "",
+          keyPrefix: stringValue(input.oss.keyPrefix) ?? ""
+        }
+      }
     };
   }
 
