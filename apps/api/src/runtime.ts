@@ -48,6 +48,11 @@ export const mysqlConfig = {
   database: emptyToUndefined(process.env.MYSQL_DATABASE) ?? "gpt_image_canvas"
 };
 
+export const authConfig = {
+  appApiToken: emptyToUndefined(process.env.APP_API_TOKEN),
+  adminApiToken: emptyToUndefined(process.env.ADMIN_API_TOKEN)
+};
+
 export function ensureRuntimeStorage(): void {
   mkdirSync(runtimePaths.dataDir, { recursive: true });
   mkdirSync(runtimePaths.assetsDir, { recursive: true });

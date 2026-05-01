@@ -19,6 +19,8 @@ import {
   type AppConfig,
   type EcommerceBatchGenerateRequest,
   type EcommerceBatchGenerateResponse,
+  type EcommerceJobListResponse,
+  type EcommerceStatsResponse,
   type EcommerceMarket,
   type EcommercePlatform,
   type EcommerceProductBrief,
@@ -42,13 +44,19 @@ import {
   type OpenAIImageProviderConfig
 } from "./image-provider.js";
 import { getStoredAssetFile, readStoredAsset, runReferenceImageGeneration, runTextToImageGeneration } from "./image-generation.js";
+import {
+  createEcommerceBatchJob,
+  getEcommerceBatchJob,
+  getEcommerceStats,
+  listEcommerceBatchJobs,
+  updateEcommerceBatchJob
+} from "./ecommerce-jobs.js";
 import { deleteGalleryOutput, getGalleryImages, getProjectState, saveProjectSnapshot } from "./project-store.js";
-import { runtimePaths, serverConfig } from "./runtime.js";
+import { authConfig, runtimePaths, serverConfig } from "./runtime.js";
 import { getStorageConfig, saveStorageConfig, testStorageConfig } from "./storage-config.js";
 
 const MAX_PROJECT_SNAPSHOT_BYTES = 100 * 1024 * 1024;
 const MAX_PROJECT_NAME_LENGTH = 120;
-const ECOMMERCE_BATCH_JOB_TTL_MS = 24 * 60 * 60 * 1000;
 
 interface ProjectPayload {
   name?: string;
@@ -71,17 +79,12 @@ interface EcommerceBatchJob {
   tenant: RequestTenant;
   input: ResolvedEcommerceBatchGenerateRequest;
   providerConfig: OpenAIImageProviderConfig;
-  status: EcommerceBatchGenerateResponse["status"];
-  message: string;
   totalScenes: number;
   completedScenes: number;
   records: EcommerceBatchGenerateResponse["records"];
-  createdAt: string;
-  updatedAt: string;
-  completedAt?: string;
 }
 
-const ecommerceBatchJobs = new Map<string, EcommerceBatchJob>();
+const runningEcommerceBatchJobs = new Map<string, EcommerceBatchJob>();
 
 export const app = new Hono();
 
@@ -134,9 +137,21 @@ app.delete("/api/gallery/:outputId", async (c) => {
   });
 });
 
-app.get("/api/storage/config", async (c) => c.json(await getStorageConfig(await requestTenant(c))));
+app.get("/api/storage/config", async (c) => {
+  const unauthorized = requireConfiguredApiToken(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return c.json(await getStorageConfig(await requestTenant(c)));
+});
 
 app.put("/api/storage/config", async (c) => {
+  const unauthorized = requireConfiguredApiToken(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
   const payload = await readJson(c.req.raw);
   if (!payload.ok) {
     return c.json(payload.error, 400);
@@ -155,6 +170,11 @@ app.put("/api/storage/config", async (c) => {
 });
 
 app.post("/api/storage/config/test", async (c) => {
+  const unauthorized = requireConfiguredApiToken(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
   const payload = await readJson(c.req.raw);
   if (!payload.ok) {
     return c.json(payload.error, 400);
@@ -294,7 +314,11 @@ app.post("/api/images/edit", async (c) => {
 });
 
 app.post("/api/ecommerce/images/batch-generate", async (c) => {
-  cleanupEcommerceBatchJobs();
+  const unauthorized = requireConfiguredApiToken(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
   const payload = await readJson(c.req.raw);
   if (!payload.ok) {
     return c.json(payload.error, 400);
@@ -317,114 +341,145 @@ app.post("/api/ecommerce/images/batch-generate", async (c) => {
     tenant,
     input: parsed.value,
     providerConfig: providerConfig.config,
-    status: "pending",
-    message: "批量任务已创建，服务端正在排队生成。",
     totalScenes: parsed.value.sceneTemplateIds.length,
     completedScenes: 0,
-    records: [],
-    createdAt: now,
-    updatedAt: now
+    records: []
   };
 
-  ecommerceBatchJobs.set(job.jobId, job);
+  const response = await createEcommerceBatchJob({
+    jobId: job.jobId,
+    tenant,
+    input: parsed.value,
+    message: "批量任务已创建，服务端正在排队生成。",
+    now
+  });
+  runningEcommerceBatchJobs.set(job.jobId, job);
   void runEcommerceBatchJob(job.jobId);
 
-  return c.json(toEcommerceBatchJobResponse(job), 202);
+  return c.json(response, 202);
 });
 
 app.get("/api/ecommerce/images/batch-generate/:jobId", async (c) => {
-  cleanupEcommerceBatchJobs();
-  const tenant = await requestTenant(c);
-  const job = ecommerceBatchJobs.get(c.req.param("jobId"));
-  if (!job || job.tenant.workspaceId !== tenant.workspaceId || job.tenant.userId !== tenant.userId) {
-    return c.json(errorResponse("not_found", "批量生成任务不存在或已过期。"), 404);
+  const unauthorized = requireConfiguredApiToken(c);
+  if (unauthorized) {
+    return unauthorized;
   }
 
-  return c.json(toEcommerceBatchJobResponse(job));
+  const tenant = await requestTenant(c);
+  const job = await getEcommerceBatchJob(tenant, c.req.param("jobId"));
+  if (!job) {
+    return c.json(errorResponse("not_found", "批量生成任务不存在。"), 404);
+  }
+
+  return c.json(job);
+});
+
+app.get("/api/ecommerce/jobs", async (c) => {
+  const unauthorized = requireConfiguredApiToken(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const response: EcommerceJobListResponse = await listEcommerceBatchJobs(await requestTenant(c), parseListLimit(c.req.query("limit")));
+  return c.json(response);
+});
+
+app.get("/api/ecommerce/jobs/:jobId", async (c) => {
+  const unauthorized = requireConfiguredApiToken(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const job = await getEcommerceBatchJob(await requestTenant(c), c.req.param("jobId"));
+  if (!job) {
+    return c.json(errorResponse("not_found", "批量生成任务不存在。"), 404);
+  }
+
+  return c.json(job);
+});
+
+app.get("/api/ecommerce/stats", async (c) => {
+  const unauthorized = requireConfiguredApiToken(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const response: EcommerceStatsResponse = await getEcommerceStats(await requestTenant(c));
+  return c.json(response);
 });
 
 async function runEcommerceBatchJob(jobId: string): Promise<void> {
-  const job = ecommerceBatchJobs.get(jobId);
+  const job = runningEcommerceBatchJobs.get(jobId);
   if (!job) {
     return;
   }
 
-  updateEcommerceBatchJob(job, {
-    status: "running",
-    message: "服务端正在并行生成场景，页面可以离开后稍晚回来查看。"
-  });
+  try {
+    await updateEcommerceBatchJob(job.tenant, job.jobId, {
+      status: "running",
+      message: "服务端正在并行生成场景，页面可以离开后稍晚回来查看。"
+    });
 
-  const provider = createOpenAIImageProvider(job.providerConfig);
-  const records = new Array<EcommerceBatchGenerateResponse["records"][number] | undefined>(job.input.sceneTemplateIds.length);
+    const provider = createOpenAIImageProvider(job.providerConfig);
+    const records = new Array<EcommerceBatchGenerateResponse["records"][number] | undefined>(job.input.sceneTemplateIds.length);
 
-  await Promise.all(
-    job.input.sceneTemplateIds.map(async (sceneTemplateId, index) => {
-      try {
-        const prompt = composeEcommercePrompt({
-          product: job.input.product,
-          platform: job.input.platform,
-          market: job.input.market,
-          sceneTemplateId,
-          extraDirection: job.input.extraDirection
-        });
-        const generationInput = {
-          originalPrompt: prompt,
-          presetId: job.input.stylePresetId ?? "product",
-          prompt: composePrompt(prompt, job.input.stylePresetId ?? "product"),
-          size: job.input.size,
-          sizeApiValue: `${job.input.size.width}x${job.input.size.height}`,
-          quality: job.input.quality ?? "auto",
-          outputFormat: job.input.outputFormat ?? "png",
-          count: job.input.countPerScene ?? 1
-        };
-        const response = job.input.referenceImage
-          ? await runReferenceImageGeneration(job.tenant, { ...generationInput, referenceImage: job.input.referenceImage }, provider)
-          : await runTextToImageGeneration(job.tenant, generationInput, provider);
-        records[index] = response.record;
-      } catch (error) {
-        records[index] = failedEcommerceSceneRecord(job.input, sceneTemplateId, errorToMessage(error));
-      } finally {
-        job.completedScenes += 1;
-        job.records = records.flatMap((record) => (record ? [record] : []));
-        const failedCount = job.records.filter((record) => record.status === "failed").length;
-        updateEcommerceBatchJob(job, {
-          status: "running",
-          message: `服务端正在并行生成：${job.completedScenes}/${job.totalScenes} 个场景完成，${failedCount} 个失败。`
-        });
-      }
-    })
-  );
+    await Promise.all(
+      job.input.sceneTemplateIds.map(async (sceneTemplateId, index) => {
+        try {
+          const prompt = composeEcommercePrompt({
+            product: job.input.product,
+            platform: job.input.platform,
+            market: job.input.market,
+            sceneTemplateId,
+            extraDirection: job.input.extraDirection
+          });
+          const generationInput = {
+            originalPrompt: prompt,
+            presetId: job.input.stylePresetId ?? "product",
+            prompt: composePrompt(prompt, job.input.stylePresetId ?? "product"),
+            size: job.input.size,
+            sizeApiValue: `${job.input.size.width}x${job.input.size.height}`,
+            quality: job.input.quality ?? "auto",
+            outputFormat: job.input.outputFormat ?? "png",
+            count: job.input.countPerScene ?? 1
+          };
+          const response = job.input.referenceImage
+            ? await runReferenceImageGeneration(job.tenant, { ...generationInput, referenceImage: job.input.referenceImage }, provider)
+            : await runTextToImageGeneration(job.tenant, generationInput, provider);
+          records[index] = response.record;
+        } catch (error) {
+          records[index] = failedEcommerceSceneRecord(job.input, sceneTemplateId, errorToMessage(error));
+        } finally {
+          job.completedScenes += 1;
+          job.records = records.flatMap((record) => (record ? [record] : []));
+          const failedCount = job.records.filter((record) => record.status === "failed").length;
+          await updateEcommerceBatchJob(job.tenant, job.jobId, {
+            status: "running",
+            message: `服务端正在并行生成：${job.completedScenes}/${job.totalScenes} 个场景完成，${failedCount} 个失败。`,
+            completedScenes: job.completedScenes,
+            records: job.records
+          });
+        }
+      })
+    );
 
-  const failedCount = job.records.filter((record) => record.status === "failed").length;
-  const succeededCount = job.records.length - failedCount;
-  updateEcommerceBatchJob(job, {
-    status: succeededCount > 0 && failedCount > 0 ? "partial" : succeededCount > 0 ? "succeeded" : "failed",
-    message:
-      succeededCount > 0 && failedCount > 0
-        ? `批量生成部分完成：${succeededCount} 个场景成功，${failedCount} 个失败。`
-        : succeededCount > 0
-          ? `批量生成完成：${succeededCount} 个场景成功。`
-          : "批量生成失败，请检查上游图像接口或稍后重试。",
-    completedAt: new Date().toISOString()
-  });
-}
-
-function updateEcommerceBatchJob(job: EcommerceBatchJob, patch: Partial<Pick<EcommerceBatchJob, "status" | "message" | "completedAt">>): void {
-  Object.assign(job, patch, { updatedAt: new Date().toISOString() });
-}
-
-function toEcommerceBatchJobResponse(job: EcommerceBatchJob): EcommerceBatchGenerateResponse {
-  return {
-    jobId: job.jobId,
-    status: job.status,
-    message: job.message,
-    totalScenes: job.totalScenes,
-    completedScenes: job.completedScenes,
-    createdAt: job.createdAt,
-    updatedAt: job.updatedAt,
-    completedAt: job.completedAt,
-    records: job.records
-  };
+    const failedCount = job.records.filter((record) => record.status === "failed").length;
+    const succeededCount = job.records.length - failedCount;
+    await updateEcommerceBatchJob(job.tenant, job.jobId, {
+      status: succeededCount > 0 && failedCount > 0 ? "partial" : succeededCount > 0 ? "succeeded" : "failed",
+      message:
+        succeededCount > 0 && failedCount > 0
+          ? `批量生成部分完成：${succeededCount} 个场景成功，${failedCount} 个失败。`
+          : succeededCount > 0
+            ? `批量生成完成：${succeededCount} 个场景成功。`
+            : "批量生成失败，请检查上游图像接口或稍后重试。",
+      completedScenes: job.completedScenes,
+      records: job.records,
+      completedAt: new Date().toISOString()
+    });
+  } finally {
+    runningEcommerceBatchJobs.delete(jobId);
+  }
 }
 
 function failedEcommerceSceneRecord(
@@ -460,15 +515,6 @@ function failedEcommerceSceneRecord(
       }
     ]
   };
-}
-
-function cleanupEcommerceBatchJobs(): void {
-  const now = Date.now();
-  for (const [jobId, job] of ecommerceBatchJobs) {
-    if (now - Date.parse(job.updatedAt) > ECOMMERCE_BATCH_JOB_TTL_MS) {
-      ecommerceBatchJobs.delete(jobId);
-    }
-  }
 }
 
 const webDistRoot = relative(process.cwd(), runtimePaths.webDistDir) || ".";
@@ -559,6 +605,30 @@ async function requestTenant(c: Context): Promise<RequestTenant> {
   const tenant = resolveRequestTenant(c.req.raw.headers);
   await ensureTenant(tenant);
   return tenant;
+}
+
+function requireConfiguredApiToken(c: Context) {
+  const acceptedTokens = [authConfig.appApiToken, authConfig.adminApiToken].filter(
+    (token): token is string => typeof token === "string" && token.length > 0
+  );
+  if (acceptedTokens.length === 0) {
+    return undefined;
+  }
+
+  const authorization = c.req.raw.headers.get("authorization") ?? "";
+  const match = /^Bearer\s+(.+)$/iu.exec(authorization);
+  const token = match?.[1]?.trim();
+
+  if (token && acceptedTokens.includes(token)) {
+    return undefined;
+  }
+
+  return c.json(errorResponse("unauthorized", "请使用 Authorization: Bearer <token> 访问该接口。"), 401);
+}
+
+function parseListLimit(value: string | undefined): number {
+  const parsed = Number.parseInt(value ?? "50", 10);
+  return Number.isInteger(parsed) ? Math.max(1, Math.min(parsed, 100)) : 50;
 }
 
 function parseGeneratePayload(input: unknown): ParseResult<ImageProviderInput> {

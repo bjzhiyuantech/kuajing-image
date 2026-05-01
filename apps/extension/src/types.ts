@@ -15,6 +15,7 @@ import type {
 
 export interface ExtensionSettings {
   apiBaseUrl: string;
+  apiToken: string;
   userId: string;
   workspaceId: string;
 }

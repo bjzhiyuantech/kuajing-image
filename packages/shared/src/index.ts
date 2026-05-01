@@ -495,6 +495,40 @@ export interface EcommerceBatchGenerateResponse {
   records: GenerationRecord[];
 }
 
+export interface EcommerceJobSummary {
+  jobId: string;
+  status: EcommerceBatchJobStatus;
+  message: string;
+  productTitle: string;
+  platform: EcommercePlatform;
+  market: EcommerceMarket;
+  totalScenes: number;
+  completedScenes: number;
+  succeededScenes: number;
+  failedScenes: number;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+}
+
+export interface EcommerceJobListResponse {
+  jobs: EcommerceJobSummary[];
+}
+
+export interface EcommerceStatsResponse {
+  totalJobs: number;
+  pendingJobs: number;
+  runningJobs: number;
+  succeededJobs: number;
+  partialJobs: number;
+  failedJobs: number;
+  totalScenes: number;
+  completedScenes: number;
+  succeededScenes: number;
+  failedScenes: number;
+  generatedImages: number;
+}
+
 export function composePrompt(prompt: string, presetId: string): string {
   const trimmedPrompt = prompt.trim();
   const preset = STYLE_PRESETS.find((item) => item.id === presetId);

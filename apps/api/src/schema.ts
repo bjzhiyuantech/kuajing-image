@@ -1,5 +1,5 @@
 import { relations } from "drizzle-orm";
-import { index, int, mysqlTable, text, uniqueIndex, varchar } from "drizzle-orm/mysql-core";
+import { index, int, longtext, mysqlTable, text, uniqueIndex, varchar } from "drizzle-orm/mysql-core";
 
 const id = (name: string) => varchar(name, { length: 64 });
 const isoDate = (name: string) => varchar(name, { length: 32 });
@@ -167,6 +167,37 @@ export const generationOutputs = mysqlTable(
     workspaceCreatedAtIdx: index("generation_outputs_workspace_created_at_idx").on(table.workspaceId, table.createdAt),
     generationIdx: index("generation_outputs_generation_id_idx").on(table.generationId),
     assetIdx: index("generation_outputs_asset_id_idx").on(table.assetId)
+  })
+);
+
+export const ecommerceBatchJobs = mysqlTable(
+  "ecommerce_batch_jobs",
+  {
+    id: id("id").primaryKey(),
+    workspaceId: id("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    createdByUserId: id("created_by_user_id")
+      .notNull()
+      .references(() => users.id),
+    status: shortText("status", 32).notNull(),
+    message: text("message").notNull(),
+    productTitle: shortText("product_title", 512).notNull(),
+    platform: shortText("platform", 64).notNull(),
+    market: shortText("market", 64).notNull(),
+    totalScenes: int("total_scenes").notNull(),
+    completedScenes: int("completed_scenes").notNull(),
+    succeededScenes: int("succeeded_scenes").notNull(),
+    failedScenes: int("failed_scenes").notNull(),
+    requestJson: longtext("request_json").notNull(),
+    recordsJson: longtext("records_json").notNull(),
+    createdAt: isoDate("created_at").notNull(),
+    updatedAt: isoDate("updated_at").notNull(),
+    completedAt: isoDate("completed_at")
+  },
+  (table) => ({
+    workspaceCreatedAtIdx: index("ecommerce_batch_jobs_workspace_created_at_idx").on(table.workspaceId, table.createdAt),
+    workspaceStatusIdx: index("ecommerce_batch_jobs_workspace_status_idx").on(table.workspaceId, table.status)
   })
 );
 

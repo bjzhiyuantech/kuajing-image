@@ -178,6 +178,45 @@ async function createSchema(): Promise<void> {
       CONSTRAINT generation_outputs_asset_fk FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ecommerce_batch_jobs (
+      id VARCHAR(64) PRIMARY KEY,
+      workspace_id VARCHAR(64) NOT NULL,
+      created_by_user_id VARCHAR(64) NOT NULL,
+      status VARCHAR(32) NOT NULL,
+      message TEXT NOT NULL,
+      product_title VARCHAR(512) NOT NULL,
+      platform VARCHAR(64) NOT NULL,
+      market VARCHAR(64) NOT NULL,
+      total_scenes INT NOT NULL,
+      completed_scenes INT NOT NULL,
+      succeeded_scenes INT NOT NULL,
+      failed_scenes INT NOT NULL,
+      request_json LONGTEXT NOT NULL,
+      records_json LONGTEXT NOT NULL,
+      created_at VARCHAR(32) NOT NULL,
+      updated_at VARCHAR(32) NOT NULL,
+      completed_at VARCHAR(32),
+      KEY ecommerce_batch_jobs_workspace_created_at_idx (workspace_id, created_at),
+      KEY ecommerce_batch_jobs_workspace_status_idx (workspace_id, status),
+      CONSTRAINT ecommerce_batch_jobs_workspace_fk FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+      CONSTRAINT ecommerce_batch_jobs_created_by_user_fk FOREIGN KEY (created_by_user_id) REFERENCES users(id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  const now = new Date().toISOString();
+  await pool.query(
+    `
+      UPDATE ecommerce_batch_jobs
+      SET status = 'failed',
+        message = '服务已重启，未完成的批量任务已中断，请重新提交。',
+        updated_at = ?,
+        completed_at = ?
+      WHERE status IN ('pending', 'running')
+    `,
+    [now, now]
+  );
 }
 
 async function ensureDemoTenant(): Promise<void> {

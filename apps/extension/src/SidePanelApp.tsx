@@ -1,7 +1,10 @@
 import {
+  BarChart3,
   CheckCircle2,
+  Clock3,
   Download,
   ImageIcon,
+  KeyRound,
   Loader2,
   RefreshCw,
   Send,
@@ -30,6 +33,7 @@ const ACTIVE_BATCH_JOB_STORAGE_KEY = "activeBatchJob";
 
 const defaultSettings: ExtensionSettings = {
   apiBaseUrl: "http://127.0.0.1:8787",
+  apiToken: "",
   userId: "demo-user",
   workspaceId: "demo-workspace"
 };
@@ -37,8 +41,37 @@ const defaultSettings: ExtensionSettings = {
 interface StoredBatchJob {
   jobId: string;
   apiBaseUrl: string;
+  apiToken?: string;
   userId: string;
   workspaceId: string;
+}
+
+type ToolTab = "history" | "stats" | "settings";
+
+interface EcommerceJobSummary {
+  id: string;
+  status: string;
+  createdAt?: string;
+  updatedAt?: string;
+  completedAt?: string;
+  totalScenes?: number;
+  completedScenes?: number;
+  progress?: number;
+  records?: GenerationRecord[];
+}
+
+interface EcommerceStatsSummary {
+  totalJobs: number;
+  succeededJobs: number;
+  failedJobs: number;
+  runningJobs: number;
+  generatedImages: number;
+}
+
+interface RemoteState<T> {
+  data: T;
+  error: string;
+  loading: boolean;
 }
 
 const defaultForm: BatchFormState = {
@@ -153,6 +186,93 @@ function fileNameFromUrl(url: string): string | undefined {
   }
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function firstString(source: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function firstNumber(source: Record<string, unknown>, keys: string[]): number | undefined {
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) {
+      return Number(value);
+    }
+  }
+  return undefined;
+}
+
+function normalizeJobsResponse(payload: unknown): EcommerceJobSummary[] {
+  const root = asRecord(payload);
+  const items = Array.isArray(payload)
+    ? payload
+    : Array.isArray(root.jobs)
+      ? root.jobs
+      : Array.isArray(root.items)
+        ? root.items
+        : Array.isArray(root.data)
+          ? root.data
+          : [];
+
+  return items.map((item) => {
+    const source = asRecord(item);
+    const records = Array.isArray(source.records) ? (source.records as GenerationRecord[]) : undefined;
+    const totalScenes = firstNumber(source, ["totalScenes", "total", "sceneCount"]);
+    const completedScenes = firstNumber(source, ["completedScenes", "completed", "finishedScenes"]);
+    const progress = firstNumber(source, ["progress", "percent"]);
+    return {
+      id: firstString(source, ["id", "jobId"]) ?? createClientId(),
+      status: firstString(source, ["status"]) ?? "unknown",
+      createdAt: firstString(source, ["createdAt", "created_at"]),
+      updatedAt: firstString(source, ["updatedAt", "updated_at"]),
+      completedAt: firstString(source, ["completedAt", "completed_at"]),
+      totalScenes,
+      completedScenes,
+      progress,
+      records
+    };
+  });
+}
+
+function normalizeStatsResponse(payload: unknown): EcommerceStatsSummary {
+  const root = asRecord(payload);
+  const source = asRecord(root.stats ?? root.data ?? payload);
+  return {
+    totalJobs: firstNumber(source, ["totalJobs", "jobs", "total"]) ?? 0,
+    succeededJobs: firstNumber(source, ["succeededJobs", "successJobs", "succeeded", "success"]) ?? 0,
+    failedJobs: firstNumber(source, ["failedJobs", "failJobs", "failed", "failures"]) ?? 0,
+    runningJobs: firstNumber(source, ["runningJobs", "pendingJobs", "running", "pending"]) ?? 0,
+    generatedImages: firstNumber(source, ["generatedImages", "imageCount", "images", "outputs"]) ?? 0
+  };
+}
+
+function formatDateTime(value?: string): string {
+  if (!value) {
+    return "未知时间";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
 export function SidePanelApp() {
   const [settings, setSettings] = useState<ExtensionSettings>(defaultSettings);
   const [form, setForm] = useState<BatchFormState>(defaultForm);
@@ -163,7 +283,24 @@ export function SidePanelApp() {
     message: "选择场景后即可批量生成。",
     records: []
   });
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [activeTool, setActiveTool] = useState<ToolTab>("history");
+  const [toolPanelOpen, setToolPanelOpen] = useState(false);
+  const [historyState, setHistoryState] = useState<RemoteState<EcommerceJobSummary[]>>({
+    data: [],
+    error: "",
+    loading: false
+  });
+  const [statsState, setStatsState] = useState<RemoteState<EcommerceStatsSummary>>({
+    data: {
+      totalJobs: 0,
+      succeededJobs: 0,
+      failedJobs: 0,
+      runningJobs: 0,
+      generatedImages: 0
+    },
+    error: "",
+    loading: false
+  });
 
   const availableScenes = useMemo(
     () => ECOMMERCE_SCENE_TEMPLATES.filter((template) => template.mode === form.generationMode),
@@ -197,7 +334,16 @@ export function SidePanelApp() {
         ...(result.settings as Partial<ExtensionSettings> | undefined)
       };
       const activeJob = result[ACTIVE_BATCH_JOB_STORAGE_KEY] as StoredBatchJob | undefined;
-      setSettings(activeJob ? { apiBaseUrl: activeJob.apiBaseUrl, userId: activeJob.userId, workspaceId: activeJob.workspaceId } : nextSettings);
+      setSettings(
+        activeJob
+          ? {
+              apiBaseUrl: activeJob.apiBaseUrl,
+              apiToken: activeJob.apiToken ?? nextSettings.apiToken,
+              userId: activeJob.userId,
+              workspaceId: activeJob.workspaceId
+            }
+          : nextSettings
+      );
       if (activeJob?.jobId) {
         setTask({
           id: activeJob.jobId,
@@ -231,7 +377,37 @@ export function SidePanelApp() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [settings.apiBaseUrl, settings.userId, settings.workspaceId, task.id, task.status]);
+  }, [settings.apiBaseUrl, settings.apiToken, settings.userId, settings.workspaceId, task.id, task.status]);
+
+  useEffect(() => {
+    if (!toolPanelOpen) {
+      return;
+    }
+    if (activeTool === "history") {
+      void refreshHistory();
+    }
+    if (activeTool === "stats") {
+      void refreshStats();
+    }
+  }, [activeTool, toolPanelOpen, settings.apiBaseUrl, settings.apiToken, settings.userId, settings.workspaceId]);
+
+  function apiBaseUrl(): string {
+    return settings.apiBaseUrl.replace(/\/$/u, "");
+  }
+
+  function apiHeaders(json = false): HeadersInit {
+    const headers: Record<string, string> = {
+      "X-User-Id": settings.userId,
+      "X-Workspace-Id": settings.workspaceId
+    };
+    if (json) {
+      headers["Content-Type"] = "application/json";
+    }
+    if (settings.apiToken.trim()) {
+      headers.Authorization = `Bearer ${settings.apiToken.trim()}`;
+    }
+    return headers;
+  }
 
   async function saveSettings(nextSettings: ExtensionSettings): Promise<void> {
     setSettings(nextSettings);
@@ -239,11 +415,8 @@ export function SidePanelApp() {
   }
 
   async function pollBatchJob(jobId: string): Promise<void> {
-    const response = await fetch(`${settings.apiBaseUrl.replace(/\/$/u, "")}/api/ecommerce/images/batch-generate/${jobId}`, {
-      headers: {
-        "X-User-Id": settings.userId,
-        "X-Workspace-Id": settings.workspaceId
-      }
+    const response = await fetch(`${apiBaseUrl()}/api/ecommerce/images/batch-generate/${jobId}`, {
+      headers: apiHeaders()
     });
     if (!response.ok) {
       throw new Error(await response.text());
@@ -251,6 +424,51 @@ export function SidePanelApp() {
 
     const body = (await response.json()) as EcommerceBatchGenerateResponse;
     applyBatchJob(body);
+  }
+
+  async function refreshHistory(): Promise<void> {
+    setHistoryState((current) => ({ ...current, error: "", loading: true }));
+    try {
+      const response = await fetch(`${apiBaseUrl()}/api/ecommerce/jobs`, {
+        headers: apiHeaders()
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      const body = await response.json();
+      setHistoryState({ data: normalizeJobsResponse(body), error: "", loading: false });
+    } catch (error) {
+      setHistoryState((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : "历史任务读取失败。",
+        loading: false
+      }));
+    }
+  }
+
+  async function refreshStats(): Promise<void> {
+    setStatsState((current) => ({ ...current, error: "", loading: true }));
+    try {
+      const response = await fetch(`${apiBaseUrl()}/api/ecommerce/stats`, {
+        headers: apiHeaders()
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      const body = await response.json();
+      setStatsState({ data: normalizeStatsResponse(body), error: "", loading: false });
+    } catch (error) {
+      setStatsState((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : "统计数据读取失败。",
+        loading: false
+      }));
+    }
+  }
+
+  function openTool(tab: ToolTab): void {
+    setActiveTool(tab);
+    setToolPanelOpen(true);
   }
 
   function applyBatchJob(body: EcommerceBatchGenerateResponse): void {
@@ -271,12 +489,17 @@ export function SidePanelApp() {
         [ACTIVE_BATCH_JOB_STORAGE_KEY]: {
           jobId: body.jobId,
           apiBaseUrl: settings.apiBaseUrl,
+          apiToken: settings.apiToken,
           userId: settings.userId,
           workspaceId: settings.workspaceId
         } satisfies StoredBatchJob
       });
     } else {
       void chrome.storage.local.remove(ACTIVE_BATCH_JOB_STORAGE_KEY);
+      if (toolPanelOpen) {
+        void refreshHistory();
+        void refreshStats();
+      }
     }
   }
 
@@ -386,13 +609,9 @@ export function SidePanelApp() {
       const referenceImage = form.referenceImageUrl.trim()
         ? await referenceImageFromUrl(form.referenceImageUrl.trim())
         : undefined;
-      const response = await fetch(`${settings.apiBaseUrl.replace(/\/$/u, "")}/api/ecommerce/images/batch-generate`, {
+      const response = await fetch(`${apiBaseUrl()}/api/ecommerce/images/batch-generate`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-User-Id": settings.userId,
-          "X-Workspace-Id": settings.workspaceId
-        },
+        headers: apiHeaders(true),
         body: JSON.stringify({
           product: form.product,
           platform: form.platform,
@@ -431,29 +650,10 @@ export function SidePanelApp() {
           <p className="eyebrow">Cross-border image studio</p>
           <h1>跨境图片助手</h1>
         </div>
-        <button className="icon-button" title="接口设置" type="button" onClick={() => setSettingsOpen((open) => !open)}>
+        <button className="icon-button" title="接口设置" type="button" onClick={() => openTool("settings")}>
           <Settings size={18} />
         </button>
       </header>
-
-      {settingsOpen ? (
-        <section className="panel">
-          <label>
-            <span>后端 API</span>
-            <input value={settings.apiBaseUrl} onChange={(event) => void saveSettings({ ...settings, apiBaseUrl: event.target.value })} />
-          </label>
-          <div className="two-col">
-            <label>
-              <span>User</span>
-              <input value={settings.userId} onChange={(event) => void saveSettings({ ...settings, userId: event.target.value })} />
-            </label>
-            <label>
-              <span>Workspace</span>
-              <input value={settings.workspaceId} onChange={(event) => void saveSettings({ ...settings, workspaceId: event.target.value })} />
-            </label>
-          </div>
-        </section>
-      ) : null}
 
       <section className="panel page-panel">
         <div>
@@ -638,7 +838,7 @@ export function SidePanelApp() {
               <span>{record.size.width} x {record.size.height} · {record.outputFormat}</span>
             </div>
             {record.outputs.flatMap((output) => output.asset ? [output.asset] : []).map((asset) => (
-              <a className="asset-link" href={`${settings.apiBaseUrl.replace(/\/$/u, "")}${asset.url}`} key={asset.id} target="_blank" rel="noreferrer">
+              <a className="asset-link" href={`${apiBaseUrl()}${asset.url}`} key={asset.id} target="_blank" rel="noreferrer">
                 <ImageIcon size={14} />
                 预览
                 <Download size={14} />
@@ -646,6 +846,129 @@ export function SidePanelApp() {
             ))}
           </article>
         ))}
+      </section>
+
+      <section className="tool-dock" aria-label="扩展工具">
+        <div className="tool-tabs">
+          <button className={activeTool === "history" && toolPanelOpen ? "tool-tab active" : "tool-tab"} type="button" onClick={() => openTool("history")}>
+            <Clock3 size={15} />
+            历史任务
+          </button>
+          <button className={activeTool === "stats" && toolPanelOpen ? "tool-tab active" : "tool-tab"} type="button" onClick={() => openTool("stats")}>
+            <BarChart3 size={15} />
+            统计
+          </button>
+          <button className={activeTool === "settings" && toolPanelOpen ? "tool-tab active" : "tool-tab"} type="button" onClick={() => openTool("settings")}>
+            <KeyRound size={15} />
+            设置
+          </button>
+        </div>
+
+        {toolPanelOpen ? (
+          <div className="tool-panel">
+            <div className="tool-panel-header">
+              <strong>{activeTool === "history" ? "历史任务" : activeTool === "stats" ? "统计概览" : "接口设置"}</strong>
+              <button className="tool-close" type="button" onClick={() => setToolPanelOpen(false)}>收起</button>
+            </div>
+
+            {activeTool === "history" ? (
+              <div>
+                <div className="tool-actions">
+                  <span>当前账号的批量任务</span>
+                  <button className="mini-button" disabled={historyState.loading} type="button" onClick={() => void refreshHistory()}>
+                    {historyState.loading ? <Loader2 className="spin" size={13} /> : <RefreshCw size={13} />}
+                    刷新
+                  </button>
+                </div>
+                {historyState.error ? <p className="tool-error">{historyState.error}</p> : null}
+                {historyState.loading && historyState.data.length === 0 ? <p className="tool-empty">正在读取历史任务...</p> : null}
+                {!historyState.loading && !historyState.error && historyState.data.length === 0 ? <p className="tool-empty">暂无历史任务。</p> : null}
+                {historyState.data.map((job) => {
+                  const completed = job.completedScenes ?? 0;
+                  const total = job.totalScenes ?? job.records?.length ?? 0;
+                  const progress = job.progress ?? (total > 0 ? Math.round((completed / total) * 100) : undefined);
+                  const assets = job.records?.flatMap((record) => record.outputs.flatMap((output) => output.asset ? [output.asset] : [])) ?? [];
+                  return (
+                    <article className="history-card" key={job.id}>
+                      <div className="history-card-top">
+                        <strong>{job.status}</strong>
+                        <span>{formatDateTime(job.createdAt)}</span>
+                      </div>
+                      <div className="progress-row">
+                        <span>{total > 0 ? `${completed}/${total}` : "进度待返回"}</span>
+                        <div className="progress-track">
+                          <div className="progress-fill" style={{ width: `${Math.min(progress ?? 0, 100)}%` }} />
+                        </div>
+                      </div>
+                      <p>{job.id}</p>
+                      {assets.length > 0 ? (
+                        <div className="asset-list">
+                          {assets.slice(0, 6).map((asset) => (
+                            <a href={`${apiBaseUrl()}${asset.url}`} key={asset.id} target="_blank" rel="noreferrer">
+                              图片
+                            </a>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="muted-line">暂无图片链接</span>
+                      )}
+                    </article>
+                  );
+                })}
+              </div>
+            ) : null}
+
+            {activeTool === "stats" ? (
+              <div>
+                <div className="tool-actions">
+                  <span>生成表现与任务量</span>
+                  <button className="mini-button" disabled={statsState.loading} type="button" onClick={() => void refreshStats()}>
+                    {statsState.loading ? <Loader2 className="spin" size={13} /> : <RefreshCw size={13} />}
+                    刷新
+                  </button>
+                </div>
+                {statsState.error ? <p className="tool-error">{statsState.error}</p> : null}
+                {statsState.loading ? <p className="tool-empty">正在读取统计数据...</p> : null}
+                <div className="stats-grid">
+                  <div><span>总任务</span><strong>{statsState.data.totalJobs}</strong></div>
+                  <div><span>成功</span><strong>{statsState.data.succeededJobs}</strong></div>
+                  <div><span>失败</span><strong>{statsState.data.failedJobs}</strong></div>
+                  <div><span>进行中</span><strong>{statsState.data.runningJobs}</strong></div>
+                  <div className="wide-stat"><span>生成图片</span><strong>{statsState.data.generatedImages}</strong></div>
+                </div>
+              </div>
+            ) : null}
+
+            {activeTool === "settings" ? (
+              <div>
+                <label>
+                  <span>后端 API</span>
+                  <input value={settings.apiBaseUrl} onChange={(event) => void saveSettings({ ...settings, apiBaseUrl: event.target.value })} />
+                </label>
+                <label>
+                  <span>API Token</span>
+                  <input
+                    type="password"
+                    value={settings.apiToken}
+                    placeholder="为空时不发送 Authorization"
+                    onChange={(event) => void saveSettings({ ...settings, apiToken: event.target.value })}
+                  />
+                </label>
+                <div className="two-col">
+                  <label>
+                    <span>User</span>
+                    <input value={settings.userId} onChange={(event) => void saveSettings({ ...settings, userId: event.target.value })} />
+                  </label>
+                  <label>
+                    <span>Workspace</span>
+                    <input value={settings.workspaceId} onChange={(event) => void saveSettings({ ...settings, workspaceId: event.target.value })} />
+                  </label>
+                </div>
+                <p className="settings-note">保存后，后端请求会自动携带当前账号信息；Token 为空时保持 demo 兼容。</p>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </section>
     </main>
   );
