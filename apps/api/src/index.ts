@@ -38,7 +38,8 @@ import {
   getConfiguredImageModel,
   getOpenAIImageProviderConfig,
   type EditImageProviderInput,
-  type ImageProviderInput
+  type ImageProviderInput,
+  type OpenAIImageProviderConfig
 } from "./image-provider.js";
 import { getStoredAssetFile, readStoredAsset, runReferenceImageGeneration, runTextToImageGeneration } from "./image-generation.js";
 import { deleteGalleryOutput, getGalleryImages, getProjectState, saveProjectSnapshot } from "./project-store.js";
@@ -47,11 +48,40 @@ import { getStorageConfig, saveStorageConfig, testStorageConfig } from "./storag
 
 const MAX_PROJECT_SNAPSHOT_BYTES = 100 * 1024 * 1024;
 const MAX_PROJECT_NAME_LENGTH = 120;
+const ECOMMERCE_BATCH_JOB_TTL_MS = 24 * 60 * 60 * 1000;
 
 interface ProjectPayload {
   name?: string;
   snapshotJson: string;
 }
+
+type ResolvedEcommerceBatchGenerateRequest = Omit<
+  EcommerceBatchGenerateRequest,
+  "countPerScene" | "outputFormat" | "quality" | "size" | "stylePresetId"
+> & {
+  countPerScene: GenerationCount;
+  outputFormat: OutputFormat;
+  quality: ImageQuality;
+  size: ImageSize;
+  stylePresetId: StylePresetId;
+};
+
+interface EcommerceBatchJob {
+  jobId: string;
+  tenant: RequestTenant;
+  input: ResolvedEcommerceBatchGenerateRequest;
+  providerConfig: OpenAIImageProviderConfig;
+  status: EcommerceBatchGenerateResponse["status"];
+  message: string;
+  totalScenes: number;
+  completedScenes: number;
+  records: EcommerceBatchGenerateResponse["records"];
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+}
+
+const ecommerceBatchJobs = new Map<string, EcommerceBatchJob>();
 
 export const app = new Hono();
 
@@ -264,6 +294,7 @@ app.post("/api/images/edit", async (c) => {
 });
 
 app.post("/api/ecommerce/images/batch-generate", async (c) => {
+  cleanupEcommerceBatchJobs();
   const payload = await readJson(c.req.raw);
   if (!payload.ok) {
     return c.json(payload.error, 400);
@@ -280,54 +311,165 @@ app.post("/api/ecommerce/images/batch-generate", async (c) => {
   }
 
   const tenant = await requestTenant(c);
-  const provider = createOpenAIImageProvider(providerConfig.config);
-  const records = [];
+  const now = new Date().toISOString();
+  const job: EcommerceBatchJob = {
+    jobId: randomUUID(),
+    tenant,
+    input: parsed.value,
+    providerConfig: providerConfig.config,
+    status: "pending",
+    message: "批量任务已创建，服务端正在排队生成。",
+    totalScenes: parsed.value.sceneTemplateIds.length,
+    completedScenes: 0,
+    records: [],
+    createdAt: now,
+    updatedAt: now
+  };
 
-  try {
-    for (const sceneTemplateId of parsed.value.sceneTemplateIds) {
-      const prompt = composeEcommercePrompt({
-        product: parsed.value.product,
-        platform: parsed.value.platform,
-        market: parsed.value.market,
-        sceneTemplateId,
-        extraDirection: parsed.value.extraDirection
-      });
-      const generationInput = {
-        originalPrompt: prompt,
-        presetId: parsed.value.stylePresetId ?? "product",
-        prompt: composePrompt(prompt, parsed.value.stylePresetId ?? "product"),
-        size: parsed.value.size,
-        sizeApiValue: `${parsed.value.size.width}x${parsed.value.size.height}`,
-        quality: parsed.value.quality ?? "auto",
-        outputFormat: parsed.value.outputFormat ?? "png",
-        count: parsed.value.countPerScene ?? 1
-      };
-      const response = parsed.value.referenceImage
-        ? await runReferenceImageGeneration(
-            tenant,
-            {
-              ...generationInput,
-              referenceImage: parsed.value.referenceImage
-            },
-            provider,
-            c.req.raw.signal
-          )
-        : await runTextToImageGeneration(tenant, generationInput, provider, c.req.raw.signal);
-      records.push(response.record);
-    }
+  ecommerceBatchJobs.set(job.jobId, job);
+  void runEcommerceBatchJob(job.jobId);
 
-    return c.json({
-      jobId: randomUUID(),
-      records
-    } satisfies EcommerceBatchGenerateResponse);
-  } catch (error) {
-    if (error instanceof ProviderError) {
-      return providerErrorJson(c, error);
-    }
-
-    throw error;
-  }
+  return c.json(toEcommerceBatchJobResponse(job), 202);
 });
+
+app.get("/api/ecommerce/images/batch-generate/:jobId", async (c) => {
+  cleanupEcommerceBatchJobs();
+  const tenant = await requestTenant(c);
+  const job = ecommerceBatchJobs.get(c.req.param("jobId"));
+  if (!job || job.tenant.workspaceId !== tenant.workspaceId || job.tenant.userId !== tenant.userId) {
+    return c.json(errorResponse("not_found", "批量生成任务不存在或已过期。"), 404);
+  }
+
+  return c.json(toEcommerceBatchJobResponse(job));
+});
+
+async function runEcommerceBatchJob(jobId: string): Promise<void> {
+  const job = ecommerceBatchJobs.get(jobId);
+  if (!job) {
+    return;
+  }
+
+  updateEcommerceBatchJob(job, {
+    status: "running",
+    message: "服务端正在并行生成场景，页面可以离开后稍晚回来查看。"
+  });
+
+  const provider = createOpenAIImageProvider(job.providerConfig);
+  const records = new Array<EcommerceBatchGenerateResponse["records"][number] | undefined>(job.input.sceneTemplateIds.length);
+
+  await Promise.all(
+    job.input.sceneTemplateIds.map(async (sceneTemplateId, index) => {
+      try {
+        const prompt = composeEcommercePrompt({
+          product: job.input.product,
+          platform: job.input.platform,
+          market: job.input.market,
+          sceneTemplateId,
+          extraDirection: job.input.extraDirection
+        });
+        const generationInput = {
+          originalPrompt: prompt,
+          presetId: job.input.stylePresetId ?? "product",
+          prompt: composePrompt(prompt, job.input.stylePresetId ?? "product"),
+          size: job.input.size,
+          sizeApiValue: `${job.input.size.width}x${job.input.size.height}`,
+          quality: job.input.quality ?? "auto",
+          outputFormat: job.input.outputFormat ?? "png",
+          count: job.input.countPerScene ?? 1
+        };
+        const response = job.input.referenceImage
+          ? await runReferenceImageGeneration(job.tenant, { ...generationInput, referenceImage: job.input.referenceImage }, provider)
+          : await runTextToImageGeneration(job.tenant, generationInput, provider);
+        records[index] = response.record;
+      } catch (error) {
+        records[index] = failedEcommerceSceneRecord(job.input, sceneTemplateId, errorToMessage(error));
+      } finally {
+        job.completedScenes += 1;
+        job.records = records.flatMap((record) => (record ? [record] : []));
+        const failedCount = job.records.filter((record) => record.status === "failed").length;
+        updateEcommerceBatchJob(job, {
+          status: "running",
+          message: `服务端正在并行生成：${job.completedScenes}/${job.totalScenes} 个场景完成，${failedCount} 个失败。`
+        });
+      }
+    })
+  );
+
+  const failedCount = job.records.filter((record) => record.status === "failed").length;
+  const succeededCount = job.records.length - failedCount;
+  updateEcommerceBatchJob(job, {
+    status: succeededCount > 0 && failedCount > 0 ? "partial" : succeededCount > 0 ? "succeeded" : "failed",
+    message:
+      succeededCount > 0 && failedCount > 0
+        ? `批量生成部分完成：${succeededCount} 个场景成功，${failedCount} 个失败。`
+        : succeededCount > 0
+          ? `批量生成完成：${succeededCount} 个场景成功。`
+          : "批量生成失败，请检查上游图像接口或稍后重试。",
+    completedAt: new Date().toISOString()
+  });
+}
+
+function updateEcommerceBatchJob(job: EcommerceBatchJob, patch: Partial<Pick<EcommerceBatchJob, "status" | "message" | "completedAt">>): void {
+  Object.assign(job, patch, { updatedAt: new Date().toISOString() });
+}
+
+function toEcommerceBatchJobResponse(job: EcommerceBatchJob): EcommerceBatchGenerateResponse {
+  return {
+    jobId: job.jobId,
+    status: job.status,
+    message: job.message,
+    totalScenes: job.totalScenes,
+    completedScenes: job.completedScenes,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+    completedAt: job.completedAt,
+    records: job.records
+  };
+}
+
+function failedEcommerceSceneRecord(
+  input: ResolvedEcommerceBatchGenerateRequest,
+  sceneTemplateId: EcommerceSceneTemplateId,
+  message: string
+): EcommerceBatchGenerateResponse["records"][number] {
+  const prompt = composeEcommercePrompt({
+    product: input.product,
+    platform: input.platform,
+    market: input.market,
+    sceneTemplateId,
+    extraDirection: input.extraDirection
+  });
+  return {
+    id: randomUUID(),
+    mode: input.referenceImage ? "edit" : "generate",
+    prompt,
+    effectivePrompt: composePrompt(prompt, input.stylePresetId ?? "product"),
+    presetId: input.stylePresetId ?? "product",
+    size: input.size,
+    quality: input.quality ?? "auto",
+    outputFormat: input.outputFormat ?? "png",
+    count: input.countPerScene ?? 1,
+    status: "failed",
+    error: message,
+    createdAt: new Date().toISOString(),
+    outputs: [
+      {
+        id: randomUUID(),
+        status: "failed",
+        error: message
+      }
+    ]
+  };
+}
+
+function cleanupEcommerceBatchJobs(): void {
+  const now = Date.now();
+  for (const [jobId, job] of ecommerceBatchJobs) {
+    if (now - Date.parse(job.updatedAt) > ECOMMERCE_BATCH_JOB_TTL_MS) {
+      ecommerceBatchJobs.delete(jobId);
+    }
+  }
+}
 
 const webDistRoot = relative(process.cwd(), runtimePaths.webDistDir) || ".";
 
@@ -622,7 +764,7 @@ function parseBaseImagePayload(input: unknown): ParseResult<ImageProviderInput> 
   };
 }
 
-function parseEcommerceBatchPayload(input: unknown): ParseResult<EcommerceBatchGenerateRequest & { size: ImageSize }> {
+function parseEcommerceBatchPayload(input: unknown): ParseResult<ResolvedEcommerceBatchGenerateRequest> {
   if (!isRecord(input)) {
     return {
       ok: false,

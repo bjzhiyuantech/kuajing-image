@@ -289,9 +289,19 @@ textarea:focus {
   color: #1e5b9d;
 }
 
+.status-pending {
+  background: #eef2f0;
+  color: #405249;
+}
+
 .status-succeeded {
   background: #e7f5ee;
   color: #0d6b52;
+}
+
+.status-partial {
+  background: #fff4df;
+  color: #8b5a00;
 }
 
 .status-failed {

@@ -1,5 +1,6 @@
 import type {
   EcommerceBatchGenerateRequest,
+  EcommerceBatchJobStatus,
   EcommerceGenerationMode,
   EcommerceMarket,
   EcommercePlatform,
@@ -42,9 +43,11 @@ export interface BatchFormState {
 
 export interface BatchTask {
   id: string;
-  status: "idle" | "running" | "succeeded" | "failed";
+  status: "idle" | EcommerceBatchJobStatus;
   message: string;
   records: GenerationRecord[];
+  totalScenes?: number;
+  completedScenes?: number;
 }
 
 export type BatchRequest = EcommerceBatchGenerateRequest;

@@ -26,11 +26,20 @@ import {
 } from "@gpt-image-canvas/shared";
 import type { BatchFormState, BatchTask, ExtensionSettings, PageContext } from "./types";
 
+const ACTIVE_BATCH_JOB_STORAGE_KEY = "activeBatchJob";
+
 const defaultSettings: ExtensionSettings = {
   apiBaseUrl: "http://127.0.0.1:8787",
   userId: "demo-user",
   workspaceId: "demo-workspace"
 };
+
+interface StoredBatchJob {
+  jobId: string;
+  apiBaseUrl: string;
+  userId: string;
+  workspaceId: string;
+}
 
 const defaultForm: BatchFormState = {
   product: {
@@ -182,18 +191,93 @@ export function SidePanelApp() {
   }, [form]);
 
   useEffect(() => {
-    void chrome.storage.local.get(["settings"]).then((result) => {
-      setSettings({
+    void chrome.storage.local.get(["settings", ACTIVE_BATCH_JOB_STORAGE_KEY]).then((result) => {
+      const nextSettings = {
         ...defaultSettings,
         ...(result.settings as Partial<ExtensionSettings> | undefined)
-      });
+      };
+      const activeJob = result[ACTIVE_BATCH_JOB_STORAGE_KEY] as StoredBatchJob | undefined;
+      setSettings(activeJob ? { apiBaseUrl: activeJob.apiBaseUrl, userId: activeJob.userId, workspaceId: activeJob.workspaceId } : nextSettings);
+      if (activeJob?.jobId) {
+        setTask({
+          id: activeJob.jobId,
+          status: "running",
+          message: "正在恢复服务端批量任务，稍后会自动刷新进度。",
+          records: []
+        });
+      }
     });
     void refreshPageContext();
   }, []);
 
+  useEffect(() => {
+    if (task.status !== "pending" && task.status !== "running") {
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setInterval(() => {
+      void pollBatchJob(task.id).catch((error) => {
+        if (!cancelled) {
+          setTask((current) => ({
+            ...current,
+            message: error instanceof Error ? `任务仍在服务端执行，轮询失败：${error.message}` : "任务仍在服务端执行，轮询暂时失败。"
+          }));
+        }
+      });
+    }, 3000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [settings.apiBaseUrl, settings.userId, settings.workspaceId, task.id, task.status]);
+
   async function saveSettings(nextSettings: ExtensionSettings): Promise<void> {
     setSettings(nextSettings);
     await chrome.storage.local.set({ settings: nextSettings });
+  }
+
+  async function pollBatchJob(jobId: string): Promise<void> {
+    const response = await fetch(`${settings.apiBaseUrl.replace(/\/$/u, "")}/api/ecommerce/images/batch-generate/${jobId}`, {
+      headers: {
+        "X-User-Id": settings.userId,
+        "X-Workspace-Id": settings.workspaceId
+      }
+    });
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+
+    const body = (await response.json()) as EcommerceBatchGenerateResponse;
+    applyBatchJob(body);
+  }
+
+  function applyBatchJob(body: EcommerceBatchGenerateResponse): void {
+    setTask({
+      id: body.jobId,
+      status: body.status,
+      message:
+        body.status === "pending" || body.status === "running"
+          ? `${body.message} 可以放心离开，稍后回来会继续查看任务状态。`
+          : body.message,
+      records: body.records,
+      totalScenes: body.totalScenes,
+      completedScenes: body.completedScenes
+    });
+
+    if (body.status === "pending" || body.status === "running") {
+      void chrome.storage.local.set({
+        [ACTIVE_BATCH_JOB_STORAGE_KEY]: {
+          jobId: body.jobId,
+          apiBaseUrl: settings.apiBaseUrl,
+          userId: settings.userId,
+          workspaceId: settings.workspaceId
+        } satisfies StoredBatchJob
+      });
+    } else {
+      void chrome.storage.local.remove(ACTIVE_BATCH_JOB_STORAGE_KEY);
+    }
   }
 
   async function refreshPageContext(): Promise<void> {
@@ -329,12 +413,7 @@ export function SidePanelApp() {
       }
 
       const body = (await response.json()) as EcommerceBatchGenerateResponse;
-      setTask({
-        id: body.jobId,
-        status: "succeeded",
-        message: `已完成 ${body.records.length} 个场景。`,
-        records: body.records
-      });
+      applyBatchJob(body);
     } catch (error) {
       setTask({
         id: taskId,
@@ -535,9 +614,13 @@ export function SidePanelApp() {
       <section className="sticky-actions">
         <div>
           <strong>{selectedScenes.length * form.countPerScene}</strong>
-          <span>张图像</span>
+          <span>
+            {task.status === "pending" || task.status === "running"
+              ? `${task.completedScenes ?? 0}/${task.totalScenes ?? selectedScenes.length} 场景`
+              : "张图像"}
+          </span>
         </div>
-        <button className="primary-button" disabled={task.status === "running"} type="button" onClick={() => void submitBatch()}>
+        <button className="primary-button" disabled={task.status === "pending" || task.status === "running"} type="button" onClick={() => void submitBatch()}>
           {task.status === "running" ? <Loader2 className="spin" size={17} /> : <Send size={17} />}
           批量生成
         </button>

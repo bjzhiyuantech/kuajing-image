@@ -481,8 +481,17 @@ export interface EcommerceBatchGenerateRequest {
   extraDirection?: string;
 }
 
+export type EcommerceBatchJobStatus = "pending" | "running" | "succeeded" | "partial" | "failed";
+
 export interface EcommerceBatchGenerateResponse {
   jobId: string;
+  status: EcommerceBatchJobStatus;
+  message: string;
+  totalScenes: number;
+  completedScenes: number;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
   records: GenerationRecord[];
 }
 
