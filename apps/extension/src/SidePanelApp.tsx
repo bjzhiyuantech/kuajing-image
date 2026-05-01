@@ -521,6 +521,20 @@ export function SidePanelApp() {
     return authenticatedApiUrl(`/api/assets/${encodeURIComponent(asset.id)}/download`);
   }
 
+  function galleryDetailUrl(asset: GeneratedAsset): string {
+    return `${apiBaseUrl()}/gallery?assetId=${encodeURIComponent(asset.id)}`;
+  }
+
+  async function openGalleryPreview(asset: GeneratedAsset): Promise<void> {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab.id) {
+      await chrome.tabs.update(tab.id, { url: galleryDetailUrl(asset) });
+      return;
+    }
+
+    await chrome.tabs.create({ url: galleryDetailUrl(asset) });
+  }
+
   async function saveSettings(nextSettings: ExtensionSettings): Promise<void> {
     setSettings(nextSettings);
     await chrome.storage.local.set({ settings: nextSettings });
@@ -1163,15 +1177,15 @@ export function SidePanelApp() {
           <div className="result-grid">
             {resultImages.map((item) => (
               <article className="result-image-card" key={item.key}>
-                <a className="result-image-preview" href={assetDownloadUrl(item.asset)} target="_blank" rel="noreferrer">
+                <button className="result-image-preview" type="button" onClick={() => void openGalleryPreview(item.asset)}>
                   <img alt={item.record.prompt} height={item.asset.height} src={assetPreviewUrl(item.asset)} width={item.asset.width} />
-                </a>
+                </button>
                 <div className="result-image-meta">
                   <span>{item.asset.width} x {item.asset.height} · {item.record.outputFormat}</span>
                   <div className="result-actions">
-                    <a className="mini-button icon-mini" href={assetDownloadUrl(item.asset)} target="_blank" rel="noreferrer" title="预览">
+                    <button className="mini-button icon-mini" type="button" title="预览" onClick={() => void openGalleryPreview(item.asset)}>
                       <ImageIcon size={13} />
-                    </a>
+                    </button>
                     <a className="mini-button icon-mini" href={assetDownloadUrl(item.asset)} target="_blank" rel="noreferrer" title="下载">
                       <Download size={13} />
                     </a>

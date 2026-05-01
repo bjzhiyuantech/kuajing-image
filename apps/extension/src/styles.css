@@ -337,8 +337,12 @@ textarea:focus {
 
 .result-image-preview {
   background: #edf2ef;
+  border: 0;
+  cursor: pointer;
   display: block;
+  padding: 0;
   position: relative;
+  width: 100%;
 }
 
 .result-image-preview::before {

@@ -71,6 +71,7 @@ export function GalleryPage({ fetcher, onDeleted, onReuse }: GalleryPageProps) {
   const [pendingDeleteItem, setPendingDeleteItem] = useState<GalleryImageItem | null>(null);
   const [deletingOutputId, setDeletingOutputId] = useState<string | null>(null);
   const statusTimerRef = useRef<number | undefined>();
+  const openedAssetIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -94,6 +95,14 @@ export function GalleryPage({ fetcher, onDeleted, onReuse }: GalleryPageProps) {
 
         if (!controller.signal.aborted) {
           setItems(body.items);
+          const requestedAssetId = assetIdFromLocation();
+          if (requestedAssetId && openedAssetIdRef.current !== requestedAssetId) {
+            const matchingItem = body.items.find((item) => item.asset.id === requestedAssetId);
+            if (matchingItem) {
+              openedAssetIdRef.current = requestedAssetId;
+              setSelectedItem(matchingItem);
+            }
+          }
         }
       } catch (loadError) {
         if (!controller.signal.aborted) {
@@ -720,6 +729,11 @@ function authenticatedAssetUrl(url: string): string {
 
   const separator = url.includes("?") ? "&" : "?";
   return `${url}${separator}token=${encodeURIComponent(token)}`;
+}
+
+function assetIdFromLocation(): string {
+  const params = new URLSearchParams(window.location.search);
+  return params.get("assetId")?.trim() || "";
 }
 
 function modeLabel(mode: GalleryImageItem["mode"]): string {
