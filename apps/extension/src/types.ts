@@ -22,8 +22,15 @@ export interface AuthUser {
   email: string;
   displayName?: string;
   role?: string;
+  planId?: string;
+  planName?: string;
   quotaTotal?: number;
   quotaUsed?: number;
+  balanceCents?: number;
+  currency?: string;
+  packageTotal?: number;
+  packageUsed?: number;
+  packageRemaining?: number;
 }
 
 export interface ExtensionAuthState {

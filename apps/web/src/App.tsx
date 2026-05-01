@@ -70,6 +70,7 @@ import { AccountPage, AdminPage, AuthScreen } from "./AuthViews";
 import {
   authFetch,
   clearStoredAuthToken,
+  consumeAuthTokenFromUrl,
   fetchCurrentUser,
   getStoredAuthToken,
   isAdminUser,
@@ -523,6 +524,19 @@ function formatCreatedTime(value: string): string {
   }).format(date);
 }
 
+function formatCurrency(valueCents: number, currency = "CNY"): string {
+  const amount = Number.isFinite(valueCents) ? valueCents / 100 : 0;
+  try {
+    return new Intl.NumberFormat("zh-CN", {
+      style: "currency",
+      currency,
+      maximumFractionDigits: amount % 1 === 0 ? 0 : 2
+    }).format(amount);
+  } catch {
+    return `¥${amount.toFixed(amount % 1 === 0 ? 0 : 2)}`;
+  }
+}
+
 function createTldrawAssetId(assetId: string): TLAssetId {
   return `asset:${assetId}` as TLAssetId;
 }
@@ -688,6 +702,41 @@ function createImageShape(
       altText: promptValue
     }
   };
+}
+
+function createCenteredImagePlacement(editor: Editor, asset: GeneratedAsset): GenerationPlaceholderPlacement {
+  const imageSize = displaySize({
+    width: asset.width,
+    height: asset.height
+  });
+  const viewport = editor.getViewportPageBounds();
+
+  return {
+    id: createTldrawShapeId(),
+    x: viewport.center.x - imageSize.width / 2,
+    y: viewport.center.y - imageSize.height / 2,
+    width: imageSize.width,
+    height: imageSize.height,
+    targetWidth: asset.width,
+    targetHeight: asset.height
+  };
+}
+
+function insertGalleryImageOnCanvas(editor: Editor, item: GalleryImageItem): TLShapeId {
+  const assetId = createTldrawAssetId(item.asset.id);
+  const placement = createCenteredImagePlacement(editor, item.asset);
+  const imageShape = createImageShape(item.asset, placement, item.prompt);
+
+  editor.run(() => {
+    if (!editor.getAsset(assetId)) {
+      editor.createAssets([createImageAsset(item.asset)]);
+    }
+    editor.createShapes([imageShape]);
+  });
+  editor.select(imageShape.id);
+  editor.bringToFront([imageShape.id]);
+
+  return imageShape.id;
 }
 
 function replaceGenerationPlaceholders(editor: Editor, placeholderSet: ActiveGenerationPlaceholders, record: GenerationRecord): number {
@@ -1291,6 +1340,11 @@ function TopNavigation({
   onPreloadGallery: () => void;
   onLogout: () => void;
 }) {
+  const userQuotaTotal = user.quotaTotal ?? 0;
+  const userQuotaUsed = user.quotaUsed ?? 0;
+  const packageRemaining = user.packageRemaining ?? Math.max(0, userQuotaTotal - userQuotaUsed);
+  const balanceCents = user.balanceCents ?? 0;
+
   return (
     <header className="top-navigation">
       <div className="top-navigation__inner">
@@ -1365,6 +1419,16 @@ function TopNavigation({
         </nav>
         <div className="top-navigation__account">
           <button
+            className="quota-chip"
+            data-testid="quota-chip"
+            title={`套餐剩余 ${packageRemaining.toLocaleString("zh-CN")} 次，余额 ${formatCurrency(balanceCents)}`}
+            type="button"
+            onClick={() => onNavigate("account")}
+          >
+            <Sparkles className="size-3.5" aria-hidden="true" />
+            <span>{packageRemaining.toLocaleString("zh-CN")} 次</span>
+          </button>
+          <button
             className="account-chip"
             data-testid="account-chip"
             title={user.email}
@@ -1404,7 +1468,7 @@ function PanelStatusIcon({ tone }: { tone: PanelStatusTone }) {
 
 export function App() {
   const [route, setRoute] = useState<AppRoute>(() => routeFromLocation());
-  const [authStatus, setAuthStatus] = useState<AuthStatus>(() => (getStoredAuthToken() ? "checking" : "anonymous"));
+  const [authStatus, setAuthStatus] = useState<AuthStatus>(() => (consumeAuthTokenFromUrl() || getStoredAuthToken() ? "checking" : "anonymous"));
   const [authMode, setAuthMode] = useState<AuthMode>("login");
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [generationMode, setGenerationMode] = useState<GenerationMode>("text");
@@ -2312,11 +2376,34 @@ export function App() {
     setQuality(item.quality);
     setOutputFormat(item.outputFormat);
     setCount(1);
-    setGenerationMode("text");
     setGenerationError("");
     setGenerationWarning("");
-    setGenerationMessage("已从 Gallery 填入生成参数。");
     navigateToRoute("canvas");
+
+    window.requestAnimationFrame(() => {
+      const editor = editorRef.current;
+      if (!editor) {
+        setGenerationMode("text");
+        setGenerationMessage("已从 Gallery 填入生成参数。画布载入后可手动选择图片作为参考。");
+        return;
+      }
+
+      const shapeId = insertGalleryImageOnCanvas(editor, item);
+      const bounds = editor.getShapePageBounds(shapeId);
+      if (bounds) {
+        editor.zoomToBounds(bounds, {
+          animation: { duration: 220 },
+          inset: 96
+        });
+      } else {
+        editor.zoomToSelection({ animation: { duration: 220 } });
+      }
+
+      setGenerationMode("reference");
+      setReferenceSelection(resolveReferenceSelection(editor));
+      setGenerationMessage("已把 Gallery 图片放到画布，并设为本次参考图。");
+    });
+
     if (isMobileDrawer) {
       setIsAiPanelOpen(true);
     }

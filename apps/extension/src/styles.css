@@ -33,6 +33,8 @@ textarea {
 .tool-actions,
 .mini-button,
 .account-heading,
+.button-row,
+.quota-title-row,
 .edit-modal-header,
 .edit-modal-actions,
 .history-card-top,
@@ -91,6 +93,75 @@ h2 {
   font-size: 12px;
   line-height: 1.45;
   word-break: break-all;
+}
+
+.quota-summary {
+  border-color: #cce7db;
+}
+
+.quota-title-row {
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.quota-title-row p,
+.quota-title-row span {
+  color: #66766d;
+  display: block;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.quota-meter {
+  background: #edf2ef;
+  border-radius: 999px;
+  height: 8px;
+  margin-top: 10px;
+  overflow: hidden;
+}
+
+.quota-meter span {
+  background: #18a678;
+  display: block;
+  height: 100%;
+}
+
+.quota-summary-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 10px;
+}
+
+.quota-summary-grid div,
+.billing-usage-card,
+.billing-balance-card,
+.plan-card {
+  background: #f7faf8;
+  border: 1px solid #e4ebe7;
+  border-radius: 7px;
+}
+
+.quota-summary-grid div {
+  padding: 8px;
+}
+
+.quota-summary-grid span,
+.billing-balance-card span,
+.billing-usage-card span,
+.plan-card span {
+  color: #66766d;
+  display: block;
+  font-size: 11px;
+}
+
+.quota-summary-grid strong,
+.billing-balance-card strong {
+  color: #17201c;
+  display: block;
+  font-size: 13px;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
 }
 
 label {
@@ -543,6 +614,11 @@ textarea:focus {
   overflow-wrap: anywhere;
 }
 
+.button-row {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .tool-panel-header {
   justify-content: space-between;
   margin-bottom: 8px;
@@ -605,6 +681,113 @@ textarea:focus {
 .tool-error {
   background: #fff4df;
   color: #8b5a00;
+}
+
+.billing-balance-card {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  padding: 11px;
+}
+
+.billing-balance-card strong {
+  font-size: 22px;
+}
+
+.recharge-row {
+  align-items: end;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  margin-bottom: 10px;
+}
+
+.recharge-row label {
+  margin: 0;
+}
+
+.recharge-button {
+  min-height: 36px;
+}
+
+.billing-usage-card {
+  margin-bottom: 10px;
+  padding: 10px;
+}
+
+.billing-usage-card strong {
+  color: #17201c;
+  display: block;
+  font-size: 13px;
+}
+
+.quota-row {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 7px;
+}
+
+.plan-list {
+  display: grid;
+  gap: 9px;
+}
+
+.plan-card {
+  padding: 10px;
+}
+
+.plan-card.recommended {
+  border-color: #18a678;
+  box-shadow: 0 0 0 1px rgb(24 166 120 / 10%);
+}
+
+.plan-card-top {
+  align-items: flex-start;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.plan-card-top strong {
+  color: #17201c;
+  display: block;
+  font-size: 14px;
+}
+
+.plan-card-top em {
+  background: #e7f5ee;
+  border-radius: 999px;
+  color: #0d6b52;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+  padding: 3px 7px;
+}
+
+.plan-price {
+  color: #17201c;
+  font-size: 20px;
+  font-weight: 900;
+  margin-top: 9px;
+}
+
+.plan-benefits {
+  display: grid;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.plan-benefits span::before {
+  color: #18a678;
+  content: "✓ ";
+  font-weight: 900;
+}
+
+.plan-buy {
+  justify-content: center;
+  margin-top: 10px;
+  width: 100%;
 }
 
 .history-card {

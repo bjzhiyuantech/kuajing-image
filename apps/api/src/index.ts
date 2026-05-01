@@ -3,7 +3,7 @@ import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
-import { desc, eq } from "drizzle-orm";
+import { asc, desc, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { parsePreviewWidth, readStoredAssetPreview } from "./asset-preview.js";
@@ -30,6 +30,7 @@ import {
   validateSceneImageSize,
   type AppConfig,
   type AdminAssetsResponse,
+  type AdminPlansResponse,
   type AdminStatsResponse,
   type AdminUsersResponse,
   type EcommerceBatchGenerateRequest,
@@ -44,6 +45,7 @@ import {
   type ImageQuality,
   type ImageSize,
   type OutputFormat,
+  type Plan,
   type ReferenceImageInput,
   type SaveStorageConfigRequest,
   type StylePresetId
@@ -69,11 +71,14 @@ import {
 } from "./ecommerce-jobs.js";
 import { deleteGalleryOutput, getGalleryImages, getProjectState, saveProjectSnapshot } from "./project-store.js";
 import { runtimePaths, serverConfig } from "./runtime.js";
-import { assets, ecommerceBatchJobs, users, workspaceMembers } from "./schema.js";
+import { assets, ecommerceBatchJobs, subscriptionPlans, users, workspaceMembers } from "./schema.js";
 import { getStorageConfig, saveStorageConfig, testStorageConfig } from "./storage-config.js";
 
 const MAX_PROJECT_SNAPSHOT_BYTES = 100 * 1024 * 1024;
 const MAX_PROJECT_NAME_LENGTH = 120;
+const MAX_PLAN_NAME_LENGTH = 120;
+const MAX_PLAN_DESCRIPTION_LENGTH = 1000;
+const MAX_CURRENCY_LENGTH = 16;
 
 interface ProjectPayload {
   name?: string;
@@ -109,7 +114,7 @@ export const app = new Hono();
 
 app.onError((error, c) => {
   if (error instanceof AuthError) {
-    return c.json(errorResponse(error.code, error.message), error.status as 400 | 401 | 403 | 409 | 500);
+    return c.json(errorResponse(error.code, error.message), error.status as 400 | 401 | 403 | 404 | 409 | 500);
   }
 
   console.error(error);
@@ -481,6 +486,163 @@ app.get("/api/admin/users", async (c) => {
   return c.json(await getAdminUsers());
 });
 
+app.get("/api/admin/plans", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return c.json(await getAdminPlans());
+});
+
+app.post("/api/admin/plans", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+
+  const parsed = parsePlanPayload(payload.value, true);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  const now = new Date().toISOString();
+  const id = randomUUID();
+  const planValues = parsed.value;
+  await db.insert(subscriptionPlans).values({
+    id,
+    name: planValues.name ?? "",
+    description: planValues.description,
+    imageQuota: planValues.imageQuota ?? 0,
+    storageQuotaBytes: planValues.storageQuotaBytes ?? 0,
+    priceCents: planValues.priceCents ?? 0,
+    currency: planValues.currency ?? "CNY",
+    enabled: planValues.enabled ?? 1,
+    sortOrder: planValues.sortOrder ?? 0,
+    benefitsJson: planValues.benefitsJson,
+    createdAt: now,
+    updatedAt: now
+  });
+
+  return c.json({ plan: await getPlanOrThrow(id) }, 201);
+});
+
+app.put("/api/admin/plans/:planId", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+
+  const parsed = parsePlanPayload(payload.value, false);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  const planId = c.req.param("planId");
+  const existing = await getPlanOrUndefined(planId);
+  if (!existing) {
+    return c.json(errorResponse("not_found", "套餐不存在。"), 404);
+  }
+
+  await db
+    .update(subscriptionPlans)
+    .set({
+      ...parsed.value,
+      updatedAt: new Date().toISOString()
+    })
+    .where(eq(subscriptionPlans.id, planId));
+
+  return c.json({ plan: await getPlanOrThrow(planId) });
+});
+
+app.put("/api/admin/users/:userId/plan", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+
+  const parsed = parseAssignPlanPayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  const plan = await getPlanOrUndefined(parsed.value.planId);
+  if (!plan) {
+    return c.json(errorResponse("not_found", "套餐不存在。"), 404);
+  }
+
+  const userId = c.req.param("userId");
+  const existing = await getUserOrUndefined(userId);
+  if (!existing) {
+    return c.json(errorResponse("not_found", "用户不存在。"), 404);
+  }
+
+  const resetQuota = parsed.value.resetQuota === true;
+  const quotaTotal = parsed.value.quotaTotal ?? (resetQuota ? plan.imageQuota : Number(existing.quotaTotal ?? 0));
+  const storageQuotaBytes =
+    parsed.value.storageQuotaBytes ?? (resetQuota ? plan.storageQuotaBytes : Number(existing.storageQuotaBytes ?? 0));
+
+  await db
+    .update(users)
+    .set({
+      planId: plan.id,
+      quotaTotal,
+      storageQuotaBytes,
+      updatedAt: new Date().toISOString()
+    })
+    .where(eq(users.id, userId));
+
+  return c.json({ user: await getAdminUserOrThrow(userId) });
+});
+
+app.put("/api/admin/users/:userId/quota", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+
+  const parsed = parseQuotaPayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  const userId = c.req.param("userId");
+  const existing = await getUserOrUndefined(userId);
+  if (!existing) {
+    return c.json(errorResponse("not_found", "用户不存在。"), 404);
+  }
+
+  await db
+    .update(users)
+    .set({
+      ...parsed.value,
+      updatedAt: new Date().toISOString()
+    })
+    .where(eq(users.id, userId));
+
+  return c.json({ user: await getAdminUserOrThrow(userId) });
+});
+
 app.get("/api/admin/ecommerce/jobs", async (c) => {
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
@@ -654,6 +816,18 @@ type ParseResult<T> =
       error: ErrorResponseBody;
     };
 
+type PlanMutation = Partial<{
+  name: string;
+  description: string | null;
+  imageQuota: number;
+  storageQuotaBytes: number;
+  priceCents: number;
+  currency: string;
+  enabled: number;
+  sortOrder: number;
+  benefitsJson: string | null;
+}>;
+
 function logProjectSaveRejected(error: ErrorResponseBody, request: Request): void {
   console.warn(
     `Project save rejected: ${error.error.code}. ${error.error.message}${formatRequestBodySummary(request)}`
@@ -720,7 +894,7 @@ async function requireAdminRoute(c: Context): Promise<Response | undefined> {
 
 function authErrorJson(c: Context, error: unknown): Response {
   if (error instanceof AuthError) {
-    return c.json(errorResponse(error.code, error.message), error.status as 400 | 401 | 403 | 409 | 500);
+    return c.json(errorResponse(error.code, error.message), error.status as 400 | 401 | 403 | 404 | 409 | 500);
   }
 
   if (error instanceof Error && error.message.includes("JWT_SECRET")) {
@@ -754,6 +928,8 @@ async function getAdminStats(): Promise<AdminStatsResponse> {
     userCount: userRows.length,
     assetCount: assetRows.length,
     estimatedStorageBytes: assetRows.reduce((total, asset) => total + estimateAssetBytes(asset), 0),
+    totalStorageQuotaBytes: userRows.reduce((total, user) => total + Number(user.storageQuotaBytes ?? 0), 0),
+    totalStorageUsedBytes: assetRows.reduce((total, asset) => total + estimateAssetBytes(asset), 0),
     ecommerceJobStatus: status,
     recentJobs: jobRows.slice(0, 20).map((job) => ({
       jobId: job.id,
@@ -774,24 +950,120 @@ async function getAdminStats(): Promise<AdminStatsResponse> {
 }
 
 async function getAdminUsers(): Promise<AdminUsersResponse> {
-  const [userRows, memberRows] = await Promise.all([db.select().from(users), db.select().from(workspaceMembers)]);
+  const [userRows, memberRows, assetRows] = await Promise.all([
+    db
+      .select({
+        user: users,
+        plan: subscriptionPlans
+      })
+      .from(users)
+      .leftJoin(subscriptionPlans, eq(subscriptionPlans.id, users.planId)),
+    db.select().from(workspaceMembers),
+    db.select().from(assets)
+  ]);
   const workspaceCountByUserId = new Map<string, number>();
   for (const member of memberRows) {
     workspaceCountByUserId.set(member.userId, (workspaceCountByUserId.get(member.userId) ?? 0) + 1);
   }
+  const storageUsedByUserId = new Map<string, number>();
+  for (const asset of assetRows) {
+    storageUsedByUserId.set(asset.createdByUserId, (storageUsedByUserId.get(asset.createdByUserId) ?? 0) + estimateAssetBytes(asset));
+  }
 
   return {
-    users: userRows.map((user) => ({
-      id: user.id,
-      email: user.email ?? "",
-      displayName: user.displayName,
-      role: user.role === "admin" ? "admin" : "user",
-      quotaTotal: Number(user.quotaTotal ?? 0),
-      quotaUsed: Number(user.quotaUsed ?? 0),
-      createdAt: user.createdAt,
-      updatedAt: user.updatedAt,
-      workspaceCount: workspaceCountByUserId.get(user.id) ?? 0
-    }))
+    users: userRows.map(({ user, plan }) =>
+      toAdminUserItem(user, plan, workspaceCountByUserId.get(user.id) ?? 0, storageUsedByUserId.get(user.id) ?? 0)
+    )
+  };
+}
+
+async function getAdminPlans(): Promise<AdminPlansResponse> {
+  const rows = await db
+    .select()
+    .from(subscriptionPlans)
+    .orderBy(asc(subscriptionPlans.sortOrder), asc(subscriptionPlans.createdAt));
+  return {
+    plans: rows.map(toPlan)
+  };
+}
+
+async function getPlanOrUndefined(planId: string): Promise<(typeof subscriptionPlans.$inferSelect) | undefined> {
+  const [row] = await db.select().from(subscriptionPlans).where(eq(subscriptionPlans.id, planId)).limit(1);
+  return row;
+}
+
+async function getPlanOrThrow(planId: string): Promise<Plan> {
+  const row = await getPlanOrUndefined(planId);
+  if (!row) {
+    throw new AuthError("not_found", "套餐不存在。", 404);
+  }
+  return toPlan(row);
+}
+
+async function getUserOrUndefined(userId: string): Promise<(typeof users.$inferSelect) | undefined> {
+  const [row] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  return row;
+}
+
+async function getAdminUserOrThrow(userId: string): Promise<AdminUsersResponse["users"][number]> {
+  const [row] = await db
+    .select({
+      user: users,
+      plan: subscriptionPlans
+    })
+    .from(users)
+    .leftJoin(subscriptionPlans, eq(subscriptionPlans.id, users.planId))
+    .where(eq(users.id, userId))
+    .limit(1);
+  if (!row) {
+    throw new AuthError("not_found", "用户不存在。", 404);
+  }
+
+  const [members, assetRows] = await Promise.all([
+    db.select().from(workspaceMembers).where(eq(workspaceMembers.userId, userId)),
+    db.select().from(assets).where(eq(assets.createdByUserId, userId))
+  ]);
+  const estimatedStorageUsedBytes = assetRows.reduce((total, asset) => total + estimateAssetBytes(asset), 0);
+  return toAdminUserItem(row.user, row.plan, members.length, estimatedStorageUsedBytes);
+}
+
+function toAdminUserItem(
+  user: typeof users.$inferSelect,
+  plan: typeof subscriptionPlans.$inferSelect | null,
+  workspaceCount: number,
+  estimatedStorageUsedBytes = 0
+): AdminUsersResponse["users"][number] {
+  return {
+    id: user.id,
+    email: user.email ?? "",
+    displayName: user.displayName,
+    role: user.role === "admin" ? "admin" : "user",
+    planId: user.planId ?? undefined,
+    planName: plan?.name,
+    quotaTotal: Number(user.quotaTotal ?? 0),
+    quotaUsed: Number(user.quotaUsed ?? 0),
+    storageQuotaBytes: Number(user.storageQuotaBytes ?? 0),
+    storageUsedBytes: Math.max(Number(user.storageUsedBytes ?? 0), estimatedStorageUsedBytes),
+    createdAt: user.createdAt,
+    updatedAt: user.updatedAt,
+    workspaceCount
+  };
+}
+
+function toPlan(plan: typeof subscriptionPlans.$inferSelect): Plan {
+  return {
+    id: plan.id,
+    name: plan.name,
+    description: plan.description ?? undefined,
+    imageQuota: Number(plan.imageQuota ?? 0),
+    storageQuotaBytes: Number(plan.storageQuotaBytes ?? 0),
+    priceCents: Number(plan.priceCents ?? 0),
+    currency: plan.currency,
+    enabled: Number(plan.enabled ?? 0) === 1,
+    sortOrder: Number(plan.sortOrder ?? 0),
+    benefits: parseJsonValue(plan.benefitsJson),
+    createdAt: plan.createdAt,
+    updatedAt: plan.updatedAt
   };
 }
 
@@ -888,6 +1160,224 @@ function parseAuthPayload(
       password,
       displayName: includeDisplayName ? stringValue(input.displayName)?.trim() : undefined
     }
+  };
+}
+
+function parsePlanPayload(input: unknown, requireName: boolean): ParseResult<PlanMutation> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_plan", "套餐内容必须是 JSON 对象。")
+    };
+  }
+
+  const value: PlanMutation = {};
+  if (Object.hasOwn(input, "name")) {
+    const name = parseLimitedString(input.name, MAX_PLAN_NAME_LENGTH);
+    if (!name) {
+      return {
+        ok: false,
+        error: errorResponse("invalid_plan_name", "套餐名称不能为空，且不能超过 120 个字符。")
+      };
+    }
+    value.name = name;
+  } else if (requireName) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_plan_name", "请提供套餐名称。")
+    };
+  }
+
+  if (Object.hasOwn(input, "description")) {
+    const description = parseNullableLimitedString(input.description, MAX_PLAN_DESCRIPTION_LENGTH);
+    if (description === undefined) {
+      return {
+        ok: false,
+        error: errorResponse("invalid_plan_description", "套餐描述不能超过 1000 个字符。")
+      };
+    }
+    value.description = description;
+  }
+
+  const numberFields = [
+    ["imageQuota", "image_quota", "生图额度必须是非负整数。"],
+    ["storageQuotaBytes", "storage_quota_bytes", "存储额度必须是非负整数。"],
+    ["priceCents", "price_cents", "价格必须是非负整数。"],
+    ["sortOrder", "sort_order", "排序值必须是非负整数。"]
+  ] as const;
+  for (const [camelName, snakeName, message] of numberFields) {
+    const rawValue = planNumberFieldValue(input, camelName, snakeName);
+    if (rawValue !== undefined) {
+      const parsed = parseNonNegativeInteger(rawValue);
+      if (parsed === undefined) {
+        return {
+          ok: false,
+          error: errorResponse("invalid_plan_number", message)
+        };
+      }
+      value[camelName] = parsed;
+    }
+  }
+
+  if (Object.hasOwn(input, "currency")) {
+    const currency = parseLimitedString(input.currency, MAX_CURRENCY_LENGTH)?.toUpperCase();
+    if (!currency) {
+      return {
+        ok: false,
+        error: errorResponse("invalid_currency", "币种不能为空，且不能超过 16 个字符。")
+      };
+    }
+    value.currency = currency;
+  } else if (requireName) {
+    value.currency = "CNY";
+  }
+
+  if (Object.hasOwn(input, "enabled")) {
+    if (typeof input.enabled !== "boolean") {
+      return {
+        ok: false,
+        error: errorResponse("invalid_enabled", "enabled 必须是布尔值。")
+      };
+    }
+    value.enabled = input.enabled ? 1 : 0;
+  } else if (requireName) {
+    value.enabled = 1;
+  }
+
+  const benefits = parseBenefitsJson(input);
+  if (!benefits.ok) {
+    return benefits;
+  }
+  if (benefits.value !== undefined) {
+    value.benefitsJson = benefits.value;
+  }
+
+  if (requireName) {
+    value.imageQuota ??= 0;
+    value.storageQuotaBytes ??= 0;
+    value.priceCents ??= 0;
+    value.sortOrder ??= 0;
+  }
+
+  if (!requireName && Object.keys(value).length === 0) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_plan", "请至少提供一个要修改的套餐字段。")
+    };
+  }
+
+  return {
+    ok: true,
+    value
+  };
+}
+
+function planNumberFieldValue(input: Record<string, unknown>, camelName: string, snakeName: string): unknown {
+  if (Object.hasOwn(input, camelName)) {
+    return input[camelName];
+  }
+  if (Object.hasOwn(input, snakeName)) {
+    return input[snakeName];
+  }
+  if (camelName === "imageQuota") {
+    return input.quotaTotal ?? input.generationQuota;
+  }
+  return undefined;
+}
+
+function parseAssignPlanPayload(input: unknown): ParseResult<{
+  planId: string;
+  resetQuota?: boolean;
+  quotaTotal?: number;
+  storageQuotaBytes?: number;
+}> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_plan_assignment", "套餐分配内容必须是 JSON 对象。")
+    };
+  }
+
+  const planId = parseLimitedString(input.planId, 64);
+  if (!planId) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_plan_id", "请提供有效套餐 ID。")
+    };
+  }
+
+  const quotaTotal = Object.hasOwn(input, "quotaTotal") ? parseNonNegativeInteger(input.quotaTotal) : undefined;
+  if (Object.hasOwn(input, "quotaTotal") && quotaTotal === undefined) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_quota", "生图额度必须是非负整数。")
+    };
+  }
+
+  const storageQuotaBytes = Object.hasOwn(input, "storageQuotaBytes")
+    ? parseNonNegativeInteger(input.storageQuotaBytes)
+    : undefined;
+  if (Object.hasOwn(input, "storageQuotaBytes") && storageQuotaBytes === undefined) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_storage_quota", "存储额度必须是非负整数。")
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      planId,
+      resetQuota: input.resetQuota === true,
+      quotaTotal,
+      storageQuotaBytes
+    }
+  };
+}
+
+function parseQuotaPayload(input: unknown): ParseResult<Partial<{
+  quotaTotal: number;
+  quotaUsed: number;
+  storageQuotaBytes: number;
+  storageUsedBytes: number;
+}>> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_quota", "额度内容必须是 JSON 对象。")
+    };
+  }
+
+  const value: Partial<{
+    quotaTotal: number;
+    quotaUsed: number;
+    storageQuotaBytes: number;
+    storageUsedBytes: number;
+  }> = {};
+  for (const key of ["quotaTotal", "quotaUsed", "storageQuotaBytes", "storageUsedBytes"] as const) {
+    if (!Object.hasOwn(input, key)) {
+      continue;
+    }
+    const parsed = parseNonNegativeInteger(input[key]);
+    if (parsed === undefined) {
+      return {
+        ok: false,
+        error: errorResponse("invalid_quota", "额度字段必须是非负整数。")
+      };
+    }
+    value[key] = parsed;
+  }
+
+  if (Object.keys(value).length === 0) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_quota", "请至少提供一个要调整的额度字段。")
+    };
+  }
+
+  return {
+    ok: true,
+    value
   };
 }
 
@@ -1395,8 +1885,99 @@ function parseOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function parseLimitedString(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 && trimmed.length <= maxLength ? trimmed : undefined;
+}
+
+function parseNullableLimitedString(value: unknown, maxLength: number): string | null | undefined {
+  if (value === null) {
+    return null;
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length <= maxLength ? trimmed || null : undefined;
+}
+
+function parseNonNegativeInteger(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    return undefined;
+  }
+  return value;
+}
+
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+function parseBenefitsJson(input: Record<string, unknown>): ParseResult<string | null | undefined> {
+  const rawValue = Object.hasOwn(input, "benefits")
+    ? input.benefits
+    : Object.hasOwn(input, "benefitsJson")
+      ? input.benefitsJson
+      : Object.hasOwn(input, "featuresJson")
+        ? input.featuresJson
+        : undefined;
+  if (rawValue === undefined) {
+    return {
+      ok: true,
+      value: undefined
+    };
+  }
+  if (rawValue === null) {
+    return {
+      ok: true,
+      value: null
+    };
+  }
+  if (typeof rawValue === "string") {
+    if (!rawValue.trim()) {
+      return {
+        ok: true,
+        value: null
+      };
+    }
+    try {
+      JSON.parse(rawValue);
+      return {
+        ok: true,
+        value: rawValue
+      };
+    } catch {
+      return {
+        ok: false,
+        error: errorResponse("invalid_benefits_json", "benefitsJson 必须是有效 JSON 字符串。")
+      };
+    }
+  }
+
+  try {
+    return {
+      ok: true,
+      value: JSON.stringify(rawValue)
+    };
+  } catch {
+    return {
+      ok: false,
+      error: errorResponse("invalid_benefits_json", "套餐权益字段必须可序列化为 JSON。")
+    };
+  }
+}
+
+function parseJsonValue(value: string | null): unknown {
+  if (!value) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
 }
 
 function errorToMessage(error: unknown): string {

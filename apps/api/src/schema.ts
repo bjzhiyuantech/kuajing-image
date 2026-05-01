@@ -13,13 +13,38 @@ export const users = mysqlTable(
     passwordHash: shortText("password_hash", 512).notNull(),
     displayName: shortText("display_name").notNull(),
     role: shortText("role", 32).notNull(),
+    planId: id("plan_id"),
     quotaTotal: bigint("quota_total", { mode: "number" }).notNull(),
     quotaUsed: bigint("quota_used", { mode: "number" }).notNull(),
+    storageQuotaBytes: bigint("storage_quota_bytes", { mode: "number" }).notNull(),
+    storageUsedBytes: bigint("storage_used_bytes", { mode: "number" }).notNull(),
     createdAt: isoDate("created_at").notNull(),
     updatedAt: isoDate("updated_at").notNull()
   },
   (table) => ({
-    emailIdx: uniqueIndex("users_email_unique_idx").on(table.email)
+    emailIdx: uniqueIndex("users_email_unique_idx").on(table.email),
+    planIdx: index("users_plan_id_idx").on(table.planId)
+  })
+);
+
+export const subscriptionPlans = mysqlTable(
+  "subscription_plans",
+  {
+    id: id("id").primaryKey(),
+    name: shortText("name").notNull(),
+    description: text("description"),
+    imageQuota: bigint("image_quota", { mode: "number" }).notNull(),
+    storageQuotaBytes: bigint("storage_quota_bytes", { mode: "number" }).notNull(),
+    priceCents: bigint("price_cents", { mode: "number" }).notNull(),
+    currency: shortText("currency", 16).notNull(),
+    enabled: int("enabled").notNull(),
+    sortOrder: int("sort_order").notNull(),
+    benefitsJson: longtext("benefits_json"),
+    createdAt: isoDate("created_at").notNull(),
+    updatedAt: isoDate("updated_at").notNull()
+  },
+  (table) => ({
+    enabledSortIdx: index("subscription_plans_enabled_sort_idx").on(table.enabled, table.sortOrder)
   })
 );
 

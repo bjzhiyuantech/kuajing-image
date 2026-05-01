@@ -410,13 +410,32 @@ export interface AppConfig {
 
 export type UserRole = "user" | "admin";
 
+export interface Plan {
+  id: string;
+  name: string;
+  description?: string;
+  imageQuota: number;
+  storageQuotaBytes: number;
+  priceCents: number;
+  currency: string;
+  enabled: boolean;
+  sortOrder: number;
+  benefits?: unknown;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface AuthUser {
   id: string;
   email: string;
   displayName: string;
   role: UserRole;
+  planId?: string;
+  planName?: string;
   quotaTotal: number;
   quotaUsed: number;
+  storageQuotaBytes: number;
+  storageUsedBytes: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -442,6 +461,8 @@ export interface AdminStatsResponse {
   userCount: number;
   assetCount: number;
   estimatedStorageBytes: number;
+  totalStorageQuotaBytes: number;
+  totalStorageUsedBytes: number;
   ecommerceJobStatus: Record<EcommerceBatchJobStatus, number>;
   recentJobs: EcommerceJobSummary[];
 }
@@ -452,6 +473,77 @@ export interface AdminUserItem extends AuthUser {
 
 export interface AdminUsersResponse {
   users: AdminUserItem[];
+}
+
+export interface AdminPlansResponse {
+  plans: Plan[];
+}
+
+export interface BillingPlan extends Plan {
+  recommended?: boolean;
+  purchaseUrl?: string;
+}
+
+export interface BillingBalance {
+  balanceCents: number;
+  currency: string;
+  updatedAt?: string;
+}
+
+export interface BillingUsage {
+  quotaTotal: number;
+  quotaUsed: number;
+  packageTotal?: number;
+  packageUsed?: number;
+  packageRemaining?: number;
+}
+
+export interface BillingStorageUsage {
+  quotaBytes: number;
+  usedBytes: number;
+}
+
+export interface BillingTransaction {
+  id: string;
+  type: "plan_purchase" | "recharge" | "generation" | string;
+  title: string;
+  amountCents?: number;
+  imageCount?: number;
+  status: "pending" | "succeeded" | "failed" | "cancelled" | "paid" | string;
+  createdAt: string;
+}
+
+export interface BillingSummaryResponse {
+  balance: BillingBalance;
+  currentPlan?: BillingPlan;
+  plans?: BillingPlan[];
+  usage?: BillingUsage;
+  storage?: BillingStorageUsage;
+  transactions?: BillingTransaction[];
+}
+
+export type PaymentChannel = "alipay";
+
+export interface CreateAlipayRechargeRequest {
+  amountCents: number;
+  currency?: string;
+  returnUrl?: string;
+  channel?: PaymentChannel;
+}
+
+export interface CreatePaymentResponse {
+  orderId?: string;
+  status?: "pending" | "paid" | "failed";
+  paymentUrl?: string;
+  checkoutUrl?: string;
+  qrCodeUrl?: string;
+  message?: string;
+}
+
+export interface PurchasePlanRequest {
+  planId: string;
+  paymentMethod: "balance" | "alipay";
+  returnUrl?: string;
 }
 
 export interface AdminAssetItem {

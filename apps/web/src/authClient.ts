@@ -7,8 +7,15 @@ export interface AuthUser {
   email: string;
   displayName: string;
   role: AuthRole;
+  planId?: string;
+  planName?: string;
   quotaTotal?: number;
   quotaUsed?: number;
+  balanceCents?: number;
+  recordCount?: number;
+  packageRemaining?: number;
+  storageQuotaBytes?: number;
+  storageUsedBytes?: number;
 }
 
 export interface AuthSession {
@@ -25,6 +32,19 @@ export class UnauthorizedError extends Error {
 
 export function getStoredAuthToken(): string | null {
   return window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
+}
+
+export function consumeAuthTokenFromUrl(): string | null {
+  const url = new URL(window.location.href);
+  const token = url.searchParams.get("authToken")?.trim() || "";
+  if (!token) {
+    return null;
+  }
+
+  storeAuthToken(token);
+  url.searchParams.delete("authToken");
+  window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+  return token;
 }
 
 export function storeAuthToken(token: string): void {
@@ -143,8 +163,15 @@ export function parseAuthUser(value: unknown): AuthUser {
     email: stringFrom(value.email) || "unknown@example.com",
     displayName: stringFrom(value.displayName) || stringFrom(value.name) || stringFrom(value.email) || "未命名用户",
     role: stringFrom(value.role) || "user",
+    planId: stringFrom(value.planId ?? value.plan_id),
+    planName: stringFrom(value.planName ?? value.plan_name ?? (isRecord(value.plan) ? value.plan.name : undefined)),
     quotaTotal: numberFrom(value.quota_total ?? value.quotaTotal),
-    quotaUsed: numberFrom(value.quota_used ?? value.quotaUsed)
+    quotaUsed: numberFrom(value.quota_used ?? value.quotaUsed),
+    balanceCents: numberFrom(value.balance_cents ?? value.balanceCents ?? (isRecord(value.balance) ? value.balance.amountCents ?? value.balance.cents : undefined)),
+    recordCount: numberFrom(value.record_count ?? value.recordCount ?? value.generationCount),
+    packageRemaining: numberFrom(value.package_remaining ?? value.packageRemaining ?? value.quotaRemaining),
+    storageQuotaBytes: numberFrom(value.storage_quota_bytes ?? value.storageQuotaBytes ?? (isRecord(value.storage) ? value.storage.quotaBytes : undefined)),
+    storageUsedBytes: numberFrom(value.storage_used_bytes ?? value.storageUsedBytes ?? (isRecord(value.storage) ? value.storage.usedBytes : undefined))
   };
 }
 

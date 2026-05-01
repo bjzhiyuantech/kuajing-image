@@ -1,19 +1,24 @@
 import {
   BarChart3,
   CheckCircle2,
+  Coins,
   Clock3,
+  CreditCard,
   Download,
   Edit3,
+  ExternalLink,
   ImageIcon,
   KeyRound,
   Loader2,
   LogOut,
+  Package,
   RefreshCw,
   Send,
   Settings,
   Sparkles,
   Trash2,
   UserCircle2,
+  Wallet,
   Wand2,
   X
 } from "lucide-react";
@@ -25,6 +30,7 @@ import {
   ECOMMERCE_SCENE_TEMPLATES,
   SIZE_PRESETS,
   composeEcommercePrompt,
+  type BillingPlan,
   type EcommerceBatchGenerateResponse,
   type EcommerceGenerationMode,
   type EcommerceSceneTemplateId,
@@ -40,6 +46,37 @@ import type { AuthUser, BatchFormState, BatchTask, ExtensionAuthState, Extension
 
 const ACTIVE_BATCH_JOB_STORAGE_KEY = "activeBatchJob";
 const AUTH_STORAGE_KEY = "auth";
+const MOCK_BILLING_PLANS: BillingPlan[] = [
+  {
+    id: "starter",
+    name: "入门套餐",
+    description: "适合少量商品图优化。",
+    imageQuota: 120,
+    storageQuotaBytes: 2 * 1024 * 1024 * 1024,
+    priceCents: 9900,
+    currency: "CNY",
+    enabled: true,
+    sortOrder: 10,
+    benefits: ["120 次出图额度", "基础历史记录", "支付宝购买"],
+    createdAt: "",
+    updatedAt: ""
+  },
+  {
+    id: "pro",
+    name: "专业套餐",
+    description: "适合稳定上新和多店铺运营。",
+    imageQuota: 600,
+    storageQuotaBytes: 10 * 1024 * 1024 * 1024,
+    priceCents: 39900,
+    currency: "CNY",
+    enabled: true,
+    sortOrder: 20,
+    recommended: true,
+    benefits: ["600 次出图额度", "批量任务优先", "适合团队协作"],
+    createdAt: "",
+    updatedAt: ""
+  }
+];
 
 const defaultSettings: ExtensionSettings = {
   apiBaseUrl: "http://127.0.0.1:8787"
@@ -56,9 +93,9 @@ interface StoredBatchJob {
   token?: string;
 }
 
-type ToolTab = "account" | "history" | "stats" | "settings";
+type ToolTab = "account" | "billing" | "history" | "stats" | "settings";
 type AuthMode = "login" | "register";
-type PendingAuthAction = "generate" | "history" | "stats" | "job";
+type PendingAuthAction = "generate" | "billing" | "history" | "stats" | "job";
 
 interface EcommerceJobSummary {
   id: string;
@@ -78,6 +115,18 @@ interface EcommerceStatsSummary {
   failedJobs: number;
   runningJobs: number;
   generatedImages: number;
+}
+
+interface BillingOverview {
+  balanceCents: number;
+  currency: string;
+  currentPlan?: BillingPlan;
+  plans: BillingPlan[];
+  quotaTotal: number;
+  quotaUsed: number;
+  packageTotal?: number;
+  packageUsed?: number;
+  packageRemaining?: number;
 }
 
 interface RemoteState<T> {
@@ -284,6 +333,87 @@ function normalizeStatsResponse(payload: unknown): EcommerceStatsSummary {
   };
 }
 
+function normalizePlan(value: unknown, index = 0): BillingPlan | null {
+  const source = asRecord(value);
+  const id = firstString(source, ["id", "planId", "code"]);
+  const name = firstString(source, ["name", "title", "label"]);
+  if (!id || !name) {
+    return null;
+  }
+
+  return {
+    id,
+    name,
+    description: firstString(source, ["description", "desc", "subtitle"]),
+    imageQuota: firstNumber(source, ["imageQuota", "quotaTotal", "quota", "generationQuota"]) ?? 0,
+    storageQuotaBytes: firstNumber(source, ["storageQuotaBytes", "storageQuota", "storageBytes"]) ?? 0,
+    priceCents: firstNumber(source, ["priceCents", "amountCents", "price"]) ?? 0,
+    currency: firstString(source, ["currency"]) ?? "CNY",
+    enabled: source.enabled === undefined ? true : Boolean(source.enabled),
+    sortOrder: firstNumber(source, ["sortOrder", "sort"]) ?? index,
+    benefits: source.benefits ?? source.features,
+    createdAt: firstString(source, ["createdAt", "created_at"]) ?? "",
+    updatedAt: firstString(source, ["updatedAt", "updated_at"]) ?? "",
+    recommended: Boolean(source.recommended || source.isRecommended),
+    purchaseUrl: firstString(source, ["purchaseUrl", "checkoutUrl", "paymentUrl"])
+  };
+}
+
+function normalizeBillingResponse(payload: unknown, user: AuthUser | null): BillingOverview {
+  const root = asRecord(payload);
+  const data = asRecord(root.data ?? root.billing ?? payload);
+  const balance = asRecord(data.balance ?? root.balance);
+  const usage = asRecord(data.usage ?? root.usage ?? data.quota ?? root.quota);
+  const currentPlan = normalizePlan(data.currentPlan ?? data.plan ?? root.currentPlan ?? root.plan);
+  const planItems = Array.isArray(data.plans)
+    ? data.plans
+    : Array.isArray(root.plans)
+      ? root.plans
+      : Array.isArray(data.items)
+        ? data.items
+        : MOCK_BILLING_PLANS;
+
+  return {
+    balanceCents:
+      firstNumber(balance, ["balanceCents", "amountCents", "availableCents"]) ??
+      firstNumber(data, ["balanceCents", "balance", "availableBalance"]) ??
+      user?.balanceCents ??
+      0,
+    currency: firstString(balance, ["currency"]) ?? firstString(data, ["currency"]) ?? user?.currency ?? "CNY",
+    currentPlan: currentPlan ?? undefined,
+    plans: planItems.map((item, index) => normalizePlan(item, index)).filter((plan): plan is BillingPlan => Boolean(plan)),
+    quotaTotal: firstNumber(usage, ["quotaTotal", "total", "imageQuota"]) ?? user?.quotaTotal ?? 0,
+    quotaUsed: firstNumber(usage, ["quotaUsed", "used", "usedQuota"]) ?? user?.quotaUsed ?? 0,
+    packageTotal: firstNumber(usage, ["packageTotal", "planQuota", "packageQuota"]) ?? user?.packageTotal,
+    packageUsed: firstNumber(usage, ["packageUsed", "planUsed"]) ?? user?.packageUsed,
+    packageRemaining:
+      firstNumber(usage, ["packageRemaining", "remaining", "quotaRemaining"]) ??
+      user?.packageRemaining ??
+      Math.max((user?.quotaTotal ?? 0) - (user?.quotaUsed ?? 0), 0)
+  };
+}
+
+function formatMoney(cents: number, currency = "CNY"): string {
+  return new Intl.NumberFormat("zh-CN", {
+    style: "currency",
+    currency,
+    maximumFractionDigits: cents % 100 === 0 ? 0 : 2
+  }).format(cents / 100);
+}
+
+function formatCount(value?: number): string {
+  return typeof value === "number" && Number.isFinite(value) ? value.toLocaleString("zh-CN") : "0";
+}
+
+function planBenefits(plan: BillingPlan): string[] {
+  if (Array.isArray(plan.benefits)) {
+    return plan.benefits.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).slice(0, 3);
+  }
+  const source = asRecord(plan.benefits);
+  const features = source.features;
+  return Array.isArray(features) ? features.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).slice(0, 3) : [];
+}
+
 function normalizeUser(value: unknown): AuthUser | null {
   const root = asRecord(value);
   const source = asRecord(root.user ?? root.data ?? root.profile ?? value);
@@ -297,8 +427,15 @@ function normalizeUser(value: unknown): AuthUser | null {
     email,
     displayName: firstString(source, ["displayName", "display_name", "name", "nickname"]),
     role: firstString(source, ["role", "plan"]),
+    planId: firstString(source, ["planId", "plan_id"]),
+    planName: firstString(source, ["planName", "plan_name"]),
     quotaTotal: firstNumber(source, ["quotaTotal", "quota_total", "totalQuota"]),
-    quotaUsed: firstNumber(source, ["quotaUsed", "quota_used", "usedQuota"])
+    quotaUsed: firstNumber(source, ["quotaUsed", "quota_used", "usedQuota"]),
+    balanceCents: firstNumber(source, ["balanceCents", "balance_cents", "balance"]),
+    currency: firstString(source, ["currency"]),
+    packageTotal: firstNumber(source, ["packageTotal", "package_total", "planQuota"]),
+    packageUsed: firstNumber(source, ["packageUsed", "package_used", "planUsed"]),
+    packageRemaining: firstNumber(source, ["packageRemaining", "package_remaining", "remainingQuota"])
   };
 }
 
@@ -366,6 +503,20 @@ export function SidePanelApp() {
     error: "",
     loading: false
   });
+  const [billingState, setBillingState] = useState<RemoteState<BillingOverview>>({
+    data: {
+      balanceCents: 0,
+      currency: "CNY",
+      plans: MOCK_BILLING_PLANS,
+      quotaTotal: 0,
+      quotaUsed: 0
+    },
+    error: "",
+    loading: false
+  });
+  const [rechargeAmount, setRechargeAmount] = useState("50");
+  const [billingAction, setBillingAction] = useState("");
+  const [billingActionLoading, setBillingActionLoading] = useState(false);
   const [hiddenResultKeys, setHiddenResultKeys] = useState<Set<string>>(() => new Set());
   const [localResultRecords, setLocalResultRecords] = useState<GenerationRecord[]>([]);
   const [editDialog, setEditDialog] = useState<EditImageDialogState | null>(null);
@@ -407,6 +558,14 @@ export function SidePanelApp() {
       extraDirection: form.extraDirection
     });
   }, [form]);
+
+  const accountQuota = useMemo(() => {
+    const quotaTotal = billingState.data.quotaTotal || auth.user?.quotaTotal || 0;
+    const quotaUsed = billingState.data.quotaUsed || auth.user?.quotaUsed || 0;
+    const remaining = Math.max(quotaTotal - quotaUsed, 0);
+    const percent = quotaTotal > 0 ? Math.min(100, Math.round((quotaUsed / quotaTotal) * 100)) : 0;
+    return { quotaTotal, quotaUsed, remaining, percent };
+  }, [auth.user, billingState.data.quotaTotal, billingState.data.quotaUsed]);
 
   useEffect(() => {
     void chrome.storage.local.get(["settings", AUTH_STORAGE_KEY, ACTIVE_BATCH_JOB_STORAGE_KEY]).then((result) => {
@@ -477,6 +636,9 @@ export function SidePanelApp() {
     if (activeTool === "stats") {
       void refreshStats();
     }
+    if (activeTool === "billing") {
+      void refreshBilling();
+    }
   }, [activeTool, auth.token, toolPanelOpen, settings.apiBaseUrl]);
 
   function apiBaseUrl(): string {
@@ -522,7 +684,12 @@ export function SidePanelApp() {
   }
 
   function galleryDetailUrl(asset: GeneratedAsset): string {
-    return `${apiBaseUrl()}/gallery?assetId=${encodeURIComponent(asset.id)}`;
+    const url = new URL("/gallery", `${apiBaseUrl()}/`);
+    url.searchParams.set("assetId", asset.id);
+    if (auth.token.trim()) {
+      url.searchParams.set("authToken", auth.token.trim());
+    }
+    return url.toString();
   }
 
   async function openGalleryPreview(asset: GeneratedAsset): Promise<void> {
@@ -648,6 +815,9 @@ export function SidePanelApp() {
       } else if (action === "stats") {
         setActiveTool("stats");
         void refreshStats(true, nextAuth.token);
+      } else if (action === "billing") {
+        setActiveTool("billing");
+        void refreshBilling(true, nextAuth.token);
       } else if (action === "job" && task.id !== "idle") {
         void pollBatchJob(task.id, nextAuth.token);
       }
@@ -710,8 +880,44 @@ export function SidePanelApp() {
     }
   }
 
+  async function refreshBilling(authAlreadyChecked = false, token = auth.token): Promise<void> {
+    if (!token.trim() && !authAlreadyChecked && !requireAuth("billing")) {
+      return;
+    }
+    setBillingState({
+      data: normalizeBillingResponse({}, auth.user),
+      error: "",
+      loading: false
+    });
+    setBillingAction("套餐购买、支付宝充值和更多权益会在支付接口接入后开放。");
+  }
+
+  async function submitRecharge(): Promise<void> {
+    if (!auth.token.trim() && !requireAuth("billing")) {
+      return;
+    }
+    const amount = Number(rechargeAmount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setBillingAction("请输入有效充值金额。");
+      return;
+    }
+
+    setBillingActionLoading(true);
+    setBillingAction("支付宝充值会在支付接口接入后开放。");
+    setBillingActionLoading(false);
+  }
+
+  async function purchasePlan(plan: BillingPlan): Promise<void> {
+    if (!auth.token.trim() && !requireAuth("billing")) {
+      return;
+    }
+    setBillingActionLoading(true);
+    setBillingAction(`${plan.name} 会在支付接口接入后开放购买。`);
+    setBillingActionLoading(false);
+  }
+
   function openTool(tab: ToolTab): void {
-    if ((tab === "history" || tab === "stats") && !auth.token.trim()) {
+    if ((tab === "billing" || tab === "history" || tab === "stats") && !auth.token.trim()) {
       setPendingAuthAction(tab);
       setAuthMode("login");
       setAuthError("请先登录账号，再查看个人数据。");
@@ -1008,6 +1214,27 @@ export function SidePanelApp() {
         </button>
       </section>
 
+      <section className="panel quota-summary">
+        <div className="quota-title-row">
+          <div>
+            <h2>次数与余额</h2>
+            <p>{auth.token ? auth.user?.planName || billingState.data.currentPlan?.name || "当前套餐待同步" : "登录后同步套餐和余额"}</p>
+          </div>
+          <button className="mini-button" type="button" onClick={() => openTool("billing")}>
+            <Package size={13} />
+            套餐
+          </button>
+        </div>
+        <div className="quota-meter" aria-label={`已使用 ${accountQuota.quotaUsed}，总额度 ${accountQuota.quotaTotal}`}>
+          <span style={{ width: `${accountQuota.percent}%` }} />
+        </div>
+        <div className="quota-summary-grid">
+          <div><span>已用次数</span><strong>{formatCount(accountQuota.quotaUsed)}</strong></div>
+          <div><span>套餐余量</span><strong>{formatCount(accountQuota.remaining)}</strong></div>
+          <div><span>账户余额</span><strong>{formatMoney(billingState.data.balanceCents || auth.user?.balanceCents || 0, billingState.data.currency || auth.user?.currency)}</strong></div>
+        </div>
+      </section>
+
       <section className="panel">
         <h2>商品信息</h2>
         <label>
@@ -1252,6 +1479,10 @@ export function SidePanelApp() {
             <UserCircle2 size={15} />
             账户
           </button>
+          <button className={activeTool === "billing" && toolPanelOpen ? "tool-tab active" : "tool-tab"} type="button" onClick={() => openTool("billing")}>
+            <Wallet size={15} />
+            额度
+          </button>
           <button className={activeTool === "history" && toolPanelOpen ? "tool-tab active" : "tool-tab"} type="button" onClick={() => openTool("history")}>
             <Clock3 size={15} />
             历史
@@ -1269,7 +1500,7 @@ export function SidePanelApp() {
         {toolPanelOpen ? (
           <div className="tool-panel">
             <div className="tool-panel-header">
-              <strong>{activeTool === "account" ? "账户" : activeTool === "history" ? "历史任务" : activeTool === "stats" ? "统计概览" : "设置"}</strong>
+              <strong>{activeTool === "account" ? "账户" : activeTool === "billing" ? "套餐与余额" : activeTool === "history" ? "历史任务" : activeTool === "stats" ? "统计概览" : "设置"}</strong>
               <button className="tool-close" type="button" onClick={() => setToolPanelOpen(false)}>收起</button>
             </div>
 
@@ -1295,13 +1526,21 @@ export function SidePanelApp() {
                       </button>
                     </div>
                     <div className="account-meta">
-                      <div><span>角色</span><strong>{auth.user?.role || "user"}</strong></div>
-                      <div><span>Quota</span><strong>{auth.user?.quotaUsed ?? 0}/{auth.user?.quotaTotal ?? 0}</strong></div>
+                      <div><span>当前套餐</span><strong>{auth.user?.planName || auth.user?.planId || billingState.data.currentPlan?.name || "未设置"}</strong></div>
+                      <div><span>账户余额</span><strong>{formatMoney(billingState.data.balanceCents || auth.user?.balanceCents || 0, billingState.data.currency || auth.user?.currency)}</strong></div>
+                      <div><span>已用次数</span><strong>{formatCount(accountQuota.quotaUsed)}/{formatCount(accountQuota.quotaTotal)}</strong></div>
+                      <div><span>套餐余量</span><strong>{formatCount(accountQuota.remaining)}</strong></div>
                     </div>
-                    <button className="mini-button" type="button" onClick={() => void refreshMe()}>
-                      <RefreshCw size={13} />
-                      刷新账户
-                    </button>
+                    <div className="button-row">
+                      <button className="mini-button" type="button" onClick={() => void refreshMe()}>
+                        <RefreshCw size={13} />
+                        刷新账户
+                      </button>
+                      <button className="mini-button" type="button" onClick={() => openTool("billing")}>
+                        <CreditCard size={13} />
+                        购买/充值
+                      </button>
+                    </div>
                   </div>
                 ) : (
                   <form className="auth-form" onSubmit={(event) => void submitAuth(event)}>
@@ -1331,6 +1570,77 @@ export function SidePanelApp() {
                   </form>
                 )}
                 {!auth.token ? <p className="settings-note">登录后会把个人 JWT 保存在本地，并自动附加到后端请求。</p> : null}
+              </div>
+            ) : null}
+
+            {activeTool === "billing" ? (
+              <div>
+                <div className="tool-actions">
+                  <span>套餐购买与支付宝余额充值</span>
+                  <button className="mini-button" disabled={billingState.loading} type="button" onClick={() => void refreshBilling()}>
+                    {billingState.loading ? <Loader2 className="spin" size={13} /> : <RefreshCw size={13} />}
+                    刷新
+                  </button>
+                </div>
+                {billingState.error ? <p className="tool-error">{billingState.error}</p> : null}
+                {billingState.loading ? <p className="tool-empty">正在读取额度数据...</p> : null}
+                <div className="billing-balance-card">
+                  <div>
+                    <span>账户余额</span>
+                    <strong>{formatMoney(billingState.data.balanceCents, billingState.data.currency)}</strong>
+                  </div>
+                  <Coins size={22} />
+                </div>
+                <div className="recharge-row">
+                  <label>
+                    <span>支付宝充值金额</span>
+                    <input inputMode="decimal" value={rechargeAmount} onChange={(event) => setRechargeAmount(event.target.value)} />
+                  </label>
+                  <button className="primary-button recharge-button" disabled={billingActionLoading} type="button" onClick={() => void submitRecharge()}>
+                    {billingActionLoading ? <Loader2 className="spin" size={15} /> : <Wallet size={15} />}
+                    充值
+                  </button>
+                </div>
+                <div className="billing-usage-card">
+                  <div className="quota-title-row">
+                    <div>
+                      <strong>图片生成次数</strong>
+                      <span>{formatCount(accountQuota.remaining)} 次可用</span>
+                    </div>
+                    <span>{accountQuota.percent}% 已用</span>
+                  </div>
+                  <div className="quota-meter">
+                    <span style={{ width: `${accountQuota.percent}%` }} />
+                  </div>
+                  <div className="quota-row">
+                    <span>{formatCount(accountQuota.quotaUsed)} 已用</span>
+                    <span>{formatCount(accountQuota.quotaTotal)} 总额度</span>
+                  </div>
+                </div>
+                <div className="plan-list">
+                  {billingState.data.plans.map((plan) => (
+                    <article className={plan.recommended ? "plan-card recommended" : "plan-card"} key={plan.id}>
+                      <div className="plan-card-top">
+                        <div>
+                          <strong>{plan.name}</strong>
+                          <span>{plan.description || `${formatCount(plan.imageQuota)} 次图片生成`}</span>
+                        </div>
+                        {plan.recommended ? <em>推荐</em> : null}
+                      </div>
+                      <div className="plan-price">{formatMoney(plan.priceCents, plan.currency)}</div>
+                      <div className="plan-benefits">
+                        {(planBenefits(plan).length > 0 ? planBenefits(plan) : [`${formatCount(plan.imageQuota)} 次图片生成额度`]).map((benefit) => (
+                          <span key={benefit}>{benefit}</span>
+                        ))}
+                      </div>
+                      <button className="mini-button plan-buy" disabled={billingActionLoading || !plan.enabled} type="button" onClick={() => void purchasePlan(plan)}>
+                        {plan.purchaseUrl ? <ExternalLink size={13} /> : <CreditCard size={13} />}
+                        {billingState.data.balanceCents >= plan.priceCents && plan.priceCents > 0 ? "余额购买" : "购买套餐"}
+                      </button>
+                    </article>
+                  ))}
+                </div>
+                {billingAction ? <p className="settings-note">{billingAction}</p> : null}
               </div>
             ) : null}
 

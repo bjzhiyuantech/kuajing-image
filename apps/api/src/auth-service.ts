@@ -4,7 +4,12 @@ import { hashPassword, requireJwtSecret, signJwt, verifyJwt, verifyPassword } fr
 import type { RequestTenant } from "./auth-context.js";
 import type { AuthMeResponse, AuthResponse, AuthUser, AuthWorkspace } from "./contracts.js";
 import { db } from "./database.js";
-import { users, workspaceMembers, workspaces } from "./schema.js";
+import { subscriptionPlans, users, workspaceMembers, workspaces } from "./schema.js";
+
+const DEFAULT_PLAN_ID = "free";
+const DEFAULT_PLAN_NAME = "Free";
+const DEFAULT_IMAGE_QUOTA = 20;
+const DEFAULT_STORAGE_QUOTA_BYTES = 1024 * 1024 * 1024;
 
 export interface AuthSession {
   user: AuthUser;
@@ -47,8 +52,11 @@ export async function registerUser(input: RegisterInput): Promise<AuthResponse> 
         passwordHash: hashPassword(password),
         displayName,
         role: "user",
-        quotaTotal: 0,
+        planId: DEFAULT_PLAN_ID,
+        quotaTotal: DEFAULT_IMAGE_QUOTA,
         quotaUsed: 0,
+        storageQuotaBytes: DEFAULT_STORAGE_QUOTA_BYTES,
+        storageUsedBytes: 0,
         createdAt: now,
         updatedAt: now
       });
@@ -82,11 +90,14 @@ export async function registerUser(input: RegisterInput): Promise<AuthResponse> 
       passwordHash: "",
       displayName,
       role: "user",
-      quotaTotal: 0,
+      planId: DEFAULT_PLAN_ID,
+      quotaTotal: DEFAULT_IMAGE_QUOTA,
       quotaUsed: 0,
+      storageQuotaBytes: DEFAULT_STORAGE_QUOTA_BYTES,
+      storageUsedBytes: 0,
       createdAt: now,
       updatedAt: now
-    }),
+    }, { name: DEFAULT_PLAN_NAME }),
     workspace: {
       id: workspaceId,
       name: `${displayName}'s Workspace`,
@@ -109,7 +120,7 @@ export async function loginUser(input: LoginInput): Promise<AuthResponse> {
   }
 
   return buildAuthResponse({
-    user: toAuthUser(user),
+    user: toAuthUser(user, await findPlanById(user.planId)),
     workspace
   });
 }
@@ -132,10 +143,12 @@ export async function getAuthSessionFromToken(token: string): Promise<AuthSessio
   const [row] = await db
     .select({
       user: users,
+      plan: subscriptionPlans,
       workspace: workspaces,
       member: workspaceMembers
     })
     .from(users)
+    .leftJoin(subscriptionPlans, eq(subscriptionPlans.id, users.planId))
     .innerJoin(workspaceMembers, eq(workspaceMembers.userId, users.id))
     .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
     .where(and(eq(users.id, payload.sub), eq(workspaces.id, payload.workspaceId)))
@@ -145,7 +158,7 @@ export async function getAuthSessionFromToken(token: string): Promise<AuthSessio
     return undefined;
   }
 
-  const user = toAuthUser(row.user);
+  const user = toAuthUser(row.user, row.plan);
   const workspace = {
     id: row.workspace.id,
     name: row.workspace.name,
@@ -202,6 +215,14 @@ async function findUserByEmail(email: string): Promise<(typeof users.$inferSelec
   return row;
 }
 
+async function findPlanById(planId: string | null | undefined): Promise<(typeof subscriptionPlans.$inferSelect) | undefined> {
+  if (!planId) {
+    return undefined;
+  }
+  const [row] = await db.select().from(subscriptionPlans).where(eq(subscriptionPlans.id, planId)).limit(1);
+  return row;
+}
+
 async function findDefaultWorkspace(userId: string): Promise<AuthWorkspace | undefined> {
   const [row] = await db
     .select({
@@ -234,14 +255,18 @@ function buildAuthResponse(input: { user: AuthUser; workspace: AuthWorkspace }):
   };
 }
 
-function toAuthUser(row: typeof users.$inferSelect): AuthUser {
+function toAuthUser(row: typeof users.$inferSelect, plan?: Pick<typeof subscriptionPlans.$inferSelect, "name"> | null): AuthUser {
   return {
     id: row.id,
     email: row.email ?? "",
     displayName: row.displayName,
     role: row.role === "admin" ? "admin" : "user",
+    planId: row.planId ?? undefined,
+    planName: plan?.name,
     quotaTotal: Number(row.quotaTotal ?? 0),
     quotaUsed: Number(row.quotaUsed ?? 0),
+    storageQuotaBytes: Number(row.storageQuotaBytes ?? 0),
+    storageUsedBytes: Number(row.storageUsedBytes ?? 0),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt
   };

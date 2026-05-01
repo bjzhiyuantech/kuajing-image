@@ -1,6 +1,7 @@
 import {
   AlertTriangle,
   BarChart3,
+  CheckCircle2,
   Database,
   HardDrive,
   ImageIcon,
@@ -8,13 +9,16 @@ import {
   Lock,
   Mail,
   Package,
+  Pencil,
+  Plus,
+  Save,
   ShieldCheck,
   Sparkles,
   User,
   Users
 } from "lucide-react";
 import type React from "react";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { authFetch, readApiError, type AuthSession, type AuthUser } from "./authClient";
 
 type AuthMode = "login" | "register";
@@ -181,7 +185,11 @@ export function AuthScreen({
 export function AccountPage({ user }: { user: AuthUser }) {
   const quotaTotal = user.quotaTotal ?? 0;
   const quotaUsed = user.quotaUsed ?? 0;
+  const quotaRemaining = Math.max(0, quotaTotal - quotaUsed);
   const quotaPercent = quotaTotal > 0 ? Math.min(100, Math.round((quotaUsed / quotaTotal) * 100)) : 0;
+  const storageQuota = user.storageQuotaBytes ?? 0;
+  const storageUsed = user.storageUsedBytes ?? 0;
+  const storagePercent = storageQuota > 0 ? Math.min(100, Math.round((storageUsed / storageQuota) * 100)) : 0;
 
   return (
     <main className="account-page app-view">
@@ -198,6 +206,7 @@ export function AccountPage({ user }: { user: AuthUser }) {
           <InfoTile label="邮箱" value={user.email} icon={<Mail className="size-4" aria-hidden="true" />} />
           <InfoTile label="显示名" value={user.displayName} icon={<User className="size-4" aria-hidden="true" />} />
           <InfoTile label="角色" value={roleLabel(user.role)} icon={<ShieldCheck className="size-4" aria-hidden="true" />} />
+          <InfoTile label="当前套餐" value={user.planName || user.planId || "未设置"} icon={<Package className="size-4" aria-hidden="true" />} />
         </div>
 
         <section className="quota-panel" aria-labelledby="quota-title">
@@ -210,12 +219,59 @@ export function AccountPage({ user }: { user: AuthUser }) {
           </div>
           <div className="quota-row">
             <span>{quotaUsed.toLocaleString("zh-CN")} 已用</span>
-            <span>{quotaTotal > 0 ? quotaTotal.toLocaleString("zh-CN") : "未设置"} 总额度</span>
+            <span>{quotaRemaining.toLocaleString("zh-CN")} 剩余</span>
           </div>
-          <button className="secondary-action h-10" type="button">
-            <Package className="size-4" aria-hidden="true" />
-            套餐入口
-          </button>
+        </section>
+
+        <section className="billing-panel" aria-labelledby="billing-title">
+          <div className="billing-panel__header">
+            <div>
+              <p className="settings-eyebrow">Plans</p>
+              <h2 id="billing-title">套餐权益</h2>
+            </div>
+            <span className="role-badge">即将开放</span>
+          </div>
+          <p className="billing-alert billing-alert--success" role="status">
+            后台已支持套餐和额度配置；线上购买、充值和更多权益会在支付接口接入后开放。
+          </p>
+          <div className="plan-grid">
+            {fallbackBillingPlans.map((plan) => (
+              <article className="plan-card" data-current={plan.id === user.planId} key={plan.id}>
+                <div>
+                  <p className="plan-card__name">{plan.name}</p>
+                  <p className="plan-card__price">{formatMoney(plan.priceCents, plan.currency)}</p>
+                  {plan.description ? <p className="plan-card__desc">{plan.description}</p> : null}
+                </div>
+                <dl className="plan-card__quota">
+                  <div><dt>图片次数</dt><dd>{plan.imageQuota.toLocaleString("zh-CN")}</dd></div>
+                  <div><dt>存储空间</dt><dd>{formatBytes(plan.storageQuotaBytes)}</dd></div>
+                </dl>
+                {plan.benefits.length > 0 ? (
+                  <ul className="plan-card__benefits">
+                    {plan.benefits.slice(0, 3).map((benefit) => <li key={benefit}>{benefit}</li>)}
+                  </ul>
+                ) : null}
+                <button className="primary-action h-10" disabled type="button">
+                  <Package className="size-4" aria-hidden="true" />
+                  {plan.id === user.planId ? "当前套餐" : "暂未开放"}
+                </button>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="quota-panel" aria-labelledby="storage-title">
+          <div>
+            <p className="settings-eyebrow">Storage</p>
+            <h2 id="storage-title">存储空间</h2>
+          </div>
+          <div className="quota-meter" aria-label={`已使用 ${formatBytes(storageUsed)}，总空间 ${formatBytes(storageQuota)}`}>
+            <span style={{ width: `${storagePercent}%` }} />
+          </div>
+          <div className="quota-row">
+            <span>{storageUsed > 0 ? formatBytes(storageUsed) : "未设置"} 已用</span>
+            <span>{storageQuota > 0 ? formatBytes(storageQuota) : "未设置"} 总空间</span>
+          </div>
         </section>
       </section>
     </main>
@@ -225,55 +281,72 @@ export function AccountPage({ user }: { user: AuthUser }) {
 export function AdminPage() {
   const [stats, setStats] = useState<AdminStats>({});
   const [users, setUsers] = useState<AdminUserRow[]>([]);
+  const [plans, setPlans] = useState<AdminPlanRow[]>([]);
   const [jobs, setJobs] = useState<AdminJobRow[]>([]);
   const [assets, setAssets] = useState<AdminAssetRow[]>([]);
+  const [planDrafts, setPlanDrafts] = useState<Record<string, PlanFormState>>({});
+  const [newPlan, setNewPlan] = useState<PlanFormState>(createEmptyPlanForm());
+  const [expandedUserId, setExpandedUserId] = useState("");
+  const [userDrafts, setUserDrafts] = useState<Record<string, UserQuotaFormState>>({});
   const [isLoading, setIsLoading] = useState(true);
+  const [savingPlanId, setSavingPlanId] = useState("");
+  const [savingUserId, setSavingUserId] = useState("");
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
 
-  useEffect(() => {
-    let isMounted = true;
+  async function loadAdminData({ preserveNotice = false, signal }: { preserveNotice?: boolean; signal?: AbortSignal } = {}): Promise<void> {
+    setIsLoading(true);
+    setError("");
+    if (!preserveNotice) {
+      setNotice("");
+    }
+    try {
+      const [statsResponse, usersResponse, jobsResponse, assetsResponse, plansResponse] = await Promise.all([
+        authFetch("/api/admin/stats"),
+        authFetch("/api/admin/users"),
+        authFetch("/api/admin/ecommerce/jobs"),
+        authFetch("/api/admin/assets"),
+        authFetch("/api/admin/plans")
+      ]);
 
-    async function loadAdminData(): Promise<void> {
-      setIsLoading(true);
-      setError("");
-      try {
-        const [statsResponse, usersResponse, jobsResponse, assetsResponse] = await Promise.all([
-          authFetch("/api/admin/stats"),
-          authFetch("/api/admin/users"),
-          authFetch("/api/admin/ecommerce/jobs"),
-          authFetch("/api/admin/assets")
-        ]);
+      const responses = [statsResponse, usersResponse, jobsResponse, assetsResponse];
+      const failedResponse = responses.find((response) => !response.ok);
+      if (failedResponse) {
+        throw new Error(await readApiError(failedResponse, "管理员数据加载失败。"));
+      }
 
-        const responses = [statsResponse, usersResponse, jobsResponse, assetsResponse];
-        const failedResponse = responses.find((response) => !response.ok);
-        if (failedResponse) {
-          throw new Error(await readApiError(failedResponse, "管理员数据加载失败。"));
-        }
+      const [statsBody, usersBody, jobsBody, assetsBody] = await Promise.all(responses.map((response) => response.json()));
+      if (signal?.aborted) {
+        return;
+      }
 
-        const [statsBody, usersBody, jobsBody, assetsBody] = await Promise.all(responses.map((response) => response.json()));
-        if (!isMounted) {
-          return;
-        }
-
-        setStats(parseAdminStats(statsBody));
-        setUsers(parseUsers(usersBody));
-        setJobs(parseJobs(jobsBody));
-        setAssets(parseAssets(assetsBody));
-      } catch (loadError) {
-        if (isMounted) {
-          setError(loadError instanceof Error ? loadError.message : "管理员数据加载失败。");
-        }
-      } finally {
-        if (isMounted) {
-          setIsLoading(false);
-        }
+      setStats(parseAdminStats(statsBody));
+      const parsedUsers = parseUsers(usersBody);
+      const parsedPlans = plansResponse.ok ? parsePlans(await plansResponse.json()) : [];
+      setUsers(parsedUsers);
+      setPlans(parsedPlans);
+      setPlanDrafts(Object.fromEntries(parsedPlans.map((plan) => [plan.id, planToForm(plan)])));
+      setUserDrafts(Object.fromEntries(parsedUsers.map((user) => [user.id, userToQuotaForm(user)])));
+      setJobs(parseJobs(jobsBody));
+      setAssets(parseAssets(assetsBody));
+    } catch (loadError) {
+      if (!signal?.aborted) {
+        setError(loadError instanceof Error ? loadError.message : "管理员数据加载失败。");
+      }
+    } finally {
+      if (!signal?.aborted) {
+        setIsLoading(false);
       }
     }
+  }
 
-    void loadAdminData();
+  useEffect(() => {
+    const controller = new AbortController();
+
+    void loadAdminData({ signal: controller.signal });
 
     return () => {
-      isMounted = false;
+      controller.abort();
     };
   }, []);
 
@@ -286,6 +359,78 @@ export function AdminPage() {
     ],
     [assets, jobs.length, stats.storageBytes, stats.totalAssets, stats.totalJobs, stats.totalUsers, users.length]
   );
+
+  async function savePlan(planId: string): Promise<void> {
+    const draft = planId === NEW_PLAN_ID ? newPlan : planDrafts[planId];
+    if (!draft) {
+      return;
+    }
+
+    setSavingPlanId(planId);
+    setError("");
+    setNotice("");
+    try {
+      const isNewPlan = planId === NEW_PLAN_ID;
+      const response = await authFetch(isNewPlan ? "/api/admin/plans" : `/api/admin/plans/${encodeURIComponent(planId)}`, {
+        method: isNewPlan ? "POST" : "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(planFormToPayload(draft))
+      });
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "套餐保存失败。"));
+      }
+      setNotice("套餐已保存。");
+      setNewPlan(createEmptyPlanForm());
+      await loadAdminData({ preserveNotice: true });
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "套餐保存失败。");
+    } finally {
+      setSavingPlanId("");
+    }
+  }
+
+  async function saveUserQuota(user: AdminUserRow): Promise<void> {
+    const draft = userDrafts[user.id] ?? userToQuotaForm(user);
+    setSavingUserId(user.id);
+    setError("");
+    setNotice("");
+    try {
+      const selectedPlanId = draft.planId || null;
+      const planChanged = selectedPlanId !== (user.planId || null);
+      const shouldResetPlanQuotas = planChanged || !draft.quotaTotal.trim() || !draft.storageQuotaGb.trim();
+      if (planChanged || shouldResetPlanQuotas) {
+        const planResponse = await authFetch(`/api/admin/users/${encodeURIComponent(user.id)}/plan`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ planId: selectedPlanId || "free", resetQuota: true })
+        });
+        if (!planResponse.ok) {
+          throw new Error(await readApiError(planResponse, "用户套餐保存失败。"));
+        }
+      }
+
+      const quotaResponse = await authFetch(`/api/admin/users/${encodeURIComponent(user.id)}/quota`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(userQuotaFormToPayload(draft, shouldResetPlanQuotas))
+      });
+      if (!quotaResponse.ok) {
+        throw new Error(await readApiError(quotaResponse, "用户额度保存失败。"));
+      }
+
+      setNotice("用户额度已保存。");
+      await loadAdminData({ preserveNotice: true });
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "用户额度保存失败。");
+    } finally {
+      setSavingUserId("");
+    }
+  }
+
+  const draftRows = [
+    ...plans.map((plan) => ({ id: plan.id, form: planDrafts[plan.id] ?? planToForm(plan), isNew: false })),
+    { id: NEW_PLAN_ID, form: newPlan, isNew: true }
+  ];
 
   return (
     <main className="admin-page app-view">
@@ -309,6 +454,12 @@ export function AdminPage() {
             <p>{error}</p>
           </div>
         ) : null}
+        {notice ? (
+          <div className="admin-success" role="status">
+            <CheckCircle2 className="size-4" aria-hidden="true" />
+            <p>{notice}</p>
+          </div>
+        ) : null}
 
         <div className="admin-stats">
           {statCards.map((card) => (
@@ -320,12 +471,274 @@ export function AdminPage() {
           ))}
         </div>
 
-        <DataTable
-          columns={["邮箱", "显示名", "角色", "额度", "创建时间"]}
-          emptyLabel="暂无用户"
-          rows={users.map((item) => [item.email, item.displayName, roleLabel(item.role), quotaLabel(item), formatDateTime(item.createdAt)])}
-          title="用户"
-        />
+        <section className="admin-table-card" aria-labelledby="plans-table-title">
+          <div className="admin-table-card__title">
+            <Package className="size-4" aria-hidden="true" />
+            <h2 id="plans-table-title">套餐管理</h2>
+          </div>
+          <div className="admin-table-wrap">
+            <table className="admin-table admin-edit-table">
+              <thead>
+                <tr>
+                  <th>名称</th>
+                  <th>生图额度</th>
+                  <th>存图空间</th>
+                  <th>价格</th>
+                  <th>启用</th>
+                  <th>排序</th>
+                  <th>权益</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {draftRows.map((row) => (
+                  <tr key={row.id}>
+                    <td>
+                      <input
+                        className="admin-input"
+                        placeholder="套餐名称"
+                        value={row.form.name}
+                        onChange={(event) =>
+                          row.isNew
+                            ? setNewPlan({ ...newPlan, name: event.target.value })
+                            : setPlanDrafts((drafts) => ({ ...drafts, [row.id]: { ...row.form, name: event.target.value } }))
+                        }
+                      />
+                    </td>
+                    <td>
+                      <input
+                        className="admin-input"
+                        inputMode="numeric"
+                        placeholder="未设置"
+                        value={row.form.quotaTotal}
+                        onChange={(event) =>
+                          row.isNew
+                            ? setNewPlan({ ...newPlan, quotaTotal: event.target.value })
+                            : setPlanDrafts((drafts) => ({ ...drafts, [row.id]: { ...row.form, quotaTotal: event.target.value } }))
+                        }
+                      />
+                    </td>
+                    <td>
+                      <input
+                        className="admin-input"
+                        inputMode="decimal"
+                        placeholder="GB"
+                        value={row.form.storageQuotaGb}
+                        onChange={(event) =>
+                          row.isNew
+                            ? setNewPlan({ ...newPlan, storageQuotaGb: event.target.value })
+                            : setPlanDrafts((drafts) => ({ ...drafts, [row.id]: { ...row.form, storageQuotaGb: event.target.value } }))
+                        }
+                      />
+                    </td>
+                    <td>
+                      <input
+                        className="admin-input"
+                        inputMode="decimal"
+                        placeholder="0"
+                        value={row.form.price}
+                        onChange={(event) =>
+                          row.isNew
+                            ? setNewPlan({ ...newPlan, price: event.target.value })
+                            : setPlanDrafts((drafts) => ({ ...drafts, [row.id]: { ...row.form, price: event.target.value } }))
+                        }
+                      />
+                    </td>
+                    <td>
+                      <label className="admin-checkbox">
+                        <input
+                          checked={row.form.enabled}
+                          type="checkbox"
+                          onChange={(event) =>
+                            row.isNew
+                              ? setNewPlan({ ...newPlan, enabled: event.target.checked })
+                              : setPlanDrafts((drafts) => ({ ...drafts, [row.id]: { ...row.form, enabled: event.target.checked } }))
+                          }
+                        />
+                      </label>
+                    </td>
+                    <td>
+                      <input
+                        className="admin-input admin-input--narrow"
+                        inputMode="numeric"
+                        value={row.form.sortOrder}
+                        onChange={(event) =>
+                          row.isNew
+                            ? setNewPlan({ ...newPlan, sortOrder: event.target.value })
+                            : setPlanDrafts((drafts) => ({ ...drafts, [row.id]: { ...row.form, sortOrder: event.target.value } }))
+                        }
+                      />
+                    </td>
+                    <td>
+                      <textarea
+                        className="admin-textarea"
+                        placeholder="每行一个权益"
+                        rows={2}
+                        value={row.form.featuresText}
+                        onChange={(event) =>
+                          row.isNew
+                            ? setNewPlan({ ...newPlan, featuresText: event.target.value })
+                            : setPlanDrafts((drafts) => ({ ...drafts, [row.id]: { ...row.form, featuresText: event.target.value } }))
+                        }
+                      />
+                    </td>
+                    <td>
+                      <button className="admin-icon-button" disabled={savingPlanId === row.id} type="button" onClick={() => void savePlan(row.id)}>
+                        {savingPlanId === row.id ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : row.isNew ? <Plus className="size-4" aria-hidden="true" /> : <Save className="size-4" aria-hidden="true" />}
+                        <span>{row.isNew ? "新增" : "保存"}</span>
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section className="admin-table-card" aria-labelledby="users-table-title">
+          <div className="admin-table-card__title">
+            <Users className="size-4" aria-hidden="true" />
+            <h2 id="users-table-title">用户额度管理</h2>
+          </div>
+          <div className="admin-table-wrap">
+            <table className="admin-table">
+              <thead>
+                <tr>
+                  <th>邮箱</th>
+                  <th>显示名</th>
+                  <th>角色</th>
+                  <th>套餐</th>
+                  <th>生图额度</th>
+                  <th>存储空间</th>
+                  <th>创建时间</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {users.length > 0 ? (
+                  users.slice(0, 20).map((user) => {
+                    const isExpanded = expandedUserId === user.id;
+                    const draft = userDrafts[user.id] ?? userToQuotaForm(user);
+                    return (
+                      <Fragment key={user.id}>
+                        <tr>
+                          <td>{user.email || "-"}</td>
+                          <td>{user.displayName || "-"}</td>
+                          <td>{roleLabel(user.role)}</td>
+                          <td>{user.planName || user.planId || "未设置"}</td>
+                          <td>{quotaLabel(user)}</td>
+                          <td>{storageLabel(user)}</td>
+                          <td>{formatDateTime(user.createdAt)}</td>
+                          <td>
+                            <button
+                              className="admin-icon-button"
+                              type="button"
+                              onClick={() => {
+                                setExpandedUserId(isExpanded ? "" : user.id);
+                                setUserDrafts((drafts) => ({ ...drafts, [user.id]: drafts[user.id] ?? userToQuotaForm(user) }));
+                              }}
+                            >
+                              <Pencil className="size-4" aria-hidden="true" />
+                              <span>{isExpanded ? "收起" : "管理"}</span>
+                            </button>
+                          </td>
+                        </tr>
+                        {isExpanded ? (
+                          <tr className="admin-expanded-row">
+                            <td colSpan={8}>
+                              <div className="admin-user-form">
+                                <label>
+                                  <span>套餐</span>
+                                  <select
+                                    className="admin-input"
+                                    value={draft.planId}
+                                    onChange={(event) =>
+                                      setUserDrafts((drafts) => ({ ...drafts, [user.id]: { ...draft, planId: event.target.value } }))
+                                    }
+                                  >
+                                    <option value="">未设置 / 重置</option>
+                                    {plans.map((plan) => (
+                                      <option key={plan.id} value={plan.id}>
+                                        {plan.name}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </label>
+                                <label>
+                                  <span>生图总额度</span>
+                                  <input
+                                    className="admin-input"
+                                    inputMode="numeric"
+                                    placeholder="留空按套餐"
+                                    value={draft.quotaTotal}
+                                    onChange={(event) =>
+                                      setUserDrafts((drafts) => ({ ...drafts, [user.id]: { ...draft, quotaTotal: event.target.value } }))
+                                    }
+                                  />
+                                </label>
+                                <label>
+                                  <span>生图已用</span>
+                                  <input
+                                    className="admin-input"
+                                    inputMode="numeric"
+                                    value={draft.quotaUsed}
+                                    onChange={(event) =>
+                                      setUserDrafts((drafts) => ({ ...drafts, [user.id]: { ...draft, quotaUsed: event.target.value } }))
+                                    }
+                                  />
+                                </label>
+                                <label>
+                                  <span>存储额度 GB</span>
+                                  <input
+                                    className="admin-input"
+                                    inputMode="decimal"
+                                    placeholder="留空按套餐"
+                                    value={draft.storageQuotaGb}
+                                    onChange={(event) =>
+                                      setUserDrafts((drafts) => ({ ...drafts, [user.id]: { ...draft, storageQuotaGb: event.target.value } }))
+                                    }
+                                  />
+                                </label>
+                                <label>
+                                  <span>存储已用 GB</span>
+                                  <input
+                                    className="admin-input"
+                                    inputMode="decimal"
+                                    value={draft.storageUsedGb}
+                                    onChange={(event) =>
+                                      setUserDrafts((drafts) => ({ ...drafts, [user.id]: { ...draft, storageUsedGb: event.target.value } }))
+                                    }
+                                  />
+                                </label>
+                                <div className="admin-user-form__actions">
+                                  <button
+                                    className="secondary-action h-10"
+                                    type="button"
+                                    onClick={() => setUserDrafts((drafts) => ({ ...drafts, [user.id]: resetUserQuotaForm(draft) }))}
+                                  >
+                                    重置覆盖
+                                  </button>
+                                  <button className="primary-action h-10" disabled={savingUserId === user.id} type="button" onClick={() => void saveUserQuota(user)}>
+                                    {savingUserId === user.id ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Save className="size-4" aria-hidden="true" />}
+                                    保存
+                                  </button>
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        ) : null}
+                      </Fragment>
+                    );
+                  })
+                ) : (
+                  <tr>
+                    <td colSpan={8}>暂无用户</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
         <DataTable
           columns={["任务", "状态", "商品", "进度", "更新时间"]}
           emptyLabel="暂无任务"
@@ -397,14 +810,68 @@ interface AdminStats {
   storageBytes?: number;
 }
 
+interface BillingSummary {
+  balanceCents: number;
+  currency?: string;
+  recordCount: number;
+  packageRemaining: number;
+}
+
+interface BillingPlan {
+  id: string;
+  name: string;
+  description?: string;
+  imageQuota: number;
+  storageQuotaBytes: number;
+  priceCents: number;
+  currency: string;
+  enabled: boolean;
+  benefits: string[];
+}
+
 interface AdminUserRow {
   id: string;
   email: string;
   displayName: string;
   role: string;
+  planId?: string;
+  planName?: string;
   quotaTotal?: number;
   quotaUsed?: number;
+  storageQuotaBytes?: number;
+  storageUsedBytes?: number;
   createdAt: string;
+}
+
+interface AdminPlanRow {
+  id: string;
+  name: string;
+  quotaTotal?: number;
+  storageQuotaBytes?: number;
+  priceCents?: number;
+  currency: string;
+  enabled: boolean;
+  sortOrder: number;
+  features: string[];
+}
+
+interface PlanFormState {
+  name: string;
+  quotaTotal: string;
+  storageQuotaGb: string;
+  price: string;
+  currency: string;
+  enabled: boolean;
+  sortOrder: string;
+  featuresText: string;
+}
+
+interface UserQuotaFormState {
+  planId: string;
+  quotaTotal: string;
+  quotaUsed: string;
+  storageQuotaGb: string;
+  storageUsedGb: string;
 }
 
 interface AdminJobRow {
@@ -435,16 +902,100 @@ function parseAdminStats(value: unknown): AdminStats {
   };
 }
 
+function parseBillingSummary(value: unknown, fallback: BillingSummary): BillingSummary {
+  const body = firstRecord(value, "summary") ?? firstRecord(value, "billing") ?? firstRecord(value, "data") ?? {};
+  const quota = isRecord(body.quota) ? body.quota : {};
+  const balance = isRecord(body.balance) ? body.balance : {};
+  const usage = isRecord(body.usage) ? body.usage : {};
+  return {
+    balanceCents:
+      numberFrom(
+        body.balanceCents ??
+          body.balance_cents ??
+          body.amountCents ??
+          balance.balanceCents ??
+          balance.balance_cents ??
+          balance.cents ??
+          balance.amountCents
+      ) ?? fallback.balanceCents,
+    currency: stringFrom(body.currency ?? balance.currency) || fallback.currency,
+    recordCount:
+      numberFrom(
+        body.recordCount ??
+          body.record_count ??
+          body.records ??
+          body.usageCount ??
+          body.quotaUsed ??
+          usage.quotaUsed ??
+          usage.quota_used ??
+          quota.used
+      ) ?? fallback.recordCount,
+    packageRemaining:
+      numberFrom(
+        body.packageRemaining ??
+          body.package_remaining ??
+          body.quotaRemaining ??
+          body.remainingQuota ??
+          usage.packageRemaining ??
+          usage.package_remaining ??
+          quota.remaining
+      ) ??
+      fallback.packageRemaining
+  };
+}
+
+function parseBillingPlans(value: unknown): BillingPlan[] {
+  return parsePlans(value)
+    .filter((plan) => plan.enabled)
+    .map((plan) => ({
+      id: plan.id,
+      name: plan.name,
+      description: "",
+      imageQuota: plan.quotaTotal ?? 0,
+      storageQuotaBytes: plan.storageQuotaBytes ?? 0,
+      priceCents: plan.priceCents ?? 0,
+      currency: plan.currency,
+      enabled: plan.enabled,
+      benefits: plan.features
+    }));
+}
+
+function paymentUrlFrom(value: unknown): string {
+  const body = firstRecord(value, "order") ?? firstRecord(value, "payment") ?? firstRecord(value, "data") ?? (isRecord(value) ? value : {});
+  return stringFrom(body.paymentUrl ?? body.payment_url ?? body.checkoutUrl ?? body.checkout_url ?? body.payUrl ?? body.pay_url);
+}
+
 function parseUsers(value: unknown): AdminUserRow[] {
   return arrayFrom(value, ["users", "items"]).map((item, index) => ({
     id: stringFrom(item.id) || stringFrom(item.userId) || `user-${index}`,
     email: stringFrom(item.email),
     displayName: stringFrom(item.displayName) || stringFrom(item.name),
     role: stringFrom(item.role) || "user",
+    planId: stringFrom(item.planId ?? item.plan_id),
+    planName: stringFrom(item.planName ?? item.plan_name ?? (isRecord(item.plan) ? item.plan.name : undefined)),
     quotaTotal: numberFrom(item.quota_total ?? item.quotaTotal),
     quotaUsed: numberFrom(item.quota_used ?? item.quotaUsed),
+    storageQuotaBytes: numberFrom(item.storage_quota_bytes ?? item.storageQuotaBytes ?? (isRecord(item.storage) ? item.storage.quotaBytes : undefined)),
+    storageUsedBytes: numberFrom(item.storage_used_bytes ?? item.storageUsedBytes ?? (isRecord(item.storage) ? item.storage.usedBytes : undefined)),
     createdAt: stringFrom(item.createdAt) || stringFrom(item.created_at)
   }));
+}
+
+function parsePlans(value: unknown): AdminPlanRow[] {
+  return arrayFrom(value, ["plans", "items"]).map((item, index) => {
+    const features = arrayFrom(item.features, []).map((feature) => stringFrom(feature.label ?? feature.name ?? feature.text)).filter(Boolean);
+    return {
+      id: stringFrom(item.id) || stringFrom(item.planId) || `plan-${index}`,
+      name: stringFrom(item.name) || stringFrom(item.title) || "未命名套餐",
+      quotaTotal: numberFrom(item.quota_total ?? item.quotaTotal ?? item.imageQuota ?? item.generationQuota),
+      storageQuotaBytes: numberFrom(item.storage_quota_bytes ?? item.storageQuotaBytes ?? item.storageBytes),
+      priceCents: numberFrom(item.price_cents ?? item.priceCents ?? item.amountCents),
+      currency: stringFrom(item.currency) || "CNY",
+      enabled: booleanFrom(item.enabled ?? item.isEnabled ?? item.active, true),
+      sortOrder: numberFrom(item.sort_order ?? item.sortOrder ?? item.order) ?? index,
+      features: features.length > 0 ? features : stringArrayFrom(item.features ?? item.benefits)
+    };
+  });
 }
 
 function parseJobs(value: unknown): AdminJobRow[] {
@@ -490,6 +1041,109 @@ function quotaLabel(user: Pick<AdminUserRow, "quotaTotal" | "quotaUsed">): strin
   return user.quotaTotal ? `${used}/${user.quotaTotal}` : `${used}/未设置`;
 }
 
+function storageLabel(user: Pick<AdminUserRow, "storageQuotaBytes" | "storageUsedBytes">): string {
+  const used = user.storageUsedBytes ?? 0;
+  return user.storageQuotaBytes ? `${formatBytes(used)} / ${formatBytes(user.storageQuotaBytes)}` : `${used > 0 ? formatBytes(used) : "未设置"} / 未设置`;
+}
+
+const NEW_PLAN_ID = "__new_plan__";
+const fallbackBillingPlans: BillingPlan[] = [
+  {
+    id: "starter",
+    name: "入门套餐",
+    description: "适合轻量试用和少量商品图制作。",
+    imageQuota: 100,
+    storageQuotaBytes: 5 * 1024 ** 3,
+    priceCents: 9900,
+    currency: "CNY",
+    enabled: true,
+    benefits: ["100 次图片生成", "5 GB 云端空间", "支付宝在线购买"]
+  },
+  {
+    id: "pro",
+    name: "专业套餐",
+    description: "适合日常商品图批量生成。",
+    imageQuota: 500,
+    storageQuotaBytes: 30 * 1024 ** 3,
+    priceCents: 39900,
+    currency: "CNY",
+    enabled: true,
+    benefits: ["500 次图片生成", "30 GB 云端空间", "更高批量处理余量"]
+  }
+];
+
+function createEmptyPlanForm(): PlanFormState {
+  return {
+    name: "",
+    quotaTotal: "",
+    storageQuotaGb: "",
+    price: "",
+    currency: "CNY",
+    enabled: true,
+    sortOrder: "0",
+    featuresText: ""
+  };
+}
+
+function planToForm(plan: AdminPlanRow): PlanFormState {
+  return {
+    name: plan.name,
+    quotaTotal: stringFromNumber(plan.quotaTotal),
+    storageQuotaGb: bytesToGbInput(plan.storageQuotaBytes),
+    price: plan.priceCents === undefined ? "" : String(plan.priceCents / 100),
+    currency: plan.currency || "CNY",
+    enabled: plan.enabled,
+    sortOrder: String(plan.sortOrder),
+    featuresText: plan.features.join("\n")
+  };
+}
+
+function planFormToPayload(form: PlanFormState): Record<string, unknown> {
+  const features = splitLines(form.featuresText);
+  return {
+    name: form.name.trim(),
+    imageQuota: nullableNumber(form.quotaTotal) ?? 0,
+    storageQuotaBytes: gbToBytes(form.storageQuotaGb),
+    priceCents: moneyToCents(form.price),
+    currency: form.currency || "CNY",
+    enabled: form.enabled,
+    sortOrder: nullableNumber(form.sortOrder) ?? 0,
+    features,
+    benefits: features
+  };
+}
+
+function userToQuotaForm(user: AdminUserRow): UserQuotaFormState {
+  return {
+    planId: user.planId ?? "",
+    quotaTotal: stringFromNumber(user.quotaTotal),
+    quotaUsed: stringFromNumber(user.quotaUsed ?? 0),
+    storageQuotaGb: bytesToGbInput(user.storageQuotaBytes),
+    storageUsedGb: bytesToGbInput(user.storageUsedBytes ?? 0)
+  };
+}
+
+function resetUserQuotaForm(form: UserQuotaFormState): UserQuotaFormState {
+  return {
+    ...form,
+    quotaTotal: "",
+    storageQuotaGb: ""
+  };
+}
+
+function userQuotaFormToPayload(form: UserQuotaFormState, preservePlanQuotas = false): Record<string, unknown> {
+  const payload: Record<string, unknown> = {};
+  const quotaTotal = nullableNumber(form.quotaTotal);
+  const quotaUsed = nullableNumber(form.quotaUsed);
+  const storageQuotaBytes = gbToBytes(form.storageQuotaGb);
+  const storageUsedBytes = gbToBytes(form.storageUsedGb);
+  if (!preservePlanQuotas && quotaTotal !== null) payload.quotaTotal = quotaTotal;
+  if (quotaUsed !== null) payload.quotaUsed = quotaUsed;
+  if (!preservePlanQuotas && storageQuotaBytes !== null) payload.storageQuotaBytes = storageQuotaBytes;
+  if (storageUsedBytes !== null) payload.storageUsedBytes = storageUsedBytes;
+  return Object.keys(payload).length > 0 ? payload : { quotaUsed: 0 };
+}
+
 function roleLabel(role: string): string {
   if (role === "admin" || role === "super_admin") {
     return "管理员";
@@ -519,6 +1173,19 @@ function formatBytes(value: number): string {
   return `${(value / 1024 ** index).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
 }
 
+function formatMoney(valueCents: number, currency = "CNY"): string {
+  const amount = Number.isFinite(valueCents) ? valueCents / 100 : 0;
+  try {
+    return new Intl.NumberFormat("zh-CN", {
+      style: "currency",
+      currency,
+      maximumFractionDigits: amount % 1 === 0 ? 0 : 2
+    }).format(amount);
+  } catch {
+    return `¥${amount.toFixed(amount % 1 === 0 ? 0 : 2)}`;
+  }
+}
+
 function sumAssetBytes(assets: AdminAssetRow[]): number {
   return assets.reduce((total, asset) => total + asset.sizeBytes, 0);
 }
@@ -540,4 +1207,81 @@ function numberFrom(value: unknown): number | undefined {
     return Number.isFinite(numericValue) ? numericValue : undefined;
   }
   return undefined;
+}
+
+function booleanFrom(value: unknown, fallback: boolean): boolean {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return value !== 0;
+  }
+  if (typeof value === "string") {
+    const normalizedValue = value.trim().toLowerCase();
+    if (["true", "1", "yes", "enabled", "active"].includes(normalizedValue)) {
+      return true;
+    }
+    if (["false", "0", "no", "disabled", "inactive"].includes(normalizedValue)) {
+      return false;
+    }
+  }
+  return fallback;
+}
+
+function stringArrayFrom(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return typeof value === "string" ? splitLines(value) : [];
+  }
+  return value
+    .map((item) => {
+      if (typeof item === "string") {
+        return item;
+      }
+      if (isRecord(item)) {
+        return stringFrom(item.label ?? item.name ?? item.text);
+      }
+      return "";
+    })
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function splitLines(value: string): string[] {
+  return value
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function stringFromNumber(value: number | undefined): string {
+  return value === undefined ? "" : String(value);
+}
+
+function nullableNumber(value: string): number | null {
+  const normalizedValue = value.trim();
+  if (!normalizedValue) {
+    return null;
+  }
+  const numericValue = Number(normalizedValue);
+  return Number.isFinite(numericValue) ? numericValue : null;
+}
+
+function gbToBytes(value: string): number | null {
+  const numericValue = nullableNumber(value);
+  return numericValue === null ? null : Math.round(numericValue * 1024 ** 3);
+}
+
+function bytesToGbInput(value: number | undefined): string {
+  if (value === undefined) {
+    return "";
+  }
+  if (value === 0) {
+    return "0";
+  }
+  return String(Number((value / 1024 ** 3).toFixed(2)));
+}
+
+function moneyToCents(value: string): number | null {
+  const numericValue = nullableNumber(value);
+  return numericValue === null ? null : Math.round(numericValue * 100);
 }

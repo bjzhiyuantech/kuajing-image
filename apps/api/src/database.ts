@@ -13,6 +13,60 @@ const pool = createMysqlPool();
 
 export const db = drizzle(pool, { schema, mode: "default" });
 
+const GIB = 1024 * 1024 * 1024;
+const DEFAULT_PLAN_ID = "free";
+
+const defaultSubscriptionPlans = [
+  {
+    id: DEFAULT_PLAN_ID,
+    name: "Free",
+    description: "免费体验套餐",
+    imageQuota: 20,
+    storageQuotaBytes: 1 * GIB,
+    priceCents: 0,
+    currency: "CNY",
+    enabled: 1,
+    sortOrder: 10,
+    benefitsJson: JSON.stringify(["基础生图额度", "1GB 存图空间"])
+  },
+  {
+    id: "starter",
+    name: "Starter",
+    description: "适合轻量使用的入门套餐",
+    imageQuota: 300,
+    storageQuotaBytes: 10 * GIB,
+    priceCents: 9900,
+    currency: "CNY",
+    enabled: 1,
+    sortOrder: 20,
+    benefitsJson: JSON.stringify(["更多生图额度", "10GB 存图空间"])
+  },
+  {
+    id: "pro",
+    name: "Pro",
+    description: "适合稳定出图和团队协作的专业套餐",
+    imageQuota: 1500,
+    storageQuotaBytes: 50 * GIB,
+    priceCents: 29900,
+    currency: "CNY",
+    enabled: 1,
+    sortOrder: 30,
+    benefitsJson: JSON.stringify(["高频生图额度", "50GB 存图空间"])
+  },
+  {
+    id: "business",
+    name: "Business",
+    description: "适合业务规模化使用的企业套餐",
+    imageQuota: 10000,
+    storageQuotaBytes: 200 * GIB,
+    priceCents: 99900,
+    currency: "CNY",
+    enabled: 1,
+    sortOrder: 40,
+    benefitsJson: JSON.stringify(["大规模生图额度", "200GB 存图空间"])
+  }
+] as const;
+
 export async function initializeDatabase(): Promise<void> {
   try {
     await pool.query("SELECT 1");
@@ -46,17 +100,41 @@ export async function ensureTenant(tenant: RequestTenant): Promise<void> {
 
 async function createSchema(): Promise<void> {
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS subscription_plans (
+      id VARCHAR(64) PRIMARY KEY,
+      name VARCHAR(255) NOT NULL,
+      description TEXT,
+      image_quota BIGINT NOT NULL DEFAULT 0,
+      storage_quota_bytes BIGINT NOT NULL DEFAULT 0,
+      price_cents BIGINT NOT NULL DEFAULT 0,
+      currency VARCHAR(16) NOT NULL DEFAULT 'CNY',
+      enabled INT NOT NULL DEFAULT 1,
+      sort_order INT NOT NULL DEFAULT 0,
+      benefits_json LONGTEXT,
+      created_at VARCHAR(32) NOT NULL,
+      updated_at VARCHAR(32) NOT NULL,
+      KEY subscription_plans_enabled_sort_idx (enabled, sort_order)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+  await migrateSubscriptionPlansTable();
+  await seedDefaultSubscriptionPlans();
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id VARCHAR(64) PRIMARY KEY,
       email VARCHAR(255) NOT NULL,
       password_hash VARCHAR(512) NOT NULL DEFAULT '',
       display_name VARCHAR(255) NOT NULL,
       role VARCHAR(32) NOT NULL DEFAULT 'user',
+      plan_id VARCHAR(64),
       quota_total BIGINT NOT NULL DEFAULT 0,
       quota_used BIGINT NOT NULL DEFAULT 0,
+      storage_quota_bytes BIGINT NOT NULL DEFAULT 0,
+      storage_used_bytes BIGINT NOT NULL DEFAULT 0,
       created_at VARCHAR(32) NOT NULL,
       updated_at VARCHAR(32) NOT NULL,
-      UNIQUE KEY users_email_unique_idx (email)
+      UNIQUE KEY users_email_unique_idx (email),
+      KEY users_plan_id_idx (plan_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
   await migrateUsersTable();
@@ -241,8 +319,11 @@ async function ensureDemoTenant(): Promise<void> {
     userRole: "user",
     workspaceName: "Demo Workspace",
     role: "owner",
-    quotaTotal: 0,
+    planId: DEFAULT_PLAN_ID,
+    quotaTotal: defaultSubscriptionPlans[0].imageQuota,
     quotaUsed: 0,
+    storageQuotaBytes: defaultSubscriptionPlans[0].storageQuotaBytes,
+    storageUsedBytes: 0,
     now
   });
 }
@@ -265,8 +346,11 @@ async function ensureConfiguredAdmin(): Promise<void> {
     userRole: "admin",
     workspaceName: `${authConfig.adminDisplayName}'s Workspace`,
     role: "owner",
-    quotaTotal: 0,
+    planId: DEFAULT_PLAN_ID,
+    quotaTotal: defaultSubscriptionPlans[0].imageQuota,
     quotaUsed: 0,
+    storageQuotaBytes: defaultSubscriptionPlans[0].storageQuotaBytes,
+    storageUsedBytes: 0,
     now
   });
 }
@@ -280,21 +364,27 @@ async function upsertTenantRows(input: {
   userRole?: "user" | "admin";
   workspaceName: string;
   role: string;
+  planId?: string | null;
   quotaTotal?: number;
   quotaUsed?: number;
+  storageQuotaBytes?: number;
+  storageUsedBytes?: number;
   now: string;
 }): Promise<void> {
   await pool.query(
     `
-      INSERT INTO users (id, email, password_hash, display_name, role, quota_total, quota_used, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO users (id, email, password_hash, display_name, role, plan_id, quota_total, quota_used, storage_quota_bytes, storage_used_bytes, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
         email = VALUES(email),
         password_hash = IF(VALUES(password_hash) <> '', VALUES(password_hash), password_hash),
         display_name = VALUES(display_name),
         role = VALUES(role),
-        quota_total = VALUES(quota_total),
-        quota_used = VALUES(quota_used),
+        plan_id = IF(plan_id IS NULL OR plan_id = '', VALUES(plan_id), plan_id),
+        quota_total = IF(quota_total = 0, VALUES(quota_total), quota_total),
+        quota_used = quota_used,
+        storage_quota_bytes = IF(storage_quota_bytes = 0, VALUES(storage_quota_bytes), storage_quota_bytes),
+        storage_used_bytes = storage_used_bytes,
         updated_at = VALUES(updated_at)
     `,
     [
@@ -303,8 +393,11 @@ async function upsertTenantRows(input: {
       input.passwordHash ?? "",
       input.displayName,
       input.userRole ?? "user",
-      input.quotaTotal ?? 0,
+      input.planId ?? DEFAULT_PLAN_ID,
+      input.quotaTotal ?? defaultSubscriptionPlans[0].imageQuota,
       input.quotaUsed ?? 0,
+      input.storageQuotaBytes ?? defaultSubscriptionPlans[0].storageQuotaBytes,
+      input.storageUsedBytes ?? 0,
       input.now,
       input.now
     ]
@@ -340,10 +433,75 @@ function stableId(prefix: string, value: string): string {
 async function migrateUsersTable(): Promise<void> {
   await addColumnIfMissing("users", "password_hash", "VARCHAR(512) NOT NULL DEFAULT ''");
   await addColumnIfMissing("users", "role", "VARCHAR(32) NOT NULL DEFAULT 'user'");
+  await addColumnIfMissing("users", "plan_id", "VARCHAR(64)");
   await addColumnIfMissing("users", "quota_total", "BIGINT NOT NULL DEFAULT 0");
   await addColumnIfMissing("users", "quota_used", "BIGINT NOT NULL DEFAULT 0");
+  await addColumnIfMissing("users", "storage_quota_bytes", "BIGINT NOT NULL DEFAULT 0");
+  await addColumnIfMissing("users", "storage_used_bytes", "BIGINT NOT NULL DEFAULT 0");
   await normalizeDuplicateUserEmails();
   await addIndexIfMissing("users", "users_email_unique_idx", "UNIQUE KEY users_email_unique_idx (email)");
+  await addIndexIfMissing("users", "users_plan_id_idx", "KEY users_plan_id_idx (plan_id)");
+  await pool.query(
+    "UPDATE users SET plan_id = ?, quota_total = IF(quota_total = 0, ?, quota_total), storage_quota_bytes = IF(storage_quota_bytes = 0, ?, storage_quota_bytes) WHERE plan_id IS NULL OR plan_id = ''",
+    [DEFAULT_PLAN_ID, defaultSubscriptionPlans[0].imageQuota, defaultSubscriptionPlans[0].storageQuotaBytes]
+  );
+}
+
+async function migrateSubscriptionPlansTable(): Promise<void> {
+  await addColumnIfMissing("subscription_plans", "description", "TEXT");
+  await addColumnIfMissing("subscription_plans", "image_quota", "BIGINT NOT NULL DEFAULT 0");
+  await addColumnIfMissing("subscription_plans", "storage_quota_bytes", "BIGINT NOT NULL DEFAULT 0");
+  await addColumnIfMissing("subscription_plans", "price_cents", "BIGINT NOT NULL DEFAULT 0");
+  await addColumnIfMissing("subscription_plans", "currency", "VARCHAR(16) NOT NULL DEFAULT 'CNY'");
+  await addColumnIfMissing("subscription_plans", "enabled", "INT NOT NULL DEFAULT 1");
+  await addColumnIfMissing("subscription_plans", "sort_order", "INT NOT NULL DEFAULT 0");
+  await addColumnIfMissing("subscription_plans", "benefits_json", "LONGTEXT");
+  await addColumnIfMissing("subscription_plans", "created_at", "VARCHAR(32) NOT NULL DEFAULT ''");
+  await addColumnIfMissing("subscription_plans", "updated_at", "VARCHAR(32) NOT NULL DEFAULT ''");
+  await addIndexIfMissing(
+    "subscription_plans",
+    "subscription_plans_enabled_sort_idx",
+    "KEY subscription_plans_enabled_sort_idx (enabled, sort_order)"
+  );
+}
+
+async function seedDefaultSubscriptionPlans(): Promise<void> {
+  const now = new Date().toISOString();
+  for (const plan of defaultSubscriptionPlans) {
+    await pool.query(
+      `
+        INSERT INTO subscription_plans (
+          id, name, description, image_quota, storage_quota_bytes, price_cents, currency, enabled, sort_order, benefits_json, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+          name = VALUES(name),
+          description = VALUES(description),
+          image_quota = VALUES(image_quota),
+          storage_quota_bytes = VALUES(storage_quota_bytes),
+          price_cents = VALUES(price_cents),
+          currency = VALUES(currency),
+          enabled = VALUES(enabled),
+          sort_order = VALUES(sort_order),
+          benefits_json = VALUES(benefits_json),
+          updated_at = VALUES(updated_at)
+      `,
+      [
+        plan.id,
+        plan.name,
+        plan.description,
+        plan.imageQuota,
+        plan.storageQuotaBytes,
+        plan.priceCents,
+        plan.currency,
+        plan.enabled,
+        plan.sortOrder,
+        plan.benefitsJson,
+        now,
+        now
+      ]
+    );
+  }
 }
 
 async function addColumnIfMissing(tableName: string, columnName: string, definition: string): Promise<void> {
