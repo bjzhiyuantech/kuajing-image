@@ -8,6 +8,8 @@ export type GenerationStatus = "pending" | "running" | "succeeded" | "partial" |
 export type OutputStatus = "succeeded" | "failed";
 export type CloudStorageProvider = "cos";
 export type AssetCloudUploadStatus = "uploaded" | "failed";
+export type EcommercePlatform = "amazon" | "shopify" | "tiktok-shop" | "temu" | "shein" | "etsy" | "aliexpress" | "other";
+export type EcommerceMarket = "us" | "uk" | "eu" | "ca" | "au" | "jp" | "kr" | "sg" | "mx" | "br" | "global";
 
 export interface SizePreset {
   id: string;
@@ -68,6 +70,97 @@ export const IMAGE_QUALITIES: ImageQuality[] = ["auto", "low", "medium", "high"]
 export const OUTPUT_FORMATS: OutputFormat[] = ["png", "jpeg", "webp"];
 export const GENERATION_COUNTS = [1, 2, 4] as const;
 export type GenerationCount = (typeof GENERATION_COUNTS)[number];
+
+export const ECOMMERCE_PLATFORMS = [
+  { id: "amazon", label: "Amazon" },
+  { id: "shopify", label: "Shopify" },
+  { id: "tiktok-shop", label: "TikTok Shop" },
+  { id: "temu", label: "Temu" },
+  { id: "shein", label: "SHEIN" },
+  { id: "etsy", label: "Etsy" },
+  { id: "aliexpress", label: "AliExpress" },
+  { id: "other", label: "Other marketplace" }
+] as const satisfies ReadonlyArray<{ id: EcommercePlatform; label: string }>;
+
+export const ECOMMERCE_MARKETS = [
+  { id: "us", label: "United States" },
+  { id: "uk", label: "United Kingdom" },
+  { id: "eu", label: "European Union" },
+  { id: "ca", label: "Canada" },
+  { id: "au", label: "Australia" },
+  { id: "jp", label: "Japan" },
+  { id: "kr", label: "South Korea" },
+  { id: "sg", label: "Singapore" },
+  { id: "mx", label: "Mexico" },
+  { id: "br", label: "Brazil" },
+  { id: "global", label: "Global" }
+] as const satisfies ReadonlyArray<{ id: EcommerceMarket; label: string }>;
+
+export const ECOMMERCE_SCENE_TEMPLATES = [
+  {
+    id: "marketplace-main",
+    label: "白底主图",
+    defaultSizePresetId: "square-1k",
+    prompt:
+      "Create a clean marketplace main image for the product. Pure white background, product centered, realistic proportions, sharp commercial lighting, no text, no watermark, no extra props."
+  },
+  {
+    id: "lifestyle",
+    label: "生活方式图",
+    defaultSizePresetId: "poster-landscape",
+    prompt:
+      "Create a realistic lifestyle image showing the product in a natural usage scene. Premium e-commerce photography, authentic environment, clear product visibility, natural light, no text, no watermark."
+  },
+  {
+    id: "feature-benefit",
+    label: "卖点展示图",
+    defaultSizePresetId: "poster-landscape",
+    prompt:
+      "Create an e-commerce feature image that highlights the product's key benefit. Clean composition with clear negative space for later copy, modern commercial style, no embedded text, no logo."
+  },
+  {
+    id: "seasonal-campaign",
+    label: "节日促销图",
+    defaultSizePresetId: "poster-portrait",
+    prompt:
+      "Create a seasonal promotional product image. Festive but not cluttered, product as the main focus, premium marketplace ad style, leave clean space for promotional text, no fake text."
+  },
+  {
+    id: "social-ad",
+    label: "社媒广告图",
+    defaultSizePresetId: "story-9-16",
+    prompt:
+      "Create a high-converting social commerce ad creative. Strong visual hook, clear product benefit, mobile-first composition, realistic lighting, no watermark, no unreadable text."
+  },
+  {
+    id: "comparison",
+    label: "对比展示图",
+    defaultSizePresetId: "poster-landscape",
+    prompt:
+      "Create a clean product comparison style image. Show the product advantage visually without misleading claims, organized composition, space for labels to be added later, no embedded text."
+  }
+] as const;
+
+export type EcommerceSceneTemplateId = (typeof ECOMMERCE_SCENE_TEMPLATES)[number]["id"];
+
+export interface EcommerceProductBrief {
+  title: string;
+  description?: string;
+  bulletPoints?: string[];
+  targetCustomer?: string;
+  usageScene?: string;
+  material?: string;
+  color?: string;
+  brandTone?: string;
+}
+
+export interface EcommercePromptContext {
+  product: EcommerceProductBrief;
+  platform: EcommercePlatform;
+  market: EcommerceMarket;
+  sceneTemplateId: EcommerceSceneTemplateId;
+  extraDirection?: string;
+}
 
 export interface ImageSize {
   width: number;
@@ -317,6 +410,26 @@ export interface StorageTestResult {
   message: string;
 }
 
+export interface EcommerceBatchGenerateRequest {
+  product: EcommerceProductBrief;
+  platform: EcommercePlatform;
+  market: EcommerceMarket;
+  sceneTemplateIds: EcommerceSceneTemplateId[];
+  sizePresetId?: ImageSizePresetId;
+  size?: ImageSize;
+  stylePresetId?: StylePresetId;
+  quality?: ImageQuality;
+  outputFormat?: OutputFormat;
+  countPerScene?: GenerationCount;
+  referenceImage?: ReferenceImageInput;
+  extraDirection?: string;
+}
+
+export interface EcommerceBatchGenerateResponse {
+  jobId: string;
+  records: GenerationRecord[];
+}
+
 export function composePrompt(prompt: string, presetId: string): string {
   const trimmedPrompt = prompt.trim();
   const preset = STYLE_PRESETS.find((item) => item.id === presetId);
@@ -324,4 +437,29 @@ export function composePrompt(prompt: string, presetId: string): string {
     return trimmedPrompt;
   }
   return `${trimmedPrompt}\n\nStyle direction: ${preset.prompt}`;
+}
+
+export function composeEcommercePrompt(context: EcommercePromptContext): string {
+  const template = ECOMMERCE_SCENE_TEMPLATES.find((item) => item.id === context.sceneTemplateId);
+  const platform = ECOMMERCE_PLATFORMS.find((item) => item.id === context.platform)?.label ?? context.platform;
+  const market = ECOMMERCE_MARKETS.find((item) => item.id === context.market)?.label ?? context.market;
+  const product = context.product;
+  const details = [
+    `Product title: ${product.title.trim()}`,
+    product.description ? `Description: ${product.description.trim()}` : "",
+    product.bulletPoints?.length ? `Selling points: ${product.bulletPoints.map((point) => point.trim()).filter(Boolean).join("; ")}` : "",
+    product.targetCustomer ? `Target customer: ${product.targetCustomer.trim()}` : "",
+    product.usageScene ? `Usage scene: ${product.usageScene.trim()}` : "",
+    product.material ? `Material: ${product.material.trim()}` : "",
+    product.color ? `Color: ${product.color.trim()}` : "",
+    product.brandTone ? `Brand tone: ${product.brandTone.trim()}` : "",
+    context.extraDirection ? `Additional direction: ${context.extraDirection.trim()}` : ""
+  ].filter(Boolean);
+
+  return [
+    template?.prompt ?? "Create a professional cross-border e-commerce product image.",
+    `Optimize for ${platform} in the ${market} market.`,
+    ...details,
+    "Keep the product accurate and commercially usable. Preserve key shape, material, and color. Avoid logos, watermarks, unreadable text, misleading claims, and extra hands or people unless explicitly requested."
+  ].join("\n");
 }

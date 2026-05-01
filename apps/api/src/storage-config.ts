@@ -1,4 +1,6 @@
-import { eq } from "drizzle-orm";
+import { createHash } from "node:crypto";
+import { and, eq } from "drizzle-orm";
+import type { RequestTenant } from "./auth-context.js";
 import type { SaveStorageConfigRequest, StorageConfigResponse, StorageTestResult } from "./contracts.js";
 import { db } from "./database.js";
 import { CosAssetStorageAdapter, normalizeKeyPrefix, type CosStorageAdapterConfig, storageErrorMessage } from "./asset-storage.js";
@@ -11,12 +13,12 @@ const DEFAULT_COS_KEY_PREFIX = process.env.COS_DEFAULT_KEY_PREFIX?.trim() || "gp
 
 type StorageConfigRow = typeof storageConfigs.$inferSelect;
 
-export function getStorageConfig(): StorageConfigResponse {
-  return toStorageConfigResponse(getStorageConfigRow());
+export async function getStorageConfig(tenant: RequestTenant): Promise<StorageConfigResponse> {
+  return toStorageConfigResponse(await getStorageConfigRow(tenant));
 }
 
-export function getActiveCosStorageConfig(): CosStorageAdapterConfig | undefined {
-  const row = getStorageConfigRow();
+export async function getActiveCosStorageConfig(tenant: RequestTenant): Promise<CosStorageAdapterConfig | undefined> {
+  const row = await getStorageConfigRow(tenant);
   if (!row || row.enabled !== 1 || row.provider !== "cos" || !row.secretId || !row.secretKey || !row.bucket || !row.region) {
     return undefined;
   }
@@ -30,13 +32,14 @@ export function getActiveCosStorageConfig(): CosStorageAdapterConfig | undefined
   };
 }
 
-export async function saveStorageConfig(input: SaveStorageConfigRequest): Promise<StorageConfigResponse> {
+export async function saveStorageConfig(tenant: RequestTenant, input: SaveStorageConfigRequest): Promise<StorageConfigResponse> {
   const now = new Date().toISOString();
-  const existing = getStorageConfigRow();
+  const existing = await getStorageConfigRow(tenant);
 
   if (!input.enabled) {
-    upsertStorageConfig({
-      id: ACTIVE_STORAGE_CONFIG_ID,
+    await upsertStorageConfig({
+      id: activeStorageConfigId(tenant),
+      workspaceId: tenant.workspaceId,
       provider: "cos",
       enabled: 0,
       secretId: existing?.secretId ?? null,
@@ -47,14 +50,15 @@ export async function saveStorageConfig(input: SaveStorageConfigRequest): Promis
       createdAt: existing?.createdAt ?? now,
       updatedAt: now
     });
-    return getStorageConfig();
+    return getStorageConfig(tenant);
   }
 
   const parsed = resolveCosConfigForSave(input, existing);
   await new CosAssetStorageAdapter(parsed).testConfig();
 
-  upsertStorageConfig({
-    id: ACTIVE_STORAGE_CONFIG_ID,
+  await upsertStorageConfig({
+    id: activeStorageConfigId(tenant),
+    workspaceId: tenant.workspaceId,
     provider: "cos",
     enabled: 1,
     secretId: parsed.secretId,
@@ -66,12 +70,12 @@ export async function saveStorageConfig(input: SaveStorageConfigRequest): Promis
     updatedAt: now
   });
 
-  return getStorageConfig();
+  return getStorageConfig(tenant);
 }
 
-export async function testStorageConfig(input: SaveStorageConfigRequest): Promise<StorageTestResult> {
+export async function testStorageConfig(tenant: RequestTenant, input: SaveStorageConfigRequest): Promise<StorageTestResult> {
   try {
-    const parsed = resolveCosConfigForSave(input, getStorageConfigRow());
+    const parsed = resolveCosConfigForSave(input, await getStorageConfigRow(tenant));
     await new CosAssetStorageAdapter(parsed).testConfig();
     return {
       ok: true,
@@ -85,15 +89,23 @@ export async function testStorageConfig(input: SaveStorageConfigRequest): Promis
   }
 }
 
-function getStorageConfigRow(): StorageConfigRow | undefined {
-  return db.select().from(storageConfigs).where(eq(storageConfigs.id, ACTIVE_STORAGE_CONFIG_ID)).get();
+async function getStorageConfigRow(tenant: RequestTenant): Promise<StorageConfigRow | undefined> {
+  const [row] = await db
+    .select()
+    .from(storageConfigs)
+    .where(and(eq(storageConfigs.id, activeStorageConfigId(tenant)), eq(storageConfigs.workspaceId, tenant.workspaceId)))
+    .limit(1);
+  return row;
 }
 
-function upsertStorageConfig(row: StorageConfigRow): void {
-  db.insert(storageConfigs)
+function activeStorageConfigId(tenant: RequestTenant): string {
+  return createHash("sha256").update(`${tenant.workspaceId}:${ACTIVE_STORAGE_CONFIG_ID}`).digest("hex");
+}
+
+async function upsertStorageConfig(row: StorageConfigRow): Promise<void> {
+  await db.insert(storageConfigs)
     .values(row)
-    .onConflictDoUpdate({
-      target: storageConfigs.id,
+    .onDuplicateKeyUpdate({
       set: {
         provider: row.provider,
         enabled: row.enabled,
@@ -104,8 +116,7 @@ function upsertStorageConfig(row: StorageConfigRow): void {
         keyPrefix: row.keyPrefix,
         updatedAt: row.updatedAt
       }
-    })
-    .run();
+    });
 }
 
 function resolveCosConfigForSave(input: SaveStorageConfigRequest, existing: StorageConfigRow | undefined): CosStorageAdapterConfig {

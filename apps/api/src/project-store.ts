@@ -1,4 +1,6 @@
-import { desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
+import type { ResultSetHeader } from "mysql2";
+import type { RequestTenant } from "./auth-context.js";
 import type {
   GeneratedAsset,
   GalleryImageItem,
@@ -31,72 +33,76 @@ function parseSnapshot(snapshotJson: string): unknown | null {
   return JSON.parse(snapshotJson) as unknown;
 }
 
-export function ensureDefaultProject(): void {
-  const existing = getDefaultProjectRow();
+function defaultProductId(tenant: RequestTenant): string {
+  return `${tenant.workspaceId}:default`.slice(0, 64);
+}
+
+export async function ensureDefaultProject(tenant: RequestTenant): Promise<void> {
+  const existing = await getDefaultProjectRow(tenant);
 
   if (existing) {
     return;
   }
-  if (defaultProjectRowExists()) {
+  if (await defaultProjectRowExists(tenant)) {
     return;
   }
 
   const createdAt = nowIso();
-  db.insert(projects)
+  await db.insert(projects)
     .values({
-      id: DEFAULT_PROJECT_ID,
+      id: defaultProductId(tenant),
+      workspaceId: tenant.workspaceId,
+      createdByUserId: tenant.userId,
       name: DEFAULT_PROJECT_NAME,
       snapshotJson: "null",
       createdAt,
       updatedAt: createdAt
-    })
-    .run();
+    });
 }
 
-export function saveProjectSnapshot(input: ProjectSnapshotInput): ProjectState {
-  ensureDefaultProject();
+export async function saveProjectSnapshot(tenant: RequestTenant, input: ProjectSnapshotInput): Promise<ProjectState> {
+  await ensureDefaultProject(tenant);
 
   const updatedAt = nowIso();
-  const current = getDefaultProjectRow();
+  const current = await getDefaultProjectRow(tenant);
 
-  db.update(projects)
+  await db.update(projects)
     .set({
       name: input.name ?? current?.name ?? DEFAULT_PROJECT_NAME,
       snapshotJson: input.snapshotJson,
       updatedAt
     })
-    .where(eq(projects.id, DEFAULT_PROJECT_ID))
-    .run();
+      .where(and(eq(projects.id, defaultProductId(tenant)), eq(projects.workspaceId, tenant.workspaceId)));
 
-  return getProjectState();
+  return getProjectState(tenant);
 }
 
-export function getProjectState(): ProjectState {
-  ensureDefaultProject();
+export async function getProjectState(tenant: RequestTenant): Promise<ProjectState> {
+  await ensureDefaultProject(tenant);
 
-  const project = getDefaultProjectRow();
+  const project = await getDefaultProjectRow(tenant);
 
   if (!project) {
     return {
       id: DEFAULT_PROJECT_ID,
       name: DEFAULT_PROJECT_NAME,
       snapshot: null,
-      history: getGenerationHistory(),
+      history: await getGenerationHistory(tenant),
       updatedAt: nowIso()
     };
   }
 
   return {
-    id: project.id,
+    id: DEFAULT_PROJECT_ID,
     name: project.name,
     snapshot: parseSnapshot(project.snapshotJson),
-    history: getGenerationHistory(),
+    history: await getGenerationHistory(tenant),
     updatedAt: project.updatedAt
   };
 }
 
-export function getGalleryImages(): GalleryResponse {
-  const rows = db
+export async function getGalleryImages(tenant: RequestTenant): Promise<GalleryResponse> {
+  const rows = await db
     .select({
       output: generationOutputs,
       generation: generationRecords,
@@ -105,9 +111,8 @@ export function getGalleryImages(): GalleryResponse {
     .from(generationOutputs)
     .innerJoin(generationRecords, eq(generationOutputs.generationId, generationRecords.id))
     .innerJoin(assets, eq(generationOutputs.assetId, assets.id))
-    .where(eq(generationOutputs.status, "succeeded"))
-    .orderBy(desc(generationOutputs.createdAt))
-    .all();
+    .where(and(eq(generationOutputs.workspaceId, tenant.workspaceId), eq(generationOutputs.status, "succeeded")))
+    .orderBy(desc(generationOutputs.createdAt));
 
   return {
     items: rows.map(({ output, generation, asset }) => ({
@@ -129,14 +134,21 @@ export function getGalleryImages(): GalleryResponse {
   };
 }
 
-export function deleteGalleryOutput(outputId: string): boolean {
-  const result = db.delete(generationOutputs).where(eq(generationOutputs.id, outputId)).run();
-  return result.changes > 0;
+export async function deleteGalleryOutput(tenant: RequestTenant, outputId: string): Promise<boolean> {
+  const result = await db
+    .delete(generationOutputs)
+    .where(and(eq(generationOutputs.id, outputId), eq(generationOutputs.workspaceId, tenant.workspaceId)));
+  return affectedRows(result) > 0;
 }
 
-function getDefaultProjectRow(): (typeof projects.$inferSelect) | undefined {
+async function getDefaultProjectRow(tenant: RequestTenant): Promise<(typeof projects.$inferSelect) | undefined> {
   try {
-    return db.select().from(projects).where(eq(projects.id, DEFAULT_PROJECT_ID)).get();
+    const rows = await db
+      .select()
+      .from(projects)
+      .where(and(eq(projects.id, defaultProductId(tenant)), eq(projects.workspaceId, tenant.workspaceId)))
+      .limit(1);
+    return rows[0];
   } catch (error) {
     warnOnce(
       "project-read-fallback",
@@ -146,18 +158,22 @@ function getDefaultProjectRow(): (typeof projects.$inferSelect) | undefined {
   }
 }
 
-function defaultProjectRowExists(): boolean {
+async function defaultProjectRowExists(tenant: RequestTenant): Promise<boolean> {
   try {
-    const row = db.select({ id: projects.id }).from(projects).where(eq(projects.id, DEFAULT_PROJECT_ID)).get();
+    const [row] = await db
+      .select({ id: projects.id })
+      .from(projects)
+      .where(and(eq(projects.id, defaultProductId(tenant)), eq(projects.workspaceId, tenant.workspaceId)))
+      .limit(1);
     return Boolean(row);
   } catch {
     return true;
   }
 }
 
-function getGenerationHistory(): ApiGenerationRecord[] {
+async function getGenerationHistory(tenant: RequestTenant): Promise<ApiGenerationRecord[]> {
   try {
-    return readGenerationHistory();
+    return await readGenerationHistory(tenant);
   } catch (error) {
     warnOnce(
       "history-read-fallback",
@@ -186,23 +202,32 @@ function formatErrorSummary(error: unknown): string {
   return String(error);
 }
 
-function readGenerationHistory(): ApiGenerationRecord[] {
-  const records = db.select().from(generationRecords).orderBy(desc(generationRecords.createdAt)).limit(20).all();
+async function readGenerationHistory(tenant: RequestTenant): Promise<ApiGenerationRecord[]> {
+  const records = await db
+    .select()
+    .from(generationRecords)
+    .where(eq(generationRecords.workspaceId, tenant.workspaceId))
+    .orderBy(desc(generationRecords.createdAt))
+    .limit(20);
   if (records.length === 0) {
     return [];
   }
 
   const generationIds = records.map((record) => record.id);
-  const outputs = db
+  const outputs = await db
     .select()
     .from(generationOutputs)
-    .where(inArray(generationOutputs.generationId, generationIds))
-    .orderBy(generationOutputs.createdAt)
-    .all();
+    .where(and(eq(generationOutputs.workspaceId, tenant.workspaceId), inArray(generationOutputs.generationId, generationIds)))
+    .orderBy(generationOutputs.createdAt);
 
   const assetIds = outputs.flatMap((output) => (output.assetId ? [output.assetId] : []));
   const assetRows =
-    assetIds.length > 0 ? db.select().from(assets).where(inArray(assets.id, assetIds)).all() : [];
+    assetIds.length > 0
+      ? await db
+          .select()
+          .from(assets)
+          .where(and(eq(assets.workspaceId, tenant.workspaceId), inArray(assets.id, assetIds)))
+      : [];
   const assetById = new Map(assetRows.map((asset) => [asset.id, asset]));
 
   const outputsByGenerationId = new Map<string, typeof outputs>();
@@ -246,6 +271,12 @@ function readGenerationHistory(): ApiGenerationRecord[] {
       }
     ];
   });
+}
+
+function affectedRows(result: unknown): number {
+  const raw = Array.isArray(result) ? result[0] : result;
+  const affected = (raw as ResultSetHeader | undefined)?.affectedRows;
+  return typeof affected === "number" ? affected : 0;
 }
 
 function toGeneratedAsset(asset: (typeof assets.$inferSelect) | undefined): GeneratedAsset | undefined {

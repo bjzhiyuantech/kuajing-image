@@ -1,136 +1,271 @@
-import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
-import { ensureRuntimeStorage, runtimePaths, sqliteConfig } from "./runtime.js";
+import { createHash } from "node:crypto";
+import { drizzle } from "drizzle-orm/mysql2";
+import { createPool, type Pool, type PoolOptions } from "mysql2/promise";
+import { DEMO_USER_ID, DEMO_WORKSPACE_ID, type RequestTenant } from "./auth-context.js";
+import { ensureRuntimeStorage, mysqlConfig } from "./runtime.js";
 import * as schema from "./schema.js";
 
 ensureRuntimeStorage();
 
-const sqlite = new Database(runtimePaths.databaseFile);
-configureSqlite(sqlite);
+const pool = createMysqlPool();
 
-function configureSqlite(database: Database.Database): void {
-  database.pragma(`locking_mode = ${sqliteConfig.lockingMode}`);
-  database.pragma("foreign_keys = ON");
-  applyJournalMode(database);
-}
+export const db = drizzle(pool, { schema, mode: "default" });
 
-function applyJournalMode(database: Database.Database): void {
+export async function initializeDatabase(): Promise<void> {
   try {
-    database.pragma(`journal_mode = ${sqliteConfig.journalMode}`);
+    await pool.query("SELECT 1");
+    await createSchema();
+    await ensureDemoTenant();
   } catch (error) {
-    if (sqliteConfig.journalMode !== "WAL" || !isSharedMemoryOpenError(error)) {
-      throw error;
-    }
-
-    console.warn("SQLite WAL mode is unavailable for DATA_DIR; falling back to DELETE journal mode.");
-    database.pragma("locking_mode = EXCLUSIVE");
-    database.pragma("journal_mode = DELETE");
+    throw new Error(`MySQL initialization failed. ${formatMysqlConfig()} ${formatErrorSummary(error)}`);
   }
 }
 
-function isSharedMemoryOpenError(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    typeof error.code === "string" &&
-    error.code === "SQLITE_IOERR_SHMOPEN"
+export async function closeDatabase(): Promise<void> {
+  await pool.end();
+}
+
+export async function ensureTenant(tenant: RequestTenant): Promise<void> {
+  const now = new Date().toISOString();
+  const isDemo = tenant.userId === DEMO_USER_ID && tenant.workspaceId === DEMO_WORKSPACE_ID;
+
+  await upsertTenantRows({
+    ...tenant,
+    email: isDemo ? "demo@example.local" : null,
+    displayName: isDemo ? "Demo User" : tenant.userId,
+    workspaceName: isDemo ? "Demo Workspace" : tenant.workspaceId,
+    role: isDemo ? "owner" : "member",
+    now
+  });
+}
+
+async function createSchema(): Promise<void> {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id VARCHAR(64) PRIMARY KEY,
+      email VARCHAR(255),
+      display_name VARCHAR(255) NOT NULL,
+      created_at VARCHAR(32) NOT NULL,
+      updated_at VARCHAR(32) NOT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS workspaces (
+      id VARCHAR(64) PRIMARY KEY,
+      name VARCHAR(255) NOT NULL,
+      owner_user_id VARCHAR(64) NOT NULL,
+      created_at VARCHAR(32) NOT NULL,
+      updated_at VARCHAR(32) NOT NULL,
+      CONSTRAINT workspaces_owner_user_fk FOREIGN KEY (owner_user_id) REFERENCES users(id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS workspace_members (
+      id VARCHAR(64) PRIMARY KEY,
+      workspace_id VARCHAR(64) NOT NULL,
+      user_id VARCHAR(64) NOT NULL,
+      role VARCHAR(32) NOT NULL,
+      created_at VARCHAR(32) NOT NULL,
+      updated_at VARCHAR(32) NOT NULL,
+      UNIQUE KEY workspace_members_workspace_user_idx (workspace_id, user_id),
+      CONSTRAINT workspace_members_workspace_fk FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+      CONSTRAINT workspace_members_user_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS products (
+      id VARCHAR(64) PRIMARY KEY,
+      workspace_id VARCHAR(64) NOT NULL,
+      created_by_user_id VARCHAR(64) NOT NULL,
+      name VARCHAR(255) NOT NULL,
+      snapshot_json LONGTEXT NOT NULL,
+      created_at VARCHAR(32) NOT NULL,
+      updated_at VARCHAR(32) NOT NULL,
+      KEY products_workspace_updated_at_idx (workspace_id, updated_at),
+      CONSTRAINT products_workspace_fk FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+      CONSTRAINT products_created_by_user_fk FOREIGN KEY (created_by_user_id) REFERENCES users(id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS assets (
+      id VARCHAR(64) PRIMARY KEY,
+      workspace_id VARCHAR(64) NOT NULL,
+      created_by_user_id VARCHAR(64) NOT NULL,
+      file_name VARCHAR(255) NOT NULL,
+      relative_path VARCHAR(512) NOT NULL,
+      mime_type VARCHAR(128) NOT NULL,
+      width INT NOT NULL,
+      height INT NOT NULL,
+      cloud_provider VARCHAR(32),
+      cloud_bucket VARCHAR(255),
+      cloud_region VARCHAR(64),
+      cloud_object_key VARCHAR(512),
+      cloud_status VARCHAR(32),
+      cloud_error TEXT,
+      cloud_uploaded_at VARCHAR(32),
+      cloud_etag VARCHAR(255),
+      cloud_request_id VARCHAR(255),
+      created_at VARCHAR(32) NOT NULL,
+      KEY assets_workspace_created_at_idx (workspace_id, created_at),
+      CONSTRAINT assets_workspace_fk FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+      CONSTRAINT assets_created_by_user_fk FOREIGN KEY (created_by_user_id) REFERENCES users(id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS storage_configs (
+      id VARCHAR(64) PRIMARY KEY,
+      workspace_id VARCHAR(64) NOT NULL,
+      provider VARCHAR(32) NOT NULL,
+      enabled INT NOT NULL,
+      secret_id VARCHAR(255),
+      secret_key TEXT,
+      bucket VARCHAR(255),
+      region VARCHAR(64),
+      key_prefix VARCHAR(512),
+      created_at VARCHAR(32) NOT NULL,
+      updated_at VARCHAR(32) NOT NULL,
+      UNIQUE KEY storage_configs_workspace_provider_idx (workspace_id, provider),
+      CONSTRAINT storage_configs_workspace_fk FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS generation_jobs (
+      id VARCHAR(64) PRIMARY KEY,
+      workspace_id VARCHAR(64) NOT NULL,
+      created_by_user_id VARCHAR(64) NOT NULL,
+      product_id VARCHAR(64),
+      mode VARCHAR(32) NOT NULL,
+      prompt LONGTEXT NOT NULL,
+      effective_prompt LONGTEXT NOT NULL,
+      preset_id VARCHAR(64) NOT NULL,
+      width INT NOT NULL,
+      height INT NOT NULL,
+      quality VARCHAR(32) NOT NULL,
+      output_format VARCHAR(32) NOT NULL,
+      count INT NOT NULL,
+      status VARCHAR(32) NOT NULL,
+      error TEXT,
+      reference_asset_id VARCHAR(64),
+      created_at VARCHAR(32) NOT NULL,
+      KEY generation_jobs_workspace_created_at_idx (workspace_id, created_at),
+      CONSTRAINT generation_jobs_workspace_fk FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+      CONSTRAINT generation_jobs_created_by_user_fk FOREIGN KEY (created_by_user_id) REFERENCES users(id),
+      CONSTRAINT generation_jobs_product_fk FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE SET NULL,
+      CONSTRAINT generation_jobs_reference_asset_fk FOREIGN KEY (reference_asset_id) REFERENCES assets(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS generation_outputs (
+      id VARCHAR(64) PRIMARY KEY,
+      workspace_id VARCHAR(64) NOT NULL,
+      generation_id VARCHAR(64) NOT NULL,
+      status VARCHAR(32) NOT NULL,
+      asset_id VARCHAR(64),
+      error TEXT,
+      created_at VARCHAR(32) NOT NULL,
+      KEY generation_outputs_workspace_created_at_idx (workspace_id, created_at),
+      KEY generation_outputs_generation_id_idx (generation_id),
+      KEY generation_outputs_asset_id_idx (asset_id),
+      CONSTRAINT generation_outputs_workspace_fk FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+      CONSTRAINT generation_outputs_generation_fk FOREIGN KEY (generation_id) REFERENCES generation_jobs(id) ON DELETE CASCADE,
+      CONSTRAINT generation_outputs_asset_fk FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+}
+
+async function ensureDemoTenant(): Promise<void> {
+  const now = new Date().toISOString();
+  await upsertTenantRows({
+    userId: DEMO_USER_ID,
+    workspaceId: DEMO_WORKSPACE_ID,
+    email: "demo@example.local",
+    displayName: "Demo User",
+    workspaceName: "Demo Workspace",
+    role: "owner",
+    now
+  });
+}
+
+async function upsertTenantRows(input: {
+  userId: string;
+  workspaceId: string;
+  email: string | null;
+  displayName: string;
+  workspaceName: string;
+  role: string;
+  now: string;
+}): Promise<void> {
+  await pool.query(
+    `
+      INSERT INTO users (id, email, display_name, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE display_name = VALUES(display_name), updated_at = VALUES(updated_at)
+    `,
+    [input.userId, input.email, input.displayName, input.now, input.now]
+  );
+
+  await pool.query(
+    `
+      INSERT INTO workspaces (id, name, owner_user_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE name = VALUES(name), owner_user_id = VALUES(owner_user_id), updated_at = VALUES(updated_at)
+    `,
+    [input.workspaceId, input.workspaceName, input.userId, input.now, input.now]
+  );
+
+  await pool.query(
+    `
+      INSERT INTO workspace_members (id, workspace_id, user_id, role, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE role = VALUES(role), updated_at = VALUES(updated_at)
+    `,
+    [workspaceMemberId(input.workspaceId, input.userId), input.workspaceId, input.userId, input.role, input.now, input.now]
   );
 }
 
-sqlite.exec(`
-CREATE TABLE IF NOT EXISTS projects (
-  id TEXT PRIMARY KEY NOT NULL,
-  name TEXT NOT NULL,
-  snapshot_json TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS assets (
-  id TEXT PRIMARY KEY NOT NULL,
-  file_name TEXT NOT NULL,
-  relative_path TEXT NOT NULL,
-  mime_type TEXT NOT NULL,
-  width INTEGER NOT NULL,
-  height INTEGER NOT NULL,
-  cloud_provider TEXT,
-  cloud_bucket TEXT,
-  cloud_region TEXT,
-  cloud_object_key TEXT,
-  cloud_status TEXT,
-  cloud_error TEXT,
-  cloud_uploaded_at TEXT,
-  cloud_etag TEXT,
-  cloud_request_id TEXT,
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS storage_configs (
-  id TEXT PRIMARY KEY NOT NULL,
-  provider TEXT NOT NULL,
-  enabled INTEGER NOT NULL,
-  secret_id TEXT,
-  secret_key TEXT,
-  bucket TEXT,
-  region TEXT,
-  key_prefix TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS generation_records (
-  id TEXT PRIMARY KEY NOT NULL,
-  mode TEXT NOT NULL,
-  prompt TEXT NOT NULL,
-  effective_prompt TEXT NOT NULL,
-  preset_id TEXT NOT NULL,
-  width INTEGER NOT NULL,
-  height INTEGER NOT NULL,
-  quality TEXT NOT NULL,
-  output_format TEXT NOT NULL,
-  count INTEGER NOT NULL,
-  status TEXT NOT NULL,
-  error TEXT,
-  reference_asset_id TEXT REFERENCES assets(id),
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS generation_outputs (
-  id TEXT PRIMARY KEY NOT NULL,
-  generation_id TEXT NOT NULL REFERENCES generation_records(id) ON DELETE CASCADE,
-  status TEXT NOT NULL,
-  asset_id TEXT REFERENCES assets(id),
-  error TEXT,
-  created_at TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS generation_records_created_at_idx ON generation_records(created_at);
-CREATE INDEX IF NOT EXISTS generation_outputs_generation_id_idx ON generation_outputs(generation_id);
-CREATE INDEX IF NOT EXISTS generation_outputs_asset_id_idx ON generation_outputs(asset_id);
-`);
-
-ensureColumn("assets", "cloud_provider", "cloud_provider TEXT");
-ensureColumn("assets", "cloud_bucket", "cloud_bucket TEXT");
-ensureColumn("assets", "cloud_region", "cloud_region TEXT");
-ensureColumn("assets", "cloud_object_key", "cloud_object_key TEXT");
-ensureColumn("assets", "cloud_status", "cloud_status TEXT");
-ensureColumn("assets", "cloud_error", "cloud_error TEXT");
-ensureColumn("assets", "cloud_uploaded_at", "cloud_uploaded_at TEXT");
-ensureColumn("assets", "cloud_etag", "cloud_etag TEXT");
-ensureColumn("assets", "cloud_request_id", "cloud_request_id TEXT");
-
-export const db = drizzle(sqlite, { schema });
-
-export function closeDatabase(): void {
-  sqlite.close();
+function workspaceMemberId(workspaceId: string, userId: string): string {
+  return createHash("sha256").update(`${workspaceId}:${userId}`).digest("hex");
 }
 
-function ensureColumn(tableName: string, columnName: string, definition: string): void {
-  const columns = sqlite.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name?: string }>;
-  if (columns.some((column) => column.name === columnName)) {
-    return;
+function createMysqlPool(): Pool {
+  if (mysqlConfig.databaseUrl) {
+    return createPool(mysqlConfig.databaseUrl);
   }
 
-  sqlite.exec(`ALTER TABLE ${tableName} ADD COLUMN ${definition}`);
+  const options: PoolOptions = {
+    host: mysqlConfig.host,
+    port: mysqlConfig.port,
+    user: mysqlConfig.user,
+    password: mysqlConfig.password,
+    database: mysqlConfig.database,
+    connectionLimit: 10,
+    namedPlaceholders: false
+  };
+
+  return createPool(options);
+}
+
+function formatMysqlConfig(): string {
+  if (mysqlConfig.databaseUrl) {
+    return "Check DATABASE_URL and ensure the target database exists.";
+  }
+
+  return `Check MYSQL_HOST=${mysqlConfig.host}, MYSQL_PORT=${mysqlConfig.port}, MYSQL_USER=${mysqlConfig.user}, MYSQL_DATABASE=${mysqlConfig.database}.`;
+}
+
+function formatErrorSummary(error: unknown): string {
+  if (error instanceof Error) {
+    const codeValue = (error as { code?: unknown }).code;
+    const code = typeof codeValue === "string" ? `${codeValue}: ` : "";
+    return `${code}${error.message}`;
+  }
+
+  return String(error);
 }

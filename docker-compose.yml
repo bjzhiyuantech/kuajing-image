@@ -1,4 +1,21 @@
 services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-gpt_image_canvas}
+      MYSQL_USER: ${MYSQL_USER:-gpt_image_canvas}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-gpt_image_canvas}
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$${MYSQL_USER} -p$${MYSQL_PASSWORD} --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   app:
     build:
       context: .
@@ -15,9 +32,18 @@ services:
       HOST: 0.0.0.0
       PORT: ${PORT:-8787}
       DATA_DIR: /app/data
-      SQLITE_JOURNAL_MODE: ${SQLITE_JOURNAL_MODE:-DELETE}
-      SQLITE_LOCKING_MODE: ${SQLITE_LOCKING_MODE:-EXCLUSIVE}
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: ${MYSQL_USER:-gpt_image_canvas}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-gpt_image_canvas}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-gpt_image_canvas}
     ports:
       - "${PORT:-8787}:${PORT:-8787}"
     volumes:
       - ./data:/app/data
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+volumes:
+  mysql-data:

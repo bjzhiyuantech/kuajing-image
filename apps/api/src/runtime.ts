@@ -23,30 +23,6 @@ function resolveFromRepo(value: string): string {
   return isAbsolute(value) ? value : resolve(repoRoot, value);
 }
 
-const sqliteJournalModes = ["DELETE", "TRUNCATE", "PERSIST", "MEMORY", "WAL", "OFF"] as const;
-type SqliteJournalMode = (typeof sqliteJournalModes)[number];
-
-const sqliteLockingModes = ["NORMAL", "EXCLUSIVE"] as const;
-type SqliteLockingMode = (typeof sqliteLockingModes)[number];
-
-function parseSqliteJournalMode(value: string | undefined): SqliteJournalMode {
-  const normalized = value?.trim().toUpperCase();
-  if (!normalized) {
-    return "WAL";
-  }
-
-  return sqliteJournalModes.includes(normalized as SqliteJournalMode) ? (normalized as SqliteJournalMode) : "WAL";
-}
-
-function parseSqliteLockingMode(value: string | undefined): SqliteLockingMode {
-  const normalized = value?.trim().toUpperCase();
-  if (!normalized) {
-    return "NORMAL";
-  }
-
-  return sqliteLockingModes.includes(normalized as SqliteLockingMode) ? (normalized as SqliteLockingMode) : "NORMAL";
-}
-
 const dataDir = resolveFromRepo(process.env.DATA_DIR ?? "./data");
 
 export const runtimePaths = {
@@ -55,7 +31,6 @@ export const runtimePaths = {
   dataDir,
   assetsDir: resolve(dataDir, "assets"),
   assetPreviewsDir: resolve(dataDir, "asset-previews"),
-  databaseFile: resolve(dataDir, "gpt-image-canvas.sqlite"),
   webDistDir: resolve(repoRoot, "apps/web/dist")
 };
 
@@ -64,13 +39,22 @@ export const serverConfig = {
   port: parsePort(process.env.PORT)
 };
 
-export const sqliteConfig = {
-  journalMode: parseSqliteJournalMode(process.env.SQLITE_JOURNAL_MODE),
-  lockingMode: parseSqliteLockingMode(process.env.SQLITE_LOCKING_MODE)
+export const mysqlConfig = {
+  databaseUrl: emptyToUndefined(process.env.DATABASE_URL),
+  host: emptyToUndefined(process.env.MYSQL_HOST) ?? "127.0.0.1",
+  port: parsePort(process.env.MYSQL_PORT ?? "3306"),
+  user: emptyToUndefined(process.env.MYSQL_USER) ?? "gpt_image_canvas",
+  password: process.env.MYSQL_PASSWORD ?? "gpt_image_canvas",
+  database: emptyToUndefined(process.env.MYSQL_DATABASE) ?? "gpt_image_canvas"
 };
 
 export function ensureRuntimeStorage(): void {
   mkdirSync(runtimePaths.dataDir, { recursive: true });
   mkdirSync(runtimePaths.assetsDir, { recursive: true });
   mkdirSync(runtimePaths.assetPreviewsDir, { recursive: true });
+}
+
+function emptyToUndefined(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
 }

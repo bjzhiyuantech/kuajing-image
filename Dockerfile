@@ -37,6 +37,10 @@ ENV NODE_ENV="production"
 ENV HOST="0.0.0.0"
 ENV PORT="8787"
 ENV DATA_DIR="/app/data"
+ENV MYSQL_HOST="mysql"
+ENV MYSQL_PORT="3306"
+ENV MYSQL_USER="gpt_image_canvas"
+ENV MYSQL_DATABASE="gpt_image_canvas"
 
 RUN mkdir -p /app/data
 

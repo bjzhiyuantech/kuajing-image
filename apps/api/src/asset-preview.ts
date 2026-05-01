@@ -1,6 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import sharp from "sharp";
+import type { RequestTenant } from "./auth-context.js";
 import { readStoredAsset } from "./image-generation.js";
 import { runtimePaths } from "./runtime.js";
 
@@ -56,8 +57,12 @@ export function parsePreviewWidth(value: string | undefined): PreviewWidthResult
   };
 }
 
-export async function readStoredAssetPreview(assetId: string, width: number): Promise<StoredAssetPreview | undefined> {
-  const asset = await readStoredAsset(assetId);
+export async function readStoredAssetPreview(
+  tenant: RequestTenant,
+  assetId: string,
+  width: number
+): Promise<StoredAssetPreview | undefined> {
+  const asset = await readStoredAsset(tenant, assetId);
   if (!asset) {
     return undefined;
   }

@@ -1,19 +1,28 @@
 import { relative } from "node:path";
 import { pathToFileURL } from "node:url";
+import { randomUUID } from "node:crypto";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { parsePreviewWidth, readStoredAssetPreview } from "./asset-preview.js";
+import { resolveRequestTenant, type RequestTenant } from "./auth-context.js";
 import {
   GENERATION_COUNTS,
   IMAGE_QUALITIES,
   OUTPUT_FORMATS,
   SIZE_PRESETS,
   STYLE_PRESETS,
+  composeEcommercePrompt,
   composePrompt,
   validateSceneImageSize,
   type AppConfig,
+  type EcommerceBatchGenerateRequest,
+  type EcommerceBatchGenerateResponse,
+  type EcommerceMarket,
+  type EcommercePlatform,
+  type EcommerceProductBrief,
+  type EcommerceSceneTemplateId,
   type GenerationCount,
   type ImageQuality,
   type ImageSize,
@@ -22,7 +31,7 @@ import {
   type SaveStorageConfigRequest,
   type StylePresetId
 } from "./contracts.js";
-import { closeDatabase } from "./database.js";
+import { closeDatabase, ensureTenant, initializeDatabase } from "./database.js";
 import {
   ProviderError,
   createOpenAIImageProvider,
@@ -80,12 +89,12 @@ app.get("/api/config", (c) => {
   return c.json(config);
 });
 
-app.get("/api/project", (c) => c.json(getProjectState()));
+app.get("/api/project", async (c) => c.json(await getProjectState(await requestTenant(c))));
 
-app.get("/api/gallery", (c) => c.json(getGalleryImages()));
+app.get("/api/gallery", async (c) => c.json(await getGalleryImages(await requestTenant(c))));
 
-app.delete("/api/gallery/:outputId", (c) => {
-  const deleted = deleteGalleryOutput(c.req.param("outputId"));
+app.delete("/api/gallery/:outputId", async (c) => {
+  const deleted = await deleteGalleryOutput(await requestTenant(c), c.req.param("outputId"));
   if (!deleted) {
     return c.json(errorResponse("not_found", "找不到请求的 Gallery 图片记录。"), 404);
   }
@@ -95,7 +104,7 @@ app.delete("/api/gallery/:outputId", (c) => {
   });
 });
 
-app.get("/api/storage/config", (c) => c.json(getStorageConfig()));
+app.get("/api/storage/config", async (c) => c.json(await getStorageConfig(await requestTenant(c))));
 
 app.put("/api/storage/config", async (c) => {
   const payload = await readJson(c.req.raw);
@@ -109,7 +118,7 @@ app.put("/api/storage/config", async (c) => {
   }
 
   try {
-    return c.json(await saveStorageConfig(parsed.value));
+    return c.json(await saveStorageConfig(await requestTenant(c), parsed.value));
   } catch (error) {
     return c.json(errorResponse("storage_config_error", errorToMessage(error)), 400);
   }
@@ -126,7 +135,7 @@ app.post("/api/storage/config/test", async (c) => {
     return c.json(parsed.error, 400);
   }
 
-  return c.json(await testStorageConfig(parsed.value));
+  return c.json(await testStorageConfig(await requestTenant(c), parsed.value));
 });
 
 app.get("/api/assets/:id/preview", async (c) => {
@@ -135,7 +144,7 @@ app.get("/api/assets/:id/preview", async (c) => {
     return c.json(errorResponse(parsedWidth.code, parsedWidth.message), 400);
   }
 
-  const preview = await readStoredAssetPreview(c.req.param("id"), parsedWidth.width);
+  const preview = await readStoredAssetPreview(await requestTenant(c), c.req.param("id"), parsedWidth.width);
   if (!preview) {
     return c.json(errorResponse("not_found", "Asset not found."), 404);
   }
@@ -151,7 +160,7 @@ app.get("/api/assets/:id/preview", async (c) => {
 });
 
 app.get("/api/assets/:id/download", async (c) => {
-  const asset = await readStoredAsset(c.req.param("id"));
+  const asset = await readStoredAsset(await requestTenant(c), c.req.param("id"));
   if (!asset) {
     return c.json(errorResponse("not_found", "找不到请求的图像资源。"), 404);
   }
@@ -167,7 +176,7 @@ app.get("/api/assets/:id/download", async (c) => {
 });
 
 app.get("/api/assets/:id", async (c) => {
-  const asset = await readStoredAsset(c.req.param("id"));
+  const asset = await readStoredAsset(await requestTenant(c), c.req.param("id"));
   if (!asset) {
     return c.json(errorResponse("not_found", "找不到请求的图像资源。"), 404);
   }
@@ -195,7 +204,7 @@ app.put("/api/project", async (c) => {
     return c.json(parsed.error, 400);
   }
 
-  return c.json(saveProjectSnapshot(parsed.value));
+  return c.json(await saveProjectSnapshot(await requestTenant(c), parsed.value));
 });
 
 app.post("/api/images/generate", async (c) => {
@@ -216,7 +225,7 @@ app.post("/api/images/generate", async (c) => {
 
   try {
     const provider = createOpenAIImageProvider(providerConfig.config);
-    return c.json(await runTextToImageGeneration(parsed.value, provider, c.req.raw.signal));
+    return c.json(await runTextToImageGeneration(await requestTenant(c), parsed.value, provider, c.req.raw.signal));
   } catch (error) {
     if (error instanceof ProviderError) {
       return providerErrorJson(c, error);
@@ -232,7 +241,7 @@ app.post("/api/images/edit", async (c) => {
     return c.json(payload.error, 400);
   }
 
-  const parsed = parseEditPayload(payload.value);
+  const parsed = await parseEditPayload(await requestTenant(c), payload.value);
   if (!parsed.ok) {
     return c.json(parsed.error, 400);
   }
@@ -244,7 +253,67 @@ app.post("/api/images/edit", async (c) => {
 
   try {
     const provider = createOpenAIImageProvider(providerConfig.config);
-    return c.json(await runReferenceImageGeneration(parsed.value, provider, c.req.raw.signal));
+    return c.json(await runReferenceImageGeneration(await requestTenant(c), parsed.value, provider, c.req.raw.signal));
+  } catch (error) {
+    if (error instanceof ProviderError) {
+      return providerErrorJson(c, error);
+    }
+
+    throw error;
+  }
+});
+
+app.post("/api/ecommerce/images/batch-generate", async (c) => {
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+
+  const parsed = parseEcommerceBatchPayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  const providerConfig = getOpenAIImageProviderConfig();
+  if (!providerConfig.ok) {
+    return providerErrorJson(c, providerConfig.error);
+  }
+
+  const tenant = await requestTenant(c);
+  const provider = createOpenAIImageProvider(providerConfig.config);
+  const records = [];
+
+  try {
+    for (const sceneTemplateId of parsed.value.sceneTemplateIds) {
+      const prompt = composeEcommercePrompt({
+        product: parsed.value.product,
+        platform: parsed.value.platform,
+        market: parsed.value.market,
+        sceneTemplateId,
+        extraDirection: parsed.value.extraDirection
+      });
+      const response = await runTextToImageGeneration(
+        tenant,
+        {
+          originalPrompt: prompt,
+          presetId: parsed.value.stylePresetId ?? "product",
+          prompt: composePrompt(prompt, parsed.value.stylePresetId ?? "product"),
+          size: parsed.value.size,
+          sizeApiValue: `${parsed.value.size.width}x${parsed.value.size.height}`,
+          quality: parsed.value.quality ?? "auto",
+          outputFormat: parsed.value.outputFormat ?? "png",
+          count: parsed.value.countPerScene ?? 1
+        },
+        provider,
+        c.req.raw.signal
+      );
+      records.push(response.record);
+    }
+
+    return c.json({
+      jobId: randomUUID(),
+      records
+    } satisfies EcommerceBatchGenerateResponse);
   } catch (error) {
     if (error instanceof ProviderError) {
       return providerErrorJson(c, error);
@@ -338,6 +407,12 @@ function providerHttpStatus(status: number): number {
   return Number.isInteger(status) && status >= 400 && status <= 599 ? status : 502;
 }
 
+async function requestTenant(c: Context): Promise<RequestTenant> {
+  const tenant = resolveRequestTenant(c.req.raw.headers);
+  await ensureTenant(tenant);
+  return tenant;
+}
+
 function parseGeneratePayload(input: unknown): ParseResult<ImageProviderInput> {
   const base = parseBaseImagePayload(input);
   if (!base.ok) {
@@ -350,7 +425,7 @@ function parseGeneratePayload(input: unknown): ParseResult<ImageProviderInput> {
   };
 }
 
-function parseEditPayload(input: unknown): ParseResult<EditImageProviderInput> {
+async function parseEditPayload(tenant: RequestTenant, input: unknown): Promise<ParseResult<EditImageProviderInput>> {
   const base = parseBaseImagePayload(input);
   if (!base.ok) {
     return base;
@@ -374,7 +449,7 @@ function parseEditPayload(input: unknown): ParseResult<EditImageProviderInput> {
   const fileName = input.referenceImage.fileName;
   const referenceAssetId = parseOptionalString(input.referenceAssetId);
 
-  if (referenceAssetId && !getStoredAssetFile(referenceAssetId)) {
+  if (referenceAssetId && !(await getStoredAssetFile(tenant, referenceAssetId))) {
     return {
       ok: false,
       error: errorResponse("invalid_request", "找不到可记录的本地参考图像资源。")
@@ -513,6 +588,182 @@ function parseBaseImagePayload(input: unknown): ParseResult<ImageProviderInput> 
       outputFormat: outputFormat.value,
       count: count.value
     }
+  };
+}
+
+function parseEcommerceBatchPayload(input: unknown): ParseResult<EcommerceBatchGenerateRequest & { size: ImageSize }> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_request", "请求内容必须是 JSON 对象。")
+    };
+  }
+
+  const product = parseEcommerceProduct(input.product);
+  if (!product.ok) {
+    return product;
+  }
+
+  const platform = parseEcommercePlatform(input.platform);
+  if (!platform.ok) {
+    return platform;
+  }
+
+  const market = parseEcommerceMarket(input.market);
+  if (!market.ok) {
+    return market;
+  }
+
+  const sceneTemplateIds = parseEcommerceSceneIds(input.sceneTemplateIds);
+  if (!sceneTemplateIds.ok) {
+    return sceneTemplateIds;
+  }
+
+  const size = parseSize(input.size);
+  if (!size.ok) {
+    return size;
+  }
+
+  const resolvedSize = validateSceneImageSize({
+    size: size.value,
+    sizePresetId: parseOptionalString(input.sizePresetId)
+  });
+
+  if (!resolvedSize.ok) {
+    return {
+      ok: false,
+      error: errorResponse(resolvedSize.code, resolvedSize.message)
+    };
+  }
+
+  const stylePreset = parseStylePreset({
+    stylePresetId: parseOptionalString(input.stylePresetId)
+  });
+  if (!stylePreset.ok) {
+    return stylePreset;
+  }
+
+  const quality = parseQuality(input.quality);
+  if (!quality.ok) {
+    return quality;
+  }
+
+  const outputFormat = parseOutputFormat(input.outputFormat);
+  if (!outputFormat.ok) {
+    return outputFormat;
+  }
+
+  const count = parseCount(input.countPerScene);
+  if (!count.ok) {
+    return count;
+  }
+
+  return {
+    ok: true,
+    value: {
+      product: product.value,
+      platform: platform.value,
+      market: market.value,
+      sceneTemplateIds: sceneTemplateIds.value,
+      size: resolvedSize.size,
+      stylePresetId: stylePreset.value,
+      quality: quality.value,
+      outputFormat: outputFormat.value,
+      countPerScene: count.value,
+      extraDirection: parseOptionalString(input.extraDirection)
+    }
+  };
+}
+
+function parseEcommerceProduct(value: unknown): ParseResult<EcommerceProductBrief> {
+  if (!isRecord(value) || typeof value.title !== "string" || value.title.trim().length === 0) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_product", "请提供有效的商品标题。")
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      title: value.title.trim(),
+      description: parseOptionalString(value.description),
+      bulletPoints: Array.isArray(value.bulletPoints)
+        ? value.bulletPoints.flatMap((item) => (typeof item === "string" && item.trim() ? [item.trim()] : []))
+        : undefined,
+      targetCustomer: parseOptionalString(value.targetCustomer),
+      usageScene: parseOptionalString(value.usageScene),
+      material: parseOptionalString(value.material),
+      color: parseOptionalString(value.color),
+      brandTone: parseOptionalString(value.brandTone)
+    }
+  };
+}
+
+function parseEcommercePlatform(value: unknown): ParseResult<EcommercePlatform> {
+  const platform = parseOptionalString(value) ?? "amazon";
+  const platforms: EcommercePlatform[] = ["amazon", "shopify", "tiktok-shop", "temu", "shein", "etsy", "aliexpress", "other"];
+  if (!platforms.includes(platform as EcommercePlatform)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_platform", "不支持的电商平台。")
+    };
+  }
+
+  return {
+    ok: true,
+    value: platform as EcommercePlatform
+  };
+}
+
+function parseEcommerceMarket(value: unknown): ParseResult<EcommerceMarket> {
+  const market = parseOptionalString(value) ?? "us";
+  const markets: EcommerceMarket[] = ["us", "uk", "eu", "ca", "au", "jp", "kr", "sg", "mx", "br", "global"];
+  if (!markets.includes(market as EcommerceMarket)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_market", "不支持的目标市场。")
+    };
+  }
+
+  return {
+    ok: true,
+    value: market as EcommerceMarket
+  };
+}
+
+function parseEcommerceSceneIds(value: unknown): ParseResult<EcommerceSceneTemplateId[]> {
+  if (!Array.isArray(value) || value.length === 0) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_scene_templates", "请至少选择一个跨境电商生图场景。")
+    };
+  }
+
+  const supported: EcommerceSceneTemplateId[] = [
+    "marketplace-main",
+    "lifestyle",
+    "feature-benefit",
+    "seasonal-campaign",
+    "social-ad",
+    "comparison"
+  ];
+  const sceneIds = value.flatMap((item) =>
+    typeof item === "string" && supported.includes(item as EcommerceSceneTemplateId)
+      ? [item as EcommerceSceneTemplateId]
+      : []
+  );
+
+  if (sceneIds.length === 0) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_scene_templates", "没有可用的跨境电商生图场景。")
+    };
+  }
+
+  return {
+    ok: true,
+    value: sceneIds.slice(0, 6)
   };
 }
 
@@ -781,6 +1032,8 @@ function isMainModule(): boolean {
 }
 
 if (isMainModule()) {
+  await initializeDatabase();
+
   const server = serve(
     {
       fetch: app.fetch,
@@ -793,7 +1046,7 @@ if (isMainModule()) {
   );
 
   const shutdown = (): void => {
-    closeDatabase();
+    void closeDatabase();
     server.close();
   };
 

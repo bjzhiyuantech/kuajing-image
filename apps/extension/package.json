@@ -1,0 +1,23 @@
+{
+  "name": "@gpt-image-canvas/extension",
+  "version": "0.1.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit && vite build && node scripts/copy-manifest.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@gpt-image-canvas/shared": "workspace:^",
+    "@vitejs/plugin-react": "^6.0.1",
+    "lucide-react": "^1.11.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "vite": "^8.0.10"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.1.34",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5"
+  }
+}
