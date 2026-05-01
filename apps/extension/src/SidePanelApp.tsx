@@ -457,6 +457,17 @@ export function SidePanelApp() {
     return headers;
   }
 
+  function authenticatedApiUrl(path: string, token = auth.token): string {
+    const url = `${apiBaseUrl()}${path}`;
+    const trimmedToken = token.trim();
+    if (!trimmedToken || !path.startsWith("/api/assets/")) {
+      return url;
+    }
+
+    const separator = url.includes("?") ? "&" : "?";
+    return `${url}${separator}token=${encodeURIComponent(trimmedToken)}`;
+  }
+
   async function saveSettings(nextSettings: ExtensionSettings): Promise<void> {
     setSettings(nextSettings);
     await chrome.storage.local.set({ settings: nextSettings });
@@ -1011,7 +1022,7 @@ export function SidePanelApp() {
               <span>{record.size.width} x {record.size.height} · {record.outputFormat}</span>
             </div>
             {record.outputs.flatMap((output) => output.asset ? [output.asset] : []).map((asset) => (
-              <a className="asset-link" href={`${apiBaseUrl()}${asset.url}`} key={asset.id} target="_blank" rel="noreferrer">
+              <a className="asset-link" href={authenticatedApiUrl(asset.url)} key={asset.id} target="_blank" rel="noreferrer">
                 <ImageIcon size={14} />
                 预览
                 <Download size={14} />
@@ -1146,7 +1157,7 @@ export function SidePanelApp() {
                       {assets.length > 0 ? (
                         <div className="asset-list">
                           {assets.slice(0, 6).map((asset) => (
-                            <a href={`${apiBaseUrl()}${asset.url}`} key={asset.id} target="_blank" rel="noreferrer">
+                            <a href={authenticatedApiUrl(asset.url)} key={asset.id} target="_blank" rel="noreferrer">
                               图片
                             </a>
                           ))}
