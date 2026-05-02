@@ -80,6 +80,7 @@ import {
   type AuthSession,
   type AuthUser
 } from "./authClient";
+import { BRAND_NAME, BRAND_TAGLINE, BrandMark, BrandName } from "./Brand";
 
 const AUTOSAVE_DEBOUNCE_MS = 1200;
 const HISTORY_COLLAPSED_LIMIT = 3;
@@ -1317,27 +1318,6 @@ function SaveStatusIcon({ status }: { status: SaveStatus }) {
   return <Cloud className="size-3.5" aria-hidden="true" />;
 }
 
-function BrandMark({ className = "" }: { className?: string }) {
-  return (
-    <span className={`brand-mark ${className}`} aria-hidden="true">
-      <span className="brand-mark__aperture" />
-      <span className="brand-mark__spark" />
-    </span>
-  );
-}
-
-function BrandName() {
-  return (
-    <p className="brand-name" title="gpt-image-canvas">
-      <span className="brand-name__prefix">gpt</span>
-      <span className="brand-name__dash">-</span>
-      <span className="brand-name__image">image</span>
-      <span className="brand-name__dash">-</span>
-      <span className="brand-name__canvas">canvas</span>
-    </p>
-  );
-}
-
 function TopNavigation({
   route,
   user,
@@ -1363,7 +1343,7 @@ function TopNavigation({
           <BrandMark />
           <div className="min-w-0">
             <BrandName />
-            <p className="brand-tagline">本地 AI 图像画布</p>
+            <p className="brand-tagline">{BRAND_TAGLINE}</p>
           </div>
         </div>
         <nav aria-label="主要页面" className="top-navigation__links">
@@ -2561,7 +2541,7 @@ export function App() {
       <main className="app-shell app-view relative flex min-h-0 overflow-hidden bg-neutral-950 text-neutral-900" data-active-route={resolvedRoute} hidden={resolvedRoute !== "canvas"}>
       <section
         className="relative min-w-0 flex-1 bg-neutral-100 outline-none"
-        aria-label="gpt-image-canvas 创作画布"
+        aria-label={`${BRAND_NAME}创作画布`}
         data-testid="canvas-shell"
         ref={canvasShellRef}
         tabIndex={-1}
@@ -2580,8 +2560,8 @@ export function App() {
           <div className="canvas-loading-state">
             <BrandMark className="brand-mark--large" />
             <div className="min-w-0">
-              <p className="text-sm font-semibold text-neutral-800">正在载入 gpt-image-canvas</p>
-              <p className="mt-1 text-xs text-neutral-500">本地 AI 图像画布</p>
+              <p className="text-sm font-semibold text-neutral-800">正在载入{BRAND_NAME}</p>
+              <p className="mt-1 text-xs text-neutral-500">{BRAND_TAGLINE}</p>
             </div>
           </div>
         )}
@@ -2628,7 +2608,7 @@ export function App() {
               <BrandMark />
               <div className="min-w-0">
                 <BrandName />
-                <p className="brand-tagline">本地 AI 图像画布</p>
+                <p className="brand-tagline">{BRAND_TAGLINE}</p>
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-2">

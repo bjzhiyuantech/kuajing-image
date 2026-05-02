@@ -25,6 +25,7 @@ import {
 import type React from "react";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { authFetch, readApiError, type AuthSession, type AuthUser } from "./authClient";
+import { BRAND_TAGLINE, BrandMark, BrandName } from "./Brand";
 
 type AuthMode = "login" | "register";
 
@@ -77,10 +78,10 @@ export function AuthScreen({
       <section className="auth-panel" aria-labelledby="auth-title">
         <div className="auth-panel__intro">
           <div className="brand-lockup">
-            <span className="brand-mark" aria-hidden="true" />
+            <BrandMark />
             <div>
-              <p className="brand-name">gpt-image-canvas</p>
-              <p className="brand-tagline">团队图像工作台</p>
+              <BrandName />
+              <p className="brand-tagline">{BRAND_TAGLINE}</p>
             </div>
           </div>
           <div className="auth-panel__summary">
