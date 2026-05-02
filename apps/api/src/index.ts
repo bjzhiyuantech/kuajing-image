@@ -25,6 +25,7 @@ import {
   OUTPUT_FORMATS,
   SIZE_PRESETS,
   STYLE_PRESETS,
+  ECOMMERCE_TEXT_LANGUAGES,
   composeEcommercePrompt,
   composePrompt,
   validateSceneImageSize,
@@ -44,6 +45,7 @@ import {
   type EcommercePlatform,
   type EcommerceProductBrief,
   type EcommerceSceneTemplateId,
+  type EcommerceTextLanguage,
   type GenerationCount,
   type ImageQuality,
   type ImageSize,
@@ -872,6 +874,7 @@ async function runEcommerceBatchJob(jobId: string): Promise<void> {
             product: job.input.product,
             platform: job.input.platform,
             market: job.input.market,
+            textLanguage: job.input.textLanguage,
             sceneTemplateId,
             extraDirection: job.input.extraDirection
           });
@@ -933,6 +936,7 @@ function failedEcommerceSceneRecord(
     product: input.product,
     platform: input.platform,
     market: input.market,
+    textLanguage: input.textLanguage,
     sceneTemplateId,
     extraDirection: input.extraDirection
   });
@@ -1964,6 +1968,11 @@ function parseEcommerceBatchPayload(input: unknown): ParseResult<ResolvedEcommer
     return market;
   }
 
+  const textLanguage = parseEcommerceTextLanguage(input.textLanguage);
+  if (!textLanguage.ok) {
+    return textLanguage;
+  }
+
   const sceneTemplateIds = parseEcommerceSceneIds(input.sceneTemplateIds);
   if (!sceneTemplateIds.ok) {
     return sceneTemplateIds;
@@ -2014,6 +2023,7 @@ function parseEcommerceBatchPayload(input: unknown): ParseResult<ResolvedEcommer
       product: product.value,
       platform: platform.value,
       market: market.value,
+      textLanguage: textLanguage.value,
       sceneTemplateIds: sceneTemplateIds.value,
       size: resolvedSize.size,
       stylePresetId: stylePreset.value,
@@ -2098,6 +2108,21 @@ function parseEcommerceMarket(value: unknown): ParseResult<EcommerceMarket> {
   return {
     ok: true,
     value: market as EcommerceMarket
+  };
+}
+
+function parseEcommerceTextLanguage(value: unknown): ParseResult<EcommerceTextLanguage> {
+  const textLanguage = parseOptionalString(value) ?? "none";
+  if (!ECOMMERCE_TEXT_LANGUAGES.some((item) => item.id === textLanguage)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_text_language", "不支持的目标文字。")
+    };
+  }
+
+  return {
+    ok: true,
+    value: textLanguage as EcommerceTextLanguage
   };
 }
 

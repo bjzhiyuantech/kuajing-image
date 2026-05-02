@@ -6,6 +6,7 @@ import type {
   EcommercePlatform,
   EcommerceProductBrief,
   EcommerceSceneTemplateId,
+  EcommerceTextLanguage,
   GenerationRecord,
   ImageQuality,
   ImageSize,
@@ -46,6 +47,7 @@ export interface BatchFormState {
   generationMode: EcommerceGenerationMode;
   platform: EcommercePlatform;
   market: EcommerceMarket;
+  textLanguage: EcommerceTextLanguage;
   sceneTemplateIds: EcommerceSceneTemplateId[];
   size: ImageSize;
   stylePresetId: StylePresetId;

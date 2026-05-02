@@ -11,6 +11,21 @@ export type AssetCloudUploadStatus = "uploaded" | "failed";
 export type EcommercePlatform = "amazon" | "shopify" | "tiktok-shop" | "temu" | "shein" | "etsy" | "aliexpress" | "other";
 export type EcommerceMarket = "us" | "uk" | "eu" | "ca" | "au" | "jp" | "kr" | "sg" | "mx" | "br" | "global";
 export type EcommerceGenerationMode = "enhance" | "creative";
+export type EcommerceTextLanguage =
+  | "none"
+  | "zh-hant"
+  | "ko"
+  | "ja"
+  | "en"
+  | "de"
+  | "pl"
+  | "ru"
+  | "fr"
+  | "es"
+  | "it"
+  | "pt"
+  | "nl"
+  | "ar";
 
 export interface SizePreset {
   id: string;
@@ -96,6 +111,23 @@ export const ECOMMERCE_MARKETS = [
   { id: "br", label: "Brazil" },
   { id: "global", label: "Global" }
 ] as const satisfies ReadonlyArray<{ id: EcommerceMarket; label: string }>;
+
+export const ECOMMERCE_TEXT_LANGUAGES = [
+  { id: "none", label: "不替换", promptLabel: "" },
+  { id: "zh-hant", label: "繁体中文", promptLabel: "Traditional Chinese" },
+  { id: "ko", label: "韩文", promptLabel: "Korean" },
+  { id: "ja", label: "日文", promptLabel: "Japanese" },
+  { id: "en", label: "英文", promptLabel: "English" },
+  { id: "de", label: "德文", promptLabel: "German" },
+  { id: "pl", label: "波兰文", promptLabel: "Polish" },
+  { id: "ru", label: "俄文", promptLabel: "Russian" },
+  { id: "fr", label: "法文", promptLabel: "French" },
+  { id: "es", label: "西班牙文", promptLabel: "Spanish" },
+  { id: "it", label: "意大利文", promptLabel: "Italian" },
+  { id: "pt", label: "葡萄牙文", promptLabel: "Portuguese" },
+  { id: "nl", label: "荷兰文", promptLabel: "Dutch" },
+  { id: "ar", label: "阿拉伯文", promptLabel: "Arabic" }
+] as const satisfies ReadonlyArray<{ id: EcommerceTextLanguage; label: string; promptLabel: string }>;
 
 export const ECOMMERCE_SCENE_TEMPLATES = [
   {
@@ -195,6 +227,7 @@ export interface EcommercePromptContext {
   product: EcommerceProductBrief;
   platform: EcommercePlatform;
   market: EcommerceMarket;
+  textLanguage?: EcommerceTextLanguage;
   sceneTemplateId: EcommerceSceneTemplateId;
   extraDirection?: string;
 }
@@ -727,6 +760,7 @@ export interface EcommerceBatchGenerateRequest {
   product: EcommerceProductBrief;
   platform: EcommercePlatform;
   market: EcommerceMarket;
+  textLanguage?: EcommerceTextLanguage;
   sceneTemplateIds: EcommerceSceneTemplateId[];
   sourcePageUrl?: string;
   sizePresetId?: ImageSizePresetId;
@@ -801,6 +835,7 @@ export function composeEcommercePrompt(context: EcommercePromptContext): string 
   const template = ECOMMERCE_SCENE_TEMPLATES.find((item) => item.id === context.sceneTemplateId);
   const platform = ECOMMERCE_PLATFORMS.find((item) => item.id === context.platform)?.label ?? context.platform;
   const market = ECOMMERCE_MARKETS.find((item) => item.id === context.market)?.label ?? context.market;
+  const textLanguage = ECOMMERCE_TEXT_LANGUAGES.find((item) => item.id === context.textLanguage);
   const product = context.product;
   const details = [
     `Product title: ${product.title.trim()}`,
@@ -819,11 +854,17 @@ export function composeEcommercePrompt(context: EcommercePromptContext): string 
       ? "Reference image rule: treat the source product image as the single source of truth. Preserve the original product exactly. Only improve lighting, background, layout, selling-point text, callouts, and marketplace composition. Do not generate logos or fake brand marks; brand marks are added later as a separate overlay. Do not redesign the product."
       : "Reference image rule: use the source product image to preserve the product's key identity, shape, color, material, and recognizable details while creating a new commercial scene.";
 
+  const textLanguageGuard =
+    textLanguage && textLanguage.id !== "none"
+      ? `Image text localization: replace source-image marketing text and any newly generated selling-point text with natural ${textLanguage.promptLabel}. Keep brand names, model numbers, and required trademarks unchanged. Do not mix languages except for preserved brand/model text. Text must be short, readable, native-sounding, and placed cleanly without covering the product.`
+      : "";
+
   return [
     template?.prompt ?? "Create a professional cross-border e-commerce product image.",
     `Optimize for ${platform} in the ${market} market.`,
     ...details,
     modeGuard,
+    textLanguageGuard,
     "Keep the result accurate and commercially usable. Avoid watermarks, unreadable text, misleading claims, and extra hands or people unless explicitly requested."
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }

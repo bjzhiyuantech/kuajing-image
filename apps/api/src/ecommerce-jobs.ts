@@ -8,6 +8,7 @@ import type {
   EcommercePlatform,
   EcommerceProductBrief,
   EcommerceSceneTemplateId,
+  EcommerceTextLanguage,
   EcommerceStatsResponse,
   GenerationRecord,
   GenerationStatus,
@@ -26,6 +27,7 @@ export interface PersistedEcommerceBatchRequest {
   product: EcommerceProductBrief;
   platform: EcommercePlatform;
   market: EcommerceMarket;
+  textLanguage?: EcommerceTextLanguage;
   sceneTemplateIds: EcommerceSceneTemplateId[];
   sourcePageUrl?: string;
   size: ImageSize;

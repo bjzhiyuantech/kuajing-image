@@ -1,5 +1,6 @@
 export {
   CUSTOM_SIZE_PRESET_ID,
+  ECOMMERCE_TEXT_LANGUAGES,
   GENERATION_COUNTS,
   IMAGE_MODEL,
   IMAGE_QUALITIES,
@@ -47,6 +48,7 @@ export type {
   EcommercePlatform,
   EcommerceProductBrief,
   EcommerceSceneTemplateId,
+  EcommerceTextLanguage,
   EcommerceStatsResponse,
   EditImageRequest,
   GenerateImageRequest,

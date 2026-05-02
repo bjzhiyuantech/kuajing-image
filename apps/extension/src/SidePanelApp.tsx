@@ -23,11 +23,12 @@ import {
   X
 } from "lucide-react";
 import type { ChangeEvent, FormEvent } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ECOMMERCE_MARKETS,
   ECOMMERCE_PLATFORMS,
   ECOMMERCE_SCENE_TEMPLATES,
+  ECOMMERCE_TEXT_LANGUAGES,
   SIZE_PRESETS,
   composeEcommercePrompt,
   type BillingOrder,
@@ -165,6 +166,7 @@ const defaultForm: BatchFormState = {
   generationMode: "enhance",
   platform: "amazon",
   market: "us",
+  textLanguage: "none",
   sceneTemplateIds: ["marketplace-main", "logo-benefit", "feature-benefit"],
   size: { width: 1024, height: 1024 },
   stylePresetId: "product",
@@ -702,6 +704,7 @@ export function SidePanelApp() {
   const [hiddenResultKeys, setHiddenResultKeys] = useState<Set<string>>(() => new Set());
   const [localResultRecords, setLocalResultRecords] = useState<GenerationRecord[]>([]);
   const [editDialog, setEditDialog] = useState<EditImageDialogState | null>(null);
+  const resultsPanelRef = useRef<HTMLElement | null>(null);
 
   const availableScenes = useMemo(
     () => ECOMMERCE_SCENE_TEMPLATES.filter((template) => template.mode === form.generationMode),
@@ -741,6 +744,7 @@ export function SidePanelApp() {
       product: form.product,
       platform: form.platform,
       market: form.market,
+      textLanguage: form.textLanguage,
       sceneTemplateId: firstScene,
       extraDirection: form.extraDirection
     });
@@ -1238,6 +1242,12 @@ export function SidePanelApp() {
     setToolPanelOpen(true);
   }
 
+  function scrollToResultsPanel(): void {
+    window.requestAnimationFrame(() => {
+      resultsPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
+
   function openHistoryJob(job: EcommerceJobSummary): void {
     if (!requireAuth("job")) {
       return;
@@ -1257,6 +1267,8 @@ export function SidePanelApp() {
         token: auth.token
       } satisfies StoredBatchJob
     });
+    setToolPanelOpen(false);
+    scrollToResultsPanel();
     void pollBatchJob(job.id);
   }
 
@@ -1550,7 +1562,8 @@ export function SidePanelApp() {
       ...current,
       generationMode,
       sceneTemplateIds: defaultSceneIdsByMode[generationMode],
-      stylePresetId: generationMode === "enhance" ? "product" : "photoreal"
+      stylePresetId: generationMode === "enhance" ? "product" : "photoreal",
+      textLanguage: generationMode === "enhance" ? current.textLanguage : "none"
     }));
     setTask((current) => ({
       ...current,
@@ -1589,6 +1602,7 @@ export function SidePanelApp() {
         product: form.product,
         platform: form.platform,
         market: form.market,
+        textLanguage: form.textLanguage,
         sceneTemplateId: scene.id,
         extraDirection: form.extraDirection
       }),
@@ -1614,6 +1628,7 @@ export function SidePanelApp() {
           product: form.product,
           platform: form.platform,
           market: form.market,
+          textLanguage: form.textLanguage,
           sceneTemplateIds: form.sceneTemplateIds,
           sourcePageUrl: pageContext?.url,
           size: form.size,
@@ -1760,6 +1775,36 @@ export function SidePanelApp() {
           ))}
         </div>
       </section>
+
+      {form.generationMode === "enhance" ? (
+        <section className="panel">
+          <h2>文字翻译</h2>
+          <div className="two-col">
+            <label>
+              <span>文字替换</span>
+              <select
+                value={form.textLanguage === "none" ? "none" : "replace"}
+                onChange={(event) => setForm({ ...form, textLanguage: event.target.value === "replace" ? "ko" : "none" })}
+              >
+                <option value="none">不替换原图文字</option>
+                <option value="replace">替换为目标文字</option>
+              </select>
+            </label>
+            <label>
+              <span>目标文字</span>
+              <select
+                disabled={form.textLanguage === "none"}
+                value={form.textLanguage === "none" ? "ko" : form.textLanguage}
+                onChange={(event) => setForm({ ...form, textLanguage: event.target.value as BatchFormState["textLanguage"] })}
+              >
+                {ECOMMERCE_TEXT_LANGUAGES.filter((item) => item.id !== "none").map((item) => (
+                  <option key={item.id} value={item.id}>{item.label}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </section>
+      ) : null}
 
       <section className="panel brand-overlay-panel">
         <div className="toggle-row">
@@ -1931,7 +1976,7 @@ export function SidePanelApp() {
         </button>
       </section>
 
-      <section className="panel results-panel">
+      <section className="panel results-panel" ref={resultsPanelRef}>
         <div className={`status status-${task.status}`}>
           {task.status === "succeeded" ? <CheckCircle2 size={16} /> : task.status === "running" ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
           {task.message}
