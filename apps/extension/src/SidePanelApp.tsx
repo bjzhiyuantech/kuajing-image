@@ -1211,7 +1211,7 @@ export function SidePanelApp() {
   }
 
   function billingReturnUrl(): string {
-    const url = new URL(window.location.href);
+    const url = new URL("/account", `${apiBaseUrl()}/`);
     url.searchParams.set("billingReturn", "1");
     url.searchParams.set("source", "extension");
     return url.toString();
