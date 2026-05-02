@@ -17,6 +17,13 @@ interface ImageCandidate {
   score: number;
 }
 
+interface ImageProbeResult {
+  url: string;
+  width: number;
+  height: number;
+  ok: boolean;
+}
+
 const IMAGE_URL_PATTERN = /(?:https?:)?\/\/[^"'()<>\s\\]+?\.(?:jpg|jpeg|png|webp|gif|bmp|avif)(?:\?[^"'()<>\s\\]*)?/giu;
 const DETAIL_ROOT_SELECTOR =
   "#detail, [class*='detail'], [class*='Detail'], [class*='desc'], [class*='Desc'], [class*='content'], [class*='Content'], [class*='rich'], [class*='Rich'], [id*='detail'], [id*='Detail'], [id*='desc'], [id*='Desc'], [data-module*='detail'], [data-module*='Detail']";
@@ -37,9 +44,25 @@ function normalizeUrlCandidate(value: string): string {
 
 function isLikelyDecorativeImage(url: string, context = ""): boolean {
   const lower = `${url} ${context}`.toLowerCase();
-  return /logo|icon|sprite|avatar|qrcode|qr-code|barcode|xiaohongshu|小红书|pinduoduo|拼多多|douyin|抖音|kuaishou|快手|jd|京东|taobao|淘宝|alipay|支付|wangwang|旺旺/u.test(
-    lower
+  return (
+    /logo|icon|sprite|avatar|qrcode|qr-code|barcode|xiaohongshu|小红书|pinduoduo|拼多多|douyin|抖音|kuaishou|快手|jd|京东|taobao|淘宝|alipay|支付|wangwang|旺旺/u.test(
+      lower
+    ) ||
+    /48\s*小时|发货|保障|货源|服务|售后|赔付|极速|闪电|service|promise|guarantee|delivery|insurance/u.test(lower)
   );
+}
+
+function hasTinySizeHint(url: string): boolean {
+  const decodedUrl = decodeURIComponent(url);
+  const matches = decodedUrl.matchAll(/(?:^|[^\d])(\d{1,3})[x_*,-](\d{1,3})(?:[^\d]|$)/gu);
+  for (const match of matches) {
+    const width = Number(match[1]);
+    const height = Number(match[2]);
+    if (width > 0 && height > 0 && Math.max(width, height) <= 128) {
+      return true;
+    }
+  }
+  return /(?:[?&](?:w|h|width|height)=)(?:[1-9]\d?|1[01]\d|12[0-8])(?:[^\d]|$)/u.test(decodedUrl);
 }
 
 function addImageCandidate(
@@ -57,7 +80,7 @@ function addImageCandidate(
     return;
   }
   const url = absoluteUrl(normalizedValue);
-  if (!url || seen.has(url) || isLikelyDecorativeImage(url, context)) {
+  if (!url || seen.has(url) || isLikelyDecorativeImage(url, context) || hasTinySizeHint(url)) {
     return;
   }
   seen.add(url);
@@ -214,7 +237,6 @@ function addMarkupImageCandidates(doc: Document, candidates: ImageCandidate[], s
   const markupParts = Array.from(roots)
     .slice(0, 20)
     .map((element) => element.outerHTML);
-  markupParts.push(doc.documentElement.innerHTML);
 
   for (const markup of markupParts) {
     const normalizedMarkup = markup.replace(/\\u002f/giu, "/").replace(/\\\//gu, "/").replace(/&amp;/gu, "&");
@@ -228,7 +250,7 @@ function addMarkupImageCandidates(doc: Document, candidates: ImageCandidate[], s
 function addScriptImageCandidates(doc: Document, candidates: ImageCandidate[], seen: Set<string>): void {
   for (const script of Array.from(doc.scripts).slice(0, 80)) {
     const text = script.textContent ?? "";
-    if (!text) {
+    if (!text || !/detail|desc|content|rich|offer|product|image|img|主图|详情|商品/iu.test(text.slice(0, 2000))) {
       continue;
     }
     const normalizedText = text.replace(/\\u002f/giu, "/").replace(/\\\//gu, "/").replace(/&amp;/gu, "&");
@@ -236,6 +258,52 @@ function addScriptImageCandidates(doc: Document, candidates: ImageCandidate[], s
       addImageCandidate(candidates, seen, match[0], 60, "script image url");
     }
   }
+}
+
+function probeImage(url: string): Promise<ImageProbeResult> {
+  return new Promise((resolve) => {
+    const image = new Image();
+    const timer = window.setTimeout(() => {
+      image.onload = null;
+      image.onerror = null;
+      resolve({ url, width: 0, height: 0, ok: false });
+    }, 2500);
+
+    image.onload = () => {
+      window.clearTimeout(timer);
+      resolve({ url, width: image.naturalWidth, height: image.naturalHeight, ok: true });
+    };
+    image.onerror = () => {
+      window.clearTimeout(timer);
+      resolve({ url, width: 0, height: 0, ok: false });
+    };
+    image.src = url;
+  });
+}
+
+async function filterProductImageUrls(candidates: ImageCandidate[]): Promise<string[]> {
+  const sortedUrls = candidates
+    .sort((left, right) => right.score - left.score)
+    .map((candidate) => candidate.url)
+    .slice(0, 96);
+  const accepted: string[] = [];
+
+  for (let index = 0; index < sortedUrls.length && accepted.length < 64; index += 12) {
+    const batch = sortedUrls.slice(index, index + 12);
+    const results = await Promise.all(batch.map((url) => probeImage(url)));
+    for (const result of results) {
+      if (!result.ok) {
+        continue;
+      }
+      const longestSide = Math.max(result.width, result.height);
+      const shortestSide = Math.min(result.width, result.height);
+      if (longestSide >= 220 && shortestSide >= 120) {
+        accepted.push(result.url);
+      }
+    }
+  }
+
+  return accepted;
 }
 
 function collectAccessibleDocuments(doc: Document, depth = 0, seen = new Set<Document>()): Document[] {
@@ -270,18 +338,16 @@ async function hydrateDetailImages(doc: Document): Promise<void> {
     await sleep(300);
   }
 
-  for (let pass = 0; pass < 3; pass += 1) {
-    for (const root of detailRoots) {
-      root.scrollIntoView({ block: "center", inline: "nearest" });
-      await sleep(120);
-    }
-    const maxScrollY = Math.max(doc.body.scrollHeight, doc.documentElement.scrollHeight);
-    for (let top = 0; top <= maxScrollY; top += step) {
-      window.scrollTo({ top });
-      await sleep(180);
-    }
-    await sleep(320);
+  for (const root of detailRoots) {
+    root.scrollIntoView({ block: "center", inline: "nearest" });
+    await sleep(80);
   }
+  const maxScrollY = Math.max(doc.body.scrollHeight, doc.documentElement.scrollHeight);
+  for (let top = Math.max(0, originalY); top <= maxScrollY; top += step) {
+    window.scrollTo({ top });
+    await sleep(120);
+  }
+  await sleep(300);
 
   window.scrollTo({ left: originalX, top: originalY });
 }
@@ -318,10 +384,7 @@ async function pageContext(): Promise<PageContext> {
     title: readProductTitle(document),
     description: readDocMeta(document, 'meta[name="description"], meta[property="og:description"]'),
     url: location.href,
-    imageUrls: imageCandidates
-      .sort((left, right) => right.score - left.score)
-      .map((candidate) => candidate.url)
-      .slice(0, 64)
+    imageUrls: await filterProductImageUrls(imageCandidates)
   };
 }
 
