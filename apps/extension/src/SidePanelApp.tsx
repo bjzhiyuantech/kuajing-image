@@ -792,6 +792,7 @@ export function SidePanelApp() {
   const [rechargeAmount, setRechargeAmount] = useState("50");
   const [billingAction, setBillingAction] = useState("");
   const [billingActionLoading, setBillingActionLoading] = useState(false);
+  const [batchGenerationLocked, setBatchGenerationLocked] = useState(false);
   const [hiddenResultKeys, setHiddenResultKeys] = useState<Set<string>>(() => new Set());
   const [localResultRecords, setLocalResultRecords] = useState<GenerationRecord[]>([]);
   const [editDialog, setEditDialog] = useState<EditImageDialogState | null>(null);
@@ -891,6 +892,7 @@ export function SidePanelApp() {
 
   useEffect(() => {
     if (task.status !== "pending" && task.status !== "running") {
+      setBatchGenerationLocked(false);
       return;
     }
     if (!auth.token) {
@@ -1617,7 +1619,7 @@ export function SidePanelApp() {
     }));
   }
 
-  async function applySourceAspectSize(urls = selectedReferenceImageUrls): Promise<void> {
+  async function applySourceAspectSize(urls = selectedReferenceImageUrls, options: { force?: boolean } = {}): Promise<void> {
     const sourceUrl = urls[0]?.trim();
     if (!sourceUrl) {
       setTask((current) => ({
@@ -1630,7 +1632,7 @@ export function SidePanelApp() {
     try {
       const image = await imageFromUrl(sourceUrl);
       const nextSize = sizeFromImageAspect(image.naturalWidth, image.naturalHeight);
-      setForm((current) => (current.sizeMode === "source" ? { ...current, size: nextSize } : current));
+      setForm((current) => (options.force || current.sizeMode === "source" ? { ...current, size: nextSize } : current));
       setTask((current) => ({
         ...current,
         message: `已按原图比例设置尺寸：${nextSize.width} x ${nextSize.height}。`
@@ -1655,6 +1657,25 @@ export function SidePanelApp() {
         referenceImageUrls: nextUrls
       };
     });
+  }
+
+  function updateTextReplacementMode(value: string): void {
+    if (value === "replace") {
+      setForm((current) => ({
+        ...current,
+        textLanguage: current.textLanguage === "none" ? "ko" : current.textLanguage,
+        sceneTemplateIds: ["logo-benefit"],
+        sizeMode: "source",
+        countPerScene: 1
+      }));
+      void applySourceAspectSize(selectedReferenceImageUrls, { force: true });
+      return;
+    }
+
+    setForm((current) => ({
+      ...current,
+      textLanguage: "none"
+    }));
   }
 
   async function uploadReferenceImages(event: ChangeEvent<HTMLInputElement>): Promise<void> {
@@ -1857,6 +1878,9 @@ export function SidePanelApp() {
   }
 
   async function submitBatch(authAlreadyChecked = false, token = auth.token): Promise<void> {
+    if (batchGenerationLocked) {
+      return;
+    }
     if (!token.trim() && !authAlreadyChecked && !requireAuth("generate")) {
       return;
     }
@@ -1871,6 +1895,7 @@ export function SidePanelApp() {
     }
 
     const taskId = createClientId();
+    setBatchGenerationLocked(true);
     setHiddenResultKeys(new Set());
     setLocalResultRecords([]);
     setTask({
@@ -1937,6 +1962,7 @@ export function SidePanelApp() {
         message: error instanceof Error ? `${error.message} 已在本地生成场景 prompt 草稿。` : "后端批量接口暂不可用，已在本地生成场景 prompt 草稿。",
         records: fallbackRecords
       });
+      setBatchGenerationLocked(false);
     }
   }
 
@@ -2145,7 +2171,7 @@ export function SidePanelApp() {
               <span>文字替换</span>
               <select
                 value={form.textLanguage === "none" ? "none" : "replace"}
-                onChange={(event) => setForm({ ...form, textLanguage: event.target.value === "replace" ? "ko" : "none" })}
+                onChange={(event) => updateTextReplacementMode(event.target.value)}
               >
                 <option value="none">不替换原图文字</option>
                 <option value="replace">替换为目标文字</option>
@@ -2261,7 +2287,7 @@ export function SidePanelApp() {
               onChange={(event) => {
                 if (event.target.value === SOURCE_ASPECT_SIZE_OPTION) {
                   setForm({ ...form, sizeMode: "source" });
-                  void applySourceAspectSize();
+                  void applySourceAspectSize(selectedReferenceImageUrls, { force: true });
                   return;
                 }
                 const [width, height] = event.target.value.split("x").map((value) => Number.parseInt(value, 10));
@@ -2324,8 +2350,8 @@ export function SidePanelApp() {
               : "张图像"}
           </span>
         </div>
-        <button className="primary-button" disabled={task.status === "pending" || task.status === "running"} type="button" onClick={() => void submitBatch()}>
-          {task.status === "running" ? <Loader2 className="spin" size={17} /> : <Send size={17} />}
+        <button className="primary-button" disabled={batchGenerationLocked} type="button" onClick={() => void submitBatch()}>
+          {batchGenerationLocked ? <Loader2 className="spin" size={17} /> : <Send size={17} />}
           批量生成
         </button>
       </section>
