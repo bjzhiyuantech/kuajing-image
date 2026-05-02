@@ -21,6 +21,7 @@ import {
   ShieldCheck,
   Sparkles,
   User,
+  UserPlus,
   Users,
   Wallet
 } from "lucide-react";
@@ -705,11 +706,13 @@ export function AdminPage() {
   const [transactions, setTransactions] = useState<BillingTransactionRow[]>([]);
   const [planDrafts, setPlanDrafts] = useState<Record<string, PlanFormState>>({});
   const [newPlan, setNewPlan] = useState<PlanFormState>(createEmptyPlanForm());
+  const [newAdmin, setNewAdmin] = useState<AdminUserFormState>(createEmptyAdminForm());
   const [expandedUserId, setExpandedUserId] = useState("");
   const [userDrafts, setUserDrafts] = useState<Record<string, UserQuotaFormState>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [savingPlanId, setSavingPlanId] = useState("");
   const [savingUserId, setSavingUserId] = useState("");
+  const [savingAdmin, setSavingAdmin] = useState(false);
   const [savingBilling, setSavingBilling] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -868,6 +871,34 @@ export function AdminPage() {
       setError(saveError instanceof Error ? saveError.message : "用户额度保存失败。");
     } finally {
       setSavingUserId("");
+    }
+  }
+
+  async function saveAdminUser(): Promise<void> {
+    setSavingAdmin(true);
+    setError("");
+    setNotice("");
+    try {
+      const response = await authFetch("/api/admin/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: newAdmin.email,
+          displayName: newAdmin.displayName,
+          password: newAdmin.password
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "管理员保存失败。"));
+      }
+      const body = await response.json();
+      setNotice(isRecord(body) && body.created === false ? "用户已提升为管理员。" : "管理员已添加。");
+      setNewAdmin(createEmptyAdminForm());
+      await loadAdminData({ preserveNotice: true });
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "管理员保存失败。");
+    } finally {
+      setSavingAdmin(false);
     }
   }
 
@@ -1173,6 +1204,47 @@ export function AdminPage() {
             <Users className="size-4" aria-hidden="true" />
             <h2 id="users-table-title">用户额度管理</h2>
           </div>
+          <div className="admin-form-panel admin-inline-admin-form">
+            <div>
+              <p className="settings-eyebrow">Admins</p>
+              <h3>添加管理员</h3>
+            </div>
+            <div className="admin-form-grid admin-form-grid--four">
+              <label>
+                <span>邮箱</span>
+                <input
+                  className="admin-input"
+                  inputMode="email"
+                  placeholder="admin@example.com"
+                  value={newAdmin.email}
+                  onChange={(event) => setNewAdmin({ ...newAdmin, email: event.target.value })}
+                />
+              </label>
+              <label>
+                <span>显示名</span>
+                <input
+                  className="admin-input"
+                  placeholder="管理员名称"
+                  value={newAdmin.displayName}
+                  onChange={(event) => setNewAdmin({ ...newAdmin, displayName: event.target.value })}
+                />
+              </label>
+              <label>
+                <span>密码</span>
+                <input
+                  className="admin-input"
+                  placeholder="新用户必填，至少 8 位"
+                  type="password"
+                  value={newAdmin.password}
+                  onChange={(event) => setNewAdmin({ ...newAdmin, password: event.target.value })}
+                />
+              </label>
+              <button className="primary-action h-10" disabled={savingAdmin} type="button" onClick={() => void saveAdminUser()}>
+                {savingAdmin ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <UserPlus className="size-4" aria-hidden="true" />}
+                添加管理员
+              </button>
+            </div>
+          </div>
           <div className="admin-table-wrap">
             <table className="admin-table">
               <thead>
@@ -1341,9 +1413,17 @@ export function AdminPage() {
           title="生图 / 扣费明细"
         />
         <DataTable
-          columns={["任务", "状态", "商品", "进度", "更新时间"]}
+          columns={["任务", "状态", "归属人", "商品", "进度", "更新时间"]}
           emptyLabel="暂无任务"
-          rows={jobs.map((item) => [item.id, item.status, item.productTitle, `${item.completedScenes}/${item.totalScenes}`, formatDateTime(item.updatedAt)])}
+          rows={jobs.map((item) => [
+            item.id,
+            item.status,
+            ownerLabel(item),
+            item.productTitle,
+            `${item.completedScenes}/${item.totalScenes}`,
+            formatDateTime(item.updatedAt)
+          ])}
+          showAllRows
           title="作品 / 任务"
         />
         <DataTable
@@ -1403,14 +1483,18 @@ function DataTable({
   emptyLabel,
   icon,
   rows,
+  showAllRows = false,
   title
 }: {
   columns: string[];
   emptyLabel: string;
   icon?: React.ReactNode;
   rows: string[][];
+  showAllRows?: boolean;
   title: string;
 }) {
+  const visibleRows = showAllRows ? rows : rows.slice(0, 20);
+
   return (
     <section className="admin-table-card" aria-labelledby={`${title}-table-title`}>
       <div className="admin-table-card__title">
@@ -1427,8 +1511,8 @@ function DataTable({
             </tr>
           </thead>
           <tbody>
-            {rows.length > 0 ? (
-              rows.slice(0, 20).map((row, rowIndex) => (
+            {visibleRows.length > 0 ? (
+              visibleRows.map((row, rowIndex) => (
                 <tr key={`${title}-${rowIndex}`}>
                   {row.map((cell, cellIndex) => (
                     <td key={`${title}-${rowIndex}-${cellIndex}`}>{cell || "-"}</td>
@@ -1540,6 +1624,12 @@ interface UserQuotaFormState {
   storageUsedGb: string;
 }
 
+interface AdminUserFormState {
+  email: string;
+  displayName: string;
+  password: string;
+}
+
 interface BillingSettingsFormState {
   imageUnitPrice: string;
   currency: string;
@@ -1589,6 +1679,10 @@ interface BillingOrderRow {
 
 interface AdminJobRow {
   id: string;
+  userId?: string;
+  userEmail?: string;
+  userDisplayName?: string;
+  workspaceId?: string;
   status: string;
   productTitle: string;
   totalScenes: number;
@@ -1800,6 +1894,10 @@ function parsePlans(value: unknown): AdminPlanRow[] {
 function parseJobs(value: unknown): AdminJobRow[] {
   return arrayFrom(value, ["jobs", "items"]).map((item, index) => ({
     id: stringFrom(item.jobId) || stringFrom(item.id) || `job-${index}`,
+    userId: stringFrom(item.userId ?? item.createdByUserId ?? item.ownerId),
+    userEmail: stringFrom(item.userEmail ?? item.user_email ?? item.email),
+    userDisplayName: stringFrom(item.userDisplayName ?? item.user_display_name ?? item.displayName ?? item.ownerName),
+    workspaceId: stringFrom(item.workspaceId ?? item.workspace_id),
     status: stringFrom(item.status) || "-",
     productTitle: stringFrom(item.productTitle) || stringFrom(item.title) || "-",
     totalScenes: numberFrom(item.totalScenes) ?? 0,
@@ -1904,6 +2002,15 @@ function storageLabel(user: Pick<AdminUserRow, "storageQuotaBytes" | "storageUse
   return user.storageQuotaBytes ? `${formatBytes(used)} / ${formatBytes(user.storageQuotaBytes)}` : `${used > 0 ? formatBytes(used) : "未设置"} / 未设置`;
 }
 
+function ownerLabel(item: Pick<AdminJobRow, "userDisplayName" | "userEmail" | "userId">): string {
+  const displayName = item.userDisplayName?.trim();
+  const email = item.userEmail?.trim();
+  if (displayName && email && displayName !== email) {
+    return `${displayName} · ${email}`;
+  }
+  return displayName || email || item.userId || "-";
+}
+
 const NEW_PLAN_ID = "__new_plan__";
 
 function createBillingSettingsForm(): BillingSettingsFormState {
@@ -1963,6 +2070,14 @@ function createEmptyPlanForm(): PlanFormState {
     enabled: true,
     sortOrder: "0",
     featuresText: ""
+  };
+}
+
+function createEmptyAdminForm(): AdminUserFormState {
+  return {
+    email: "",
+    displayName: "",
+    password: ""
   };
 }
 

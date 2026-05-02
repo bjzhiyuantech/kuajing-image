@@ -795,6 +795,10 @@ export interface EcommerceBatchGenerateResponse {
 
 export interface EcommerceJobSummary {
   jobId: string;
+  userId?: string;
+  userEmail?: string;
+  userDisplayName?: string;
+  workspaceId?: string;
   status: EcommerceBatchJobStatus;
   message: string;
   productTitle: string;

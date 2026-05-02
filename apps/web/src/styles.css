@@ -1347,6 +1347,15 @@ body {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.admin-form-grid--four {
+  grid-template-columns: minmax(12rem, 1.2fr) minmax(10rem, 1fr) minmax(12rem, 1fr) auto;
+  align-items: end;
+}
+
+.admin-inline-admin-form {
+  margin-bottom: 1rem;
+}
+
 .admin-secret-textarea {
   min-height: 5.25rem;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
@@ -1841,6 +1850,7 @@ body {
   .admin-stats,
   .admin-billing-grid,
   .admin-form-grid--two,
+  .admin-form-grid--four,
   .plan-grid,
   .recharge-form,
   .account-billing-overview,

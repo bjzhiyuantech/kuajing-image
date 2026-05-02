@@ -1,6 +1,6 @@
 import { relative } from "node:path";
 import { pathToFileURL } from "node:url";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { and, asc, desc, eq } from "drizzle-orm";
@@ -19,6 +19,7 @@ import {
   toMeResponse,
   type AuthSession
 } from "./auth-service.js";
+import { hashPassword } from "./auth-crypto.js";
 import {
   GENERATION_COUNTS,
   IMAGE_QUALITIES,
@@ -101,7 +102,7 @@ import {
 import { deleteGalleryOutput, getGalleryImages, getProjectState, saveProjectSnapshot } from "./project-store.js";
 import { planExpiryFrom, resetExpiredUserPlans } from "./plan-expiration.js";
 import { runtimePaths, serverConfig } from "./runtime.js";
-import { assets, ecommerceBatchJobs, subscriptionPlans, users, workspaceMembers } from "./schema.js";
+import { assets, ecommerceBatchJobs, subscriptionPlans, users, workspaceMembers, workspaces } from "./schema.js";
 import { getStorageConfig, saveStorageConfig, testStorageConfig } from "./storage-config.js";
 
 const MAX_PROJECT_SNAPSHOT_BYTES = 100 * 1024 * 1024;
@@ -109,6 +110,8 @@ const MAX_PROJECT_NAME_LENGTH = 120;
 const MAX_PLAN_NAME_LENGTH = 120;
 const MAX_PLAN_DESCRIPTION_LENGTH = 1000;
 const MAX_CURRENCY_LENGTH = 16;
+const DEFAULT_ADMIN_PLAN_ID = "free";
+const DEFAULT_ADMIN_STORAGE_QUOTA_BYTES = 1024 * 1024 * 1024;
 
 interface ProjectPayload {
   name?: string;
@@ -591,6 +594,26 @@ app.get("/api/admin/users", async (c) => {
   return c.json(await getAdminUsers());
 });
 
+app.post("/api/admin/users", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+
+  const parsed = parseAdminUserPayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  const result = await createOrPromoteAdminUser(parsed.value);
+  return c.json({ user: await getAdminUserOrThrow(result.userId), created: result.created }, result.created ? 201 : 200);
+});
+
 app.get("/api/admin/plans", async (c) => {
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
@@ -869,7 +892,8 @@ app.get("/api/admin/ecommerce/jobs", async (c) => {
     return unauthorized;
   }
 
-  return c.json(await getAdminEcommerceJobs(parseListLimit(c.req.query("limit"))));
+  const limit = c.req.query("limit") ? parseListLimit(c.req.query("limit")) : undefined;
+  return c.json(await getAdminEcommerceJobs(limit));
 });
 
 app.get("/api/admin/assets", async (c) => {
@@ -1220,6 +1244,79 @@ async function getAdminPlans(): Promise<AdminPlansResponse> {
   };
 }
 
+async function createOrPromoteAdminUser(input: {
+  email: string;
+  password?: string;
+  displayName?: string;
+}): Promise<{ userId: string; created: boolean }> {
+  const existing = await findUserByEmail(input.email);
+  const now = new Date().toISOString();
+
+  if (existing) {
+    await db
+      .update(users)
+      .set({
+        role: "admin",
+        displayName: input.displayName ?? existing.displayName,
+        ...(input.password ? { passwordHash: hashPassword(input.password) } : {}),
+        updatedAt: now
+      })
+      .where(eq(users.id, existing.id));
+    return { userId: existing.id, created: false };
+  }
+
+  if (!input.password) {
+    throw new AuthError("password_required", "新增管理员需要设置至少 8 位密码。", 400);
+  }
+
+  const defaultPlan = await getPlanOrUndefined(DEFAULT_ADMIN_PLAN_ID);
+  const userId = randomUUID();
+  const workspaceId = randomUUID();
+  const displayName = input.displayName ?? input.email.split("@", 1)[0] ?? "Administrator";
+
+  await db.transaction(async (tx) => {
+    await tx.insert(users).values({
+      id: userId,
+      email: input.email,
+      passwordHash: hashPassword(input.password ?? ""),
+      displayName,
+      role: "admin",
+      planId: defaultPlan?.id ?? DEFAULT_ADMIN_PLAN_ID,
+      planExpiresAt: null,
+      quotaTotal: Number(defaultPlan?.imageQuota ?? 0),
+      quotaUsed: 0,
+      balanceCents: 0,
+      storageQuotaBytes: Number(defaultPlan?.storageQuotaBytes ?? DEFAULT_ADMIN_STORAGE_QUOTA_BYTES),
+      storageUsedBytes: 0,
+      currency: defaultPlan?.currency ?? "CNY",
+      createdAt: now,
+      updatedAt: now
+    });
+    await tx.insert(workspaces).values({
+      id: workspaceId,
+      name: `${displayName}'s Workspace`,
+      ownerUserId: userId,
+      createdAt: now,
+      updatedAt: now
+    });
+    await tx.insert(workspaceMembers).values({
+      id: workspaceMemberId(workspaceId, userId),
+      workspaceId,
+      userId,
+      role: "owner",
+      createdAt: now,
+      updatedAt: now
+    });
+  });
+
+  return { userId, created: true };
+}
+
+async function findUserByEmail(email: string): Promise<(typeof users.$inferSelect) | undefined> {
+  const [row] = await db.select().from(users).where(eq(users.email, email)).limit(1);
+  return row;
+}
+
 async function getPlanOrUndefined(planId: string): Promise<(typeof subscriptionPlans.$inferSelect) | undefined> {
   const [row] = await db.select().from(subscriptionPlans).where(eq(subscriptionPlans.id, planId)).limit(1);
   return row;
@@ -1303,11 +1400,24 @@ function toPlan(plan: typeof subscriptionPlans.$inferSelect): Plan {
   };
 }
 
-async function getAdminEcommerceJobs(limit: number): Promise<EcommerceJobListResponse> {
-  const rows = await db.select().from(ecommerceBatchJobs).orderBy(desc(ecommerceBatchJobs.createdAt)).limit(limit);
+async function getAdminEcommerceJobs(limit?: number): Promise<EcommerceJobListResponse> {
+  const baseQuery = db
+    .select({
+      job: ecommerceBatchJobs,
+      user: users
+    })
+    .from(ecommerceBatchJobs)
+    .leftJoin(users, eq(users.id, ecommerceBatchJobs.createdByUserId))
+    .orderBy(desc(ecommerceBatchJobs.createdAt));
+  const rows = typeof limit === "number" ? await baseQuery.limit(limit) : await baseQuery;
+
   return {
-    jobs: rows.map((job) => ({
+    jobs: rows.map(({ job, user }) => ({
       jobId: job.id,
+      userId: job.createdByUserId,
+      userEmail: user?.email,
+      userDisplayName: user?.displayName,
+      workspaceId: job.workspaceId,
       status: job.status as EcommerceBatchGenerateResponse["status"],
       message: job.message,
       productTitle: job.productTitle,
@@ -1567,6 +1677,52 @@ function parseAssignPlanPayload(input: unknown): ParseResult<{
       resetQuota: input.resetQuota === true,
       quotaTotal,
       storageQuotaBytes
+    }
+  };
+}
+
+function parseAdminUserPayload(input: unknown): ParseResult<{
+  email: string;
+  password?: string;
+  displayName?: string;
+}> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_admin_user", "管理员内容必须是 JSON 对象。")
+    };
+  }
+
+  const email = parseLimitedString(input.email, 255)?.toLowerCase();
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_admin_email", "请输入有效管理员邮箱。")
+    };
+  }
+
+  const password = parseOptionalString(input.password);
+  if (password !== undefined && password.length < 8) {
+    return {
+      ok: false,
+      error: errorResponse("weak_admin_password", "管理员密码至少需要 8 位。")
+    };
+  }
+
+  const displayName = parseLimitedString(input.displayName, 255);
+  if (Object.hasOwn(input, "displayName") && input.displayName !== "" && !displayName) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_admin_display_name", "显示名不能超过 255 个字符。")
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      email,
+      password,
+      displayName
     }
   };
 }
@@ -2309,6 +2465,10 @@ function parseDimension(value: unknown): number {
 
 function parseOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function workspaceMemberId(workspaceId: string, userId: string): string {
+  return createHash("sha256").update(`${workspaceId}:${userId}`).digest("hex");
 }
 
 function parseOptionalBoolean(value: unknown): boolean | undefined {
