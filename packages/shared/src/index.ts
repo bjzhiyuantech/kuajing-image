@@ -228,6 +228,7 @@ export interface EcommercePromptContext {
   platform: EcommercePlatform;
   market: EcommerceMarket;
   textLanguage?: EcommerceTextLanguage;
+  allowTextRecreation?: boolean;
   sceneTemplateId: EcommerceSceneTemplateId;
   extraDirection?: string;
 }
@@ -763,6 +764,7 @@ export interface EcommerceBatchGenerateRequest {
   platform: EcommercePlatform;
   market: EcommerceMarket;
   textLanguage?: EcommerceTextLanguage;
+  allowTextRecreation?: boolean;
   sceneTemplateIds: EcommerceSceneTemplateId[];
   sourcePageUrl?: string;
   sizePresetId?: ImageSizePresetId;
@@ -860,6 +862,10 @@ export function composeEcommercePrompt(context: EcommercePromptContext): string 
     textLanguage && textLanguage.id !== "none"
       ? `Image text localization: replace source-image marketing text and any newly generated selling-point text with natural ${textLanguage.promptLabel}. Keep brand names, model numbers, and required trademarks unchanged. Do not mix languages except for preserved brand/model text. Text must be short, readable, native-sounding, and placed cleanly without covering the product.`
       : "";
+  const textRecreationGuard =
+    textLanguage && textLanguage.id !== "none" && context.allowTextRecreation === false
+      ? "No secondary creative rewrite for image text: do not modify the original image style. Only translate the original image text into the corresponding target-language text."
+      : "";
 
   return [
     template?.prompt ?? "Create a professional cross-border e-commerce product image.",
@@ -867,6 +873,7 @@ export function composeEcommercePrompt(context: EcommercePromptContext): string 
     ...details,
     modeGuard,
     textLanguageGuard,
+    textRecreationGuard,
     "Keep the result accurate and commercially usable. Avoid watermarks, unreadable text, misleading claims, and extra hands or people unless explicitly requested."
   ].filter(Boolean).join("\n");
 }

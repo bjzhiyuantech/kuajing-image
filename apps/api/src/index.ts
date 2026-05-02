@@ -904,6 +904,7 @@ async function runEcommerceBatchJob(jobId: string): Promise<void> {
             platform: job.input.platform,
             market: job.input.market,
             textLanguage: job.input.textLanguage,
+            allowTextRecreation: job.input.allowTextRecreation,
             sceneTemplateId,
             extraDirection: job.input.extraDirection
           });
@@ -972,6 +973,7 @@ function failedEcommerceSceneRecord(
     platform: input.platform,
     market: input.market,
     textLanguage: input.textLanguage,
+    allowTextRecreation: input.allowTextRecreation,
     sceneTemplateId,
     extraDirection: input.extraDirection
   });
@@ -2061,6 +2063,7 @@ function parseEcommerceBatchPayload(input: unknown): ParseResult<ResolvedEcommer
       platform: platform.value,
       market: market.value,
       textLanguage: textLanguage.value,
+      allowTextRecreation: parseOptionalBoolean(input.allowTextRecreation) ?? true,
       sceneTemplateIds: sceneTemplateIds.value,
       size: resolvedSize.size,
       stylePresetId: stylePreset.value,
@@ -2303,6 +2306,10 @@ function parseDimension(value: unknown): number {
 
 function parseOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function parseOptionalBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
 }
 
 function parseLimitedString(value: unknown, maxLength: number): string | undefined {

@@ -175,6 +175,7 @@ const defaultForm: BatchFormState = {
   platform: "amazon",
   market: "us",
   textLanguage: "none",
+  allowTextRecreation: true,
   sceneTemplateIds: ["marketplace-main", "logo-benefit", "feature-benefit"],
   size: { width: 1024, height: 1024 },
   stylePresetId: "product",
@@ -1784,7 +1785,8 @@ export function SidePanelApp() {
       generationMode,
       sceneTemplateIds: defaultSceneIdsByMode[generationMode],
       stylePresetId: generationMode === "enhance" ? "product" : "photoreal",
-      textLanguage: generationMode === "enhance" ? current.textLanguage : "none"
+      textLanguage: generationMode === "enhance" ? current.textLanguage : "none",
+      allowTextRecreation: generationMode === "enhance" ? current.allowTextRecreation : true
     }));
     setTask((current) => ({
       ...current,
@@ -1824,6 +1826,7 @@ export function SidePanelApp() {
         platform: form.platform,
         market: form.market,
         textLanguage: form.textLanguage,
+        allowTextRecreation: form.allowTextRecreation,
         sceneTemplateId: scene.id,
         extraDirection: form.extraDirection
       }),
@@ -1848,6 +1851,7 @@ export function SidePanelApp() {
           platform: form.platform,
           market: form.market,
           textLanguage: form.textLanguage,
+          allowTextRecreation: form.allowTextRecreation,
           sceneTemplateIds: form.sceneTemplateIds,
           sourcePageUrl: pageContext?.url,
           size: form.size,
@@ -2093,6 +2097,17 @@ export function SidePanelApp() {
                 {ECOMMERCE_TEXT_LANGUAGES.filter((item) => item.id !== "none").map((item) => (
                   <option key={item.id} value={item.id}>{item.label}</option>
                 ))}
+              </select>
+            </label>
+            <label>
+              <span>是否二创</span>
+              <select
+                disabled={form.textLanguage === "none"}
+                value={form.allowTextRecreation ? "yes" : "no"}
+                onChange={(event) => setForm({ ...form, allowTextRecreation: event.target.value === "yes" })}
+              >
+                <option value="yes">是</option>
+                <option value="no">否</option>
               </select>
             </label>
           </div>

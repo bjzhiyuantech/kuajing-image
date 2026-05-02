@@ -49,6 +49,7 @@ export interface BatchFormState {
   platform: EcommercePlatform;
   market: EcommerceMarket;
   textLanguage: EcommerceTextLanguage;
+  allowTextRecreation: boolean;
   sceneTemplateIds: EcommerceSceneTemplateId[];
   size: ImageSize;
   stylePresetId: StylePresetId;
