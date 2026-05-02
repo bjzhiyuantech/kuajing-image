@@ -862,21 +862,25 @@ export function composeEcommercePrompt(context: EcommercePromptContext): string 
 
   const textLanguageGuard =
     textLanguage && textLanguage.id !== "none"
-      ? `Image text localization: replace source-image marketing text and any newly generated selling-point text with natural ${textLanguage.promptLabel}. Keep brand names, model numbers, and required trademarks unchanged. Do not mix languages except for preserved brand/model text. Text must be short, readable, native-sounding, and placed cleanly without covering the product.`
+      ? `Image text localization: replace only the remaining marketing text with natural ${textLanguage.promptLabel}. Keep brand names, model numbers, and required trademarks unchanged. Do not mix languages except for preserved brand/model text. Text must be short, readable, native-sounding, and placed cleanly without covering the product. Do not translate or recreate watermark text, logo text, source marks, corner captions, or any overlay that has already been identified as cleanup content.`
       : "";
-  const textRecreationGuard =
-    textLanguage && textLanguage.id !== "none" && context.allowTextRecreation === false
+  const sourcePreservationGuard =
+    context.allowTextRecreation === false
       ? [
-          "Strict non-creative translation mode:",
+          "Strict source-preservation mode:",
           "Keep the original composition, crop, camera angle, product position, background, spacing, typography hierarchy, text block positions, line breaks, alignment, and approximate font weight/style as close to the source image as possible.",
-          `Translate each original text phrase literally and faithfully into ${textLanguage.promptLabel}; preserve the original meaning and claims without rewriting, summarizing, expanding, replacing, or inventing new copy.`,
-          "Do not add new slogans, brand words, frames, decorative text, selling points, paragraphs, or layout elements. Do not remove original selling-point text unless it is an actual watermark/logo cleanup target.",
-          "Only replace the source text with the corresponding translated text in the same visual location; keep all non-text visual content unchanged."
+          textLanguage && textLanguage.id !== "none"
+            ? `Translate each original text phrase literally and faithfully into ${textLanguage.promptLabel}; preserve the original meaning and claims without rewriting, summarizing, expanding, replacing, or inventing new copy.`
+            : "Do not translate, rewrite, summarize, expand, replace, or invent selling-point copy.",
+          "Do not add new slogans, brand words, frames, decorative text, selling points, paragraphs, or layout elements. Do not move text into new positions.",
+          context.removeWatermarkAndLogo !== false
+            ? "Only remove watermarks, logos, unrelated text, and unrelated image elements that are cleanup targets; keep useful original selling-point copy in place."
+            : "Keep all original text and non-text visual content unchanged."
         ].join(" ")
       : "";
   const cleanupGuard =
     context.removeWatermarkAndLogo !== false
-      ? "Cleanup rule: remove watermarks, logos, unrelated icons, stickers, badges, decorative image overlays, and any text that is not product selling-point copy. Keep the product itself and useful selling-point copy clear and readable."
+      ? "Cleanup rule: first identify and remove watermarks, logos, brand marks, source marks, repeated watermark textures, platform/store marks, corner captions, footer tags, unrelated icons, stickers, badges, decorative image overlays, and any short text that belongs to the source image branding or provenance rather than the product's selling points. If a text element is ambiguous, treat it as cleanup content before translation. Keep the product itself and only the true selling-point copy clear and readable."
       : "";
 
   return [
@@ -884,9 +888,9 @@ export function composeEcommercePrompt(context: EcommercePromptContext): string 
     `Optimize for ${platform} in the ${market} market.`,
     ...details,
     modeGuard,
-    textLanguageGuard,
-    textRecreationGuard,
     cleanupGuard,
+    textLanguageGuard,
+    sourcePreservationGuard,
     "Keep the result accurate and commercially usable. Avoid watermarks, unreadable text, misleading claims, and extra hands or people unless explicitly requested."
   ].filter(Boolean).join("\n");
 }
