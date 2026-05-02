@@ -22,6 +22,7 @@ import {
 import { hashPassword } from "./auth-crypto.js";
 import {
   GENERATION_COUNTS,
+  ECOMMERCE_SCENE_TEMPLATES,
   IMAGE_QUALITIES,
   OUTPUT_FORMATS,
   SIZE_PRESETS,
@@ -2314,7 +2315,7 @@ function parseEcommerceProduct(value: unknown): ParseResult<EcommerceProductBrie
 
 function parseEcommercePlatform(value: unknown): ParseResult<EcommercePlatform> {
   const platform = parseOptionalString(value) ?? "amazon";
-  const platforms: EcommercePlatform[] = ["amazon", "shopify", "tiktok-shop", "temu", "shein", "etsy", "aliexpress", "other"];
+  const platforms: EcommercePlatform[] = ["amazon", "allegro", "shopify", "tiktok-shop", "temu", "shein", "etsy", "aliexpress", "other"];
   if (!platforms.includes(platform as EcommercePlatform)) {
     return {
       ok: false,
@@ -2330,7 +2331,7 @@ function parseEcommercePlatform(value: unknown): ParseResult<EcommercePlatform> 
 
 function parseEcommerceMarket(value: unknown): ParseResult<EcommerceMarket> {
   const market = parseOptionalString(value) ?? "us";
-  const markets: EcommerceMarket[] = ["us", "uk", "eu", "ca", "au", "jp", "kr", "sg", "mx", "br", "global"];
+  const markets: EcommerceMarket[] = ["us", "uk", "pl", "eu", "ca", "au", "jp", "kr", "sg", "mx", "br", "global"];
   if (!markets.includes(market as EcommerceMarket)) {
     return {
       ok: false,
@@ -2367,17 +2368,7 @@ function parseEcommerceSceneIds(value: unknown): ParseResult<EcommerceSceneTempl
     };
   }
 
-  const supported: EcommerceSceneTemplateId[] = [
-    "marketplace-main",
-    "logo-benefit",
-    "promo-poster",
-    "lifestyle",
-    "feature-benefit",
-    "model-wear",
-    "accessory-match",
-    "seasonal-campaign",
-    "social-ad"
-  ];
+  const supported = ECOMMERCE_SCENE_TEMPLATES.map((item) => item.id) as EcommerceSceneTemplateId[];
   const sceneIds = value.flatMap((item) =>
     typeof item === "string" && supported.includes(item as EcommerceSceneTemplateId)
       ? [item as EcommerceSceneTemplateId]

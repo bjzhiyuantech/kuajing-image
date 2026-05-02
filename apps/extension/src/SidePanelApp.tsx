@@ -162,6 +162,47 @@ interface UploadedReferenceImage {
   fileName: string;
 }
 
+type CategoryKitVersion = BatchFormState["categoryKit"]["kitVersion"];
+type CategoryKitStyle = BatchFormState["categoryKit"]["targetStyle"];
+
+const allegroScarfComplianceScenes = ["allegro-scarf-main-flat", "allegro-scarf-main-styled"] as const;
+const allegroScarfConversionScenes = [
+  "allegro-scarf-main-flat",
+  "allegro-scarf-main-styled",
+  "allegro-scarf-drape-product",
+  "allegro-scarf-fabric-detail",
+  "allegro-scarf-edge-detail",
+  "allegro-scarf-size-guide",
+  "allegro-scarf-wear-grid",
+  "allegro-scarf-neck-model",
+  "allegro-scarf-bag-styling",
+  "allegro-scarf-lifestyle",
+  "allegro-scarf-sku-colors",
+  "allegro-scarf-care-gift"
+] as const;
+
+const allegroScarfAdsScenes = [...allegroScarfConversionScenes, "allegro-scarf-ads-social"] as const;
+
+const categoryKitScenesByVersion: Record<CategoryKitVersion, EcommerceSceneTemplateId[]> = {
+  compliance: [...allegroScarfComplianceScenes],
+  conversion: [...allegroScarfConversionScenes],
+  ads: [...allegroScarfAdsScenes]
+};
+
+const categoryKitVersionOptions: Array<{ id: CategoryKitVersion; label: string; hint: string }> = [
+  { id: "compliance", label: "Allegro 合规版", hint: "只输出可直接上架的白底主图候选。" },
+  { id: "conversion", label: "Allegro 转化版", hint: "主图 + 细节、尺寸、佩戴、场景和洗护图。" },
+  { id: "ads", label: "广告/社媒版", hint: "在转化版基础上增加广告和社媒扩展图。" }
+];
+
+const categoryKitStyleOptions: Array<{ id: CategoryKitStyle; label: string; prompt: string }> = [
+  { id: "commute", label: "通勤", prompt: "European daily commute styling, clean office-friendly outfits" },
+  { id: "french", label: "法式", prompt: "French minimal styling, elegant and understated" },
+  { id: "luxury", label: "轻奢", prompt: "quiet luxury styling, premium fabric emphasis, refined details" },
+  { id: "travel", label: "旅行", prompt: "light travel styling, cafe and city walk scenes" },
+  { id: "gift", label: "礼品", prompt: "gift-oriented styling, warm but truthful purchase motivation" }
+];
+
 const defaultForm: BatchFormState = {
   product: {
     title: "",
@@ -189,6 +230,16 @@ const defaultForm: BatchFormState = {
   referenceImageUrl: "",
   referenceImageUrls: [],
   extraDirection: "",
+  categoryKit: {
+    categoryId: "accessory-scarf",
+    kitVersion: "conversion",
+    scarfSize: "90 x 90 cm",
+    skuCount: "1",
+    hasPackaging: false,
+    targetStyle: "french",
+    allowModelImages: true,
+    polishCopy: true
+  },
   brandOverlay: {
     enabled: false,
     logoDataUrl: "",
@@ -200,12 +251,14 @@ const defaultForm: BatchFormState = {
 
 const defaultSceneIdsByMode: Record<EcommerceGenerationMode, EcommerceSceneTemplateId[]> = {
   enhance: ["marketplace-main", "logo-benefit", "feature-benefit"],
-  creative: ["lifestyle", "model-wear", "accessory-match"]
+  creative: ["lifestyle", "model-wear", "accessory-match"],
+  "category-kit": [...allegroScarfConversionScenes]
 };
 
 const generationModes: Array<{ id: EcommerceGenerationMode; label: string; hint: string }> = [
   { id: "enhance", label: "原图增强", hint: "保留商品原貌，生成卖点文字和电商排版。" },
-  { id: "creative", label: "场景创作", hint: "依据主图生成生活方式、模特穿戴和搭配场景。" }
+  { id: "creative", label: "场景创作", hint: "依据主图生成生活方式、模特穿戴和搭配场景。" },
+  { id: "category-kit", label: "品类套图", hint: "按平台和类目生成整套 Listing Image Kit。" }
 ];
 
 const qualityOptions: Array<{ id: ImageQuality; label: string }> = [
@@ -1678,6 +1731,45 @@ export function SidePanelApp() {
     }));
   }
 
+  function categoryKitDirection(kit: BatchFormState["categoryKit"]): string {
+    const stylePrompt = categoryKitStyleOptions.find((item) => item.id === kit.targetStyle)?.prompt ?? "";
+    const copyRule = kit.polishCopy
+      ? "Use Polish copy only on non-main images where the template allows text. Main images must have no text."
+      : "Do not add Polish copy or marketing text unless the scene is a required size or care guide.";
+    const modelRule = kit.allowModelImages
+      ? "Model images are allowed only after the main images; avoid identifiable faces and prefer neck-down or detail crops."
+      : "Do not create model-worn images; replace model scenes with faceless product-only usage details.";
+    const packageRule = kit.hasPackaging
+      ? "Packaging is available; show gift packaging only when useful and keep it realistic."
+      : "No real packaging is provided; do not invent gift boxes, branded bags, tags, or packaging.";
+
+    return [
+      "Category kit: Allegro Poland scarf / silk scarf listing image kit.",
+      "Allegro compliance: first image candidates must use white or very light gray background, no text, no icons, no borders, no shop logo, no watermark, one sellable scarf only, square marketplace thumbnail composition.",
+      "Recommended output target: square 2000 x 2000 or 2560 x 2560 look, within Allegro's image upload constraints.",
+      "If a person appears in later images, avoid identifiable faces because images with recognized faces may be excluded from Allegro Product Catalog.",
+      `Scarf size: ${kit.scarfSize.trim() || "not provided"}.`,
+      `Material: ${form.product.material?.trim() || "use product material if visible from reference"}.`,
+      `Color / SKU count: ${kit.skuCount.trim() || "1"}.`,
+      `Target style: ${stylePrompt}.`,
+      copyRule,
+      modelRule,
+      packageRule
+    ].join("\n");
+  }
+
+  function updateCategoryKit(patch: Partial<BatchFormState["categoryKit"]>): void {
+    setForm((current) => {
+      const nextKit = { ...current.categoryKit, ...patch };
+      const nextScenes = patch.kitVersion ? categoryKitScenesByVersion[nextKit.kitVersion] : current.sceneTemplateIds;
+      return {
+        ...current,
+        categoryKit: nextKit,
+        sceneTemplateIds: nextScenes
+      };
+    });
+  }
+
   async function uploadReferenceImages(event: ChangeEvent<HTMLInputElement>): Promise<void> {
     try {
       const files = Array.from(event.target.files ?? []).filter((file) => file.type.startsWith("image/")).slice(0, 2);
@@ -1866,14 +1958,23 @@ export function SidePanelApp() {
       ...current,
       generationMode,
       sceneTemplateIds: defaultSceneIdsByMode[generationMode],
-      stylePresetId: generationMode === "enhance" ? "product" : "photoreal",
-      textLanguage: generationMode === "enhance" ? current.textLanguage : "none",
+      platform: generationMode === "category-kit" ? "allegro" : current.platform,
+      market: generationMode === "category-kit" ? "pl" : current.market,
+      sizeMode: generationMode === "category-kit" ? "preset" : current.sizeMode,
+      size: generationMode === "category-kit" ? { width: 2048, height: 2048 } : current.size,
+      stylePresetId: generationMode === "enhance" || generationMode === "category-kit" ? "product" : "photoreal",
+      textLanguage: generationMode === "enhance" ? current.textLanguage : generationMode === "category-kit" ? "pl" : "none",
       allowTextRecreation: generationMode === "enhance" ? current.allowTextRecreation : true,
       removeWatermarkAndLogo: generationMode === "enhance" ? current.removeWatermarkAndLogo : true
     }));
     setTask((current) => ({
       ...current,
-      message: generationMode === "enhance" ? "原图增强会优先保留商品原貌。" : "场景创作会依据主图重建营销场景。"
+      message:
+        generationMode === "enhance"
+          ? "原图增强会优先保留商品原貌。"
+          : generationMode === "category-kit"
+            ? "品类套图会按 Allegro 丝巾类目生成整套上架图片。"
+            : "场景创作会依据主图重建营销场景。"
     }));
   }
 
@@ -1889,12 +1990,15 @@ export function SidePanelApp() {
       setTask({ id: "validation", status: "failed", message: "请先填写商品标题。", records: [] });
       return;
     }
-    if (form.generationMode === "enhance" && selectedReferenceImageUrls.length === 0) {
-      setTask({ id: "validation", status: "failed", message: "原图增强需要参考图 URL，请先读取商品页或手动填写主图地址。", records: [] });
+    if ((form.generationMode === "enhance" || form.generationMode === "category-kit") && selectedReferenceImageUrls.length === 0) {
+      setTask({ id: "validation", status: "failed", message: "当前模式需要参考图 URL，请先读取商品页、选择候选图，或手动上传商品主图。", records: [] });
       return;
     }
 
     const taskId = createClientId();
+    const effectiveExtraDirection = [form.extraDirection.trim(), form.generationMode === "category-kit" ? categoryKitDirection(form.categoryKit) : ""]
+      .filter(Boolean)
+      .join("\n\n");
     setBatchGenerationLocked(true);
     setHiddenResultKeys(new Set());
     setLocalResultRecords([]);
@@ -1916,7 +2020,7 @@ export function SidePanelApp() {
         allowTextRecreation: form.allowTextRecreation,
         removeWatermarkAndLogo: form.removeWatermarkAndLogo,
         sceneTemplateId: scene.id,
-        extraDirection: form.extraDirection
+        extraDirection: effectiveExtraDirection
       }),
       effectivePrompt: scene.prompt,
       presetId: form.stylePresetId,
@@ -1949,7 +2053,7 @@ export function SidePanelApp() {
           outputFormat: form.outputFormat,
           countPerScene: form.countPerScene,
           referenceImage,
-          extraDirection: form.extraDirection
+          extraDirection: effectiveExtraDirection
         })
       });
 
@@ -2044,7 +2148,7 @@ export function SidePanelApp() {
       <section className="panel reference-panel">
         <div className="reference-image-field reference-image-field-standalone">
           <label>
-            <span>{form.generationMode === "enhance" ? "商品主图 URL（必填）" : "商品主图 URL"}</span>
+            <span>{form.generationMode === "creative" ? "商品主图 URL" : "商品主图 URL（必填）"}</span>
             <input value={form.referenceImageUrl} onChange={(event) => updateReferenceImageUrl(event.target.value)} />
           </label>
           <div className="reference-upload-row">
@@ -2105,6 +2209,16 @@ export function SidePanelApp() {
             <input value={form.product.usageScene ?? ""} onChange={(event) => updateProduct({ usageScene: event.target.value })} />
           </label>
         </div>
+        <div className="two-col">
+          <label>
+            <span>材质</span>
+            <input placeholder="例如 silk / satin / polyester" value={form.product.material ?? ""} onChange={(event) => updateProduct({ material: event.target.value })} />
+          </label>
+          <label>
+            <span>颜色/SKU</span>
+            <input placeholder="例如 navy floral, beige, 3 colors" value={form.product.color ?? ""} onChange={(event) => updateProduct({ color: event.target.value })} />
+          </label>
+        </div>
       </section>
 
       <section className="panel">
@@ -2146,22 +2260,90 @@ export function SidePanelApp() {
         </div>
       </section>
 
-      <section className="panel">
-        <h2>生成场景</h2>
-        <div className="scene-grid">
-          {availableScenes.map((scene) => (
-            <button
-              className={form.sceneTemplateIds.includes(scene.id) ? "scene-button active" : "scene-button"}
-              key={scene.id}
-              type="button"
-              onClick={() => toggleScene(scene.id)}
-            >
-              <Wand2 size={15} />
-              {scene.label}
-            </button>
-          ))}
-        </div>
-      </section>
+      {form.generationMode === "category-kit" ? (
+        <section className="panel category-kit-panel">
+          <div className="kit-heading">
+            <div>
+              <h2>配饰-丝巾类目套图</h2>
+              <p>Allegro Poland Listing Image Kit：第一张严格合规，后续图片负责点击率和转化。</p>
+            </div>
+            <span>{selectedScenes.length} 张</span>
+          </div>
+          <label>
+            <span>套图版本</span>
+            <select value={form.categoryKit.kitVersion} onChange={(event) => updateCategoryKit({ kitVersion: event.target.value as CategoryKitVersion })}>
+              {categoryKitVersionOptions.map((item) => (
+                <option key={item.id} value={item.id}>{item.label}</option>
+              ))}
+            </select>
+          </label>
+          <p className="kit-version-hint">
+            {categoryKitVersionOptions.find((item) => item.id === form.categoryKit.kitVersion)?.hint}
+          </p>
+          <div className="two-col">
+            <label>
+              <span>丝巾尺寸</span>
+              <input value={form.categoryKit.scarfSize} onChange={(event) => updateCategoryKit({ scarfSize: event.target.value })} />
+            </label>
+            <label>
+              <span>颜色/SKU 数量</span>
+              <input inputMode="numeric" value={form.categoryKit.skuCount} onChange={(event) => updateCategoryKit({ skuCount: event.target.value })} />
+            </label>
+          </div>
+          <label>
+            <span>目标风格</span>
+            <select value={form.categoryKit.targetStyle} onChange={(event) => updateCategoryKit({ targetStyle: event.target.value as CategoryKitStyle })}>
+              {categoryKitStyleOptions.map((item) => (
+                <option key={item.id} value={item.id}>{item.label}</option>
+              ))}
+            </select>
+          </label>
+          <div className="kit-toggle-list">
+            <label className="checkbox-row">
+              <input checked={form.categoryKit.hasPackaging} type="checkbox" onChange={(event) => updateCategoryKit({ hasPackaging: event.target.checked })} />
+              <span>有真实包装，可生成包装/礼品图</span>
+            </label>
+            <label className="checkbox-row">
+              <input checked={form.categoryKit.allowModelImages} type="checkbox" onChange={(event) => updateCategoryKit({ allowModelImages: event.target.checked })} />
+              <span>允许模特图（默认无明显正脸）</span>
+            </label>
+            <label className="checkbox-row">
+              <input checked={form.categoryKit.polishCopy} type="checkbox" onChange={(event) => updateCategoryKit({ polishCopy: event.target.checked })} />
+              <span>需要波兰语文案（不用于第 1 图）</span>
+            </label>
+          </div>
+          <div className="scene-grid kit-scene-grid">
+            {availableScenes.map((scene) => (
+              <button
+                className={form.sceneTemplateIds.includes(scene.id) ? "scene-button active" : "scene-button"}
+                key={scene.id}
+                type="button"
+                onClick={() => toggleScene(scene.id)}
+              >
+                <Wand2 size={15} />
+                {scene.label}
+              </button>
+            ))}
+          </div>
+        </section>
+      ) : (
+        <section className="panel">
+          <h2>生成场景</h2>
+          <div className="scene-grid">
+            {availableScenes.map((scene) => (
+              <button
+                className={form.sceneTemplateIds.includes(scene.id) ? "scene-button active" : "scene-button"}
+                key={scene.id}
+                type="button"
+                onClick={() => toggleScene(scene.id)}
+              >
+                <Wand2 size={15} />
+                {scene.label}
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
 
       {form.generationMode === "enhance" ? (
         <section className="panel">

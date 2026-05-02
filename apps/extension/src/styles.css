@@ -372,6 +372,75 @@ textarea:focus {
   font-weight: 700;
 }
 
+.category-kit-panel p {
+  color: #607168;
+  font-size: 11px;
+  line-height: 1.45;
+  margin: 4px 0 0;
+}
+
+.kit-heading {
+  align-items: flex-start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.kit-heading h2 {
+  margin-bottom: 0;
+}
+
+.kit-heading > span {
+  background: #e7f5ee;
+  border: 1px solid #b8dfcf;
+  border-radius: 999px;
+  color: #0d644f;
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 8px;
+}
+
+.kit-version-hint {
+  background: #f7faf8;
+  border: 1px solid #e4ebe7;
+  border-radius: 6px;
+  padding: 8px;
+}
+
+.kit-toggle-list {
+  display: grid;
+  gap: 8px;
+}
+
+.checkbox-row {
+  align-items: center;
+  background: #f7faf8;
+  border: 1px solid #e4ebe7;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+  margin-top: 0;
+  padding: 8px;
+}
+
+.checkbox-row input {
+  margin: 0;
+}
+
+.checkbox-row span {
+  color: #26352e;
+  font-size: 12px;
+  line-height: 1.35;
+  margin: 0;
+}
+
+.kit-scene-grid {
+  margin-top: 4px;
+}
+
 .brand-overlay-panel h2 {
   margin-bottom: 4px;
 }

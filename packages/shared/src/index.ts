@@ -8,9 +8,9 @@ export type GenerationStatus = "pending" | "running" | "succeeded" | "partial" |
 export type OutputStatus = "succeeded" | "failed";
 export type CloudStorageProvider = "cos" | "oss";
 export type AssetCloudUploadStatus = "uploaded" | "failed";
-export type EcommercePlatform = "amazon" | "shopify" | "tiktok-shop" | "temu" | "shein" | "etsy" | "aliexpress" | "other";
-export type EcommerceMarket = "us" | "uk" | "eu" | "ca" | "au" | "jp" | "kr" | "sg" | "mx" | "br" | "global";
-export type EcommerceGenerationMode = "enhance" | "creative";
+export type EcommercePlatform = "amazon" | "allegro" | "shopify" | "tiktok-shop" | "temu" | "shein" | "etsy" | "aliexpress" | "other";
+export type EcommerceMarket = "us" | "uk" | "pl" | "eu" | "ca" | "au" | "jp" | "kr" | "sg" | "mx" | "br" | "global";
+export type EcommerceGenerationMode = "enhance" | "creative" | "category-kit";
 export type EcommerceTextLanguage =
   | "none"
   | "zh-hant"
@@ -89,6 +89,7 @@ export type GenerationCount = (typeof GENERATION_COUNTS)[number];
 
 export const ECOMMERCE_PLATFORMS = [
   { id: "amazon", label: "Amazon" },
+  { id: "allegro", label: "Allegro" },
   { id: "shopify", label: "Shopify" },
   { id: "tiktok-shop", label: "TikTok Shop" },
   { id: "temu", label: "Temu" },
@@ -101,6 +102,7 @@ export const ECOMMERCE_PLATFORMS = [
 export const ECOMMERCE_MARKETS = [
   { id: "us", label: "United States" },
   { id: "uk", label: "United Kingdom" },
+  { id: "pl", label: "Poland" },
   { id: "eu", label: "European Union" },
   { id: "ca", label: "Canada" },
   { id: "au", label: "Australia" },
@@ -201,6 +203,110 @@ export const ECOMMERCE_SCENE_TEMPLATES = [
     defaultSizePresetId: "story-9-16",
     prompt:
       "Create a high-converting social commerce ad creative using the reference product. Strong visual hook, mobile-first composition, realistic lighting, clear product benefit, no watermark, no unreadable text."
+  },
+  {
+    id: "allegro-scarf-main-flat",
+    mode: "category-kit",
+    label: "1 白底完整主图",
+    defaultSizePresetId: "square-2k",
+    prompt:
+      "Create an Allegro-compliant main listing image for a scarf or silk scarf. Pure white or very light gray background, square composition, one single scarf fully visible and neatly flat-laid. Preserve the source scarf pattern, color, edge shape, proportions, weave, and material truthfully. No text, icons, borders, logo, watermark, props, packaging, collage, extra products, or human model. The image must work as a search result thumbnail."
+  },
+  {
+    id: "allegro-scarf-main-styled",
+    mode: "category-kit",
+    label: "2 白底造型主图候选",
+    defaultSizePresetId: "square-2k",
+    prompt:
+      "Create a second Allegro-compliant main-image candidate for a scarf or silk scarf. White or very light gray background, one single scarf arranged in an elegant folded or naturally draped shape with more volume, clean studio lighting, square crop. Preserve exact pattern, colors, edges, and material from the source. No text, icons, borders, logo, watermark, props, packaging, collage, or model."
+  },
+  {
+    id: "allegro-scarf-drape-product",
+    mode: "category-kit",
+    label: "3 折叠/垂落产品图",
+    defaultSizePresetId: "square-2k",
+    prompt:
+      "Create a clean product-page image of the scarf folded and softly draped to show volume, sheen, and fabric flow. Minimal white or pale neutral studio background, no text, no logo, no border. Keep the scarf design, color, edge finishing, and material faithful to the reference."
+  },
+  {
+    id: "allegro-scarf-fabric-detail",
+    mode: "category-kit",
+    label: "4 面料纹理细节图",
+    defaultSizePresetId: "square-2k",
+    prompt:
+      "Create a macro detail image of the scarf fabric, showing fibers, soft sheen, weave texture, and lightweight smooth feel. Keep the source pattern and color accurate. Include only a small clean Polish text callout if text is requested: 'Miękka i lekka tkanina'. Do not use this as the main image; no logo or watermark."
+  },
+  {
+    id: "allegro-scarf-edge-detail",
+    mode: "category-kit",
+    label: "5 边缘工艺图",
+    defaultSizePresetId: "square-2k",
+    prompt:
+      "Create a close-up detail image of the scarf edge finishing: rolled hem, stitching, seam, and corner craftsmanship. Accurate material and pattern continuation from the reference scarf. Clean studio lighting, no logo, no watermark. Polish text is optional only when requested and must be short and readable."
+  },
+  {
+    id: "allegro-scarf-size-guide",
+    mode: "category-kit",
+    label: "6 尺寸说明图",
+    defaultSizePresetId: "square-2k",
+    prompt:
+      "Create a scarf size guide image for Allegro product pages. Show the scarf flat-laid with clean measurement lines and a clear size label using the dimensions provided by the user, for example 70 x 70 cm, 90 x 90 cm, or 180 x 65 cm. A hand, hanger, or subtle human outline may be used only as scale reference. Keep the scarf pattern accurate. This is not a main image, so concise Polish labels are allowed."
+  },
+  {
+    id: "allegro-scarf-wear-grid",
+    mode: "category-kit",
+    label: "7 多佩戴方式图",
+    defaultSizePresetId: "square-2k",
+    prompt:
+      "Create a 4-panel or 5-panel usage grid for a scarf: neck scarf, hair accessory, tied on a handbag, gift styling, and optionally wrist or belt styling. Keep the same scarf design recognizable in every panel. Use clean European daily styling. Polish short labels may be used when requested: 'Na szyję', 'Do włosów', 'Do torebki', 'Na prezent'. Not for the first listing image."
+  },
+  {
+    id: "allegro-scarf-neck-model",
+    mode: "category-kit",
+    label: "8 颈部模特图",
+    defaultSizePresetId: "poster-portrait",
+    prompt:
+      "Create a realistic European daily outfit image showing the scarf worn around the neck. Use a faceless or neck-down crop, or an unclear side profile with no identifiable face. Style: simple commute, French minimal, clean background, authentic product-page photography. Keep scarf pattern, color, and fabric faithful. No logo or watermark."
+  },
+  {
+    id: "allegro-scarf-bag-styling",
+    mode: "category-kit",
+    label: "9 包包装饰图",
+    defaultSizePresetId: "square-2k",
+    prompt:
+      "Create a realistic product usage scene where the scarf is tied elegantly on a handbag or tote bag. European, simple, daily, commercially credible styling. The scarf remains the visual hero and keeps the exact pattern, colors, and fabric feel from the reference. No logo, no watermark, no misleading extra items."
+  },
+  {
+    id: "allegro-scarf-lifestyle",
+    mode: "category-kit",
+    label: "10 生活方式图",
+    defaultSizePresetId: "poster-landscape",
+    prompt:
+      "Create a realistic lifestyle image for a scarf: spring/summer lightweight outfit, autumn trench or knitwear pairing, travel, office, cafe, or gift scene according to the user's chosen style. Polish or European aesthetics, clean and natural, not overly advertising-like. Preserve scarf identity and do not add fake brand marks."
+  },
+  {
+    id: "allegro-scarf-sku-colors",
+    mode: "category-kit",
+    label: "11 颜色/SKU 图",
+    defaultSizePresetId: "square-2k",
+    prompt:
+      "Create a color or SKU overview image for the scarf only if multiple colors or SKUs are provided. Show each variant clearly in a tidy matrix and avoid implying the customer receives multiple pieces unless the listing says so. This image is not suitable as the first main image. Keep labels minimal and accurate, no logo or watermark."
+  },
+  {
+    id: "allegro-scarf-care-gift",
+    mode: "category-kit",
+    label: "12 洗护/礼品图",
+    defaultSizePresetId: "square-2k",
+    prompt:
+      "Create a clean care and gift-support image for the scarf. Include simple care icons or concise Polish labels when requested: 'Pranie ręczne', 'Nie wybielać', 'Prasować w niskiej temperaturze'. If real packaging is provided, show gift box, tag, or bag accurately; if packaging is not provided, only create a gift mood image and do not invent a box. Optional Polish gift phrase: 'Pomysł na prezent'."
+  },
+  {
+    id: "allegro-scarf-ads-social",
+    mode: "category-kit",
+    label: "广告/社媒扩展图",
+    defaultSizePresetId: "story-9-16",
+    prompt:
+      "Create an advertising or social media creative for the scarf for Allegro Ads, Facebook, Instagram, or TikTok Shop. More atmospheric and scroll-stopping than listing images, but keep product identity accurate. This must be clearly separate from the Allegro main image set. Polish short copy is allowed only if requested; no fake brand marks or unsupported claims."
   }
 ] as const satisfies ReadonlyArray<{
   id: string;

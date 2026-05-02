@@ -61,6 +61,16 @@ export interface BatchFormState {
   referenceImageUrl: string;
   referenceImageUrls: string[];
   extraDirection: string;
+  categoryKit: {
+    categoryId: "accessory-scarf";
+    kitVersion: "compliance" | "conversion" | "ads";
+    scarfSize: string;
+    skuCount: string;
+    hasPackaging: boolean;
+    targetStyle: "commute" | "french" | "luxury" | "travel" | "gift";
+    allowModelImages: boolean;
+    polishCopy: boolean;
+  };
   brandOverlay: {
     enabled: boolean;
     logoDataUrl: string;
