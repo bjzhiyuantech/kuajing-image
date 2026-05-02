@@ -1200,7 +1200,14 @@ textarea:focus {
 
 .history-card {
   border-top: 1px solid #e4ebe7;
+  cursor: pointer;
   padding: 10px 0;
+}
+
+.history-card:focus-visible {
+  border-radius: 8px;
+  box-shadow: 0 0 0 3px rgba(24, 166, 120, 0.2);
+  outline: none;
 }
 
 .history-card-top {
@@ -1279,20 +1286,34 @@ textarea:focus {
 }
 
 .asset-list {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
   gap: 6px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   margin-top: 8px;
 }
 
-.asset-list a {
-  background: #e7f5ee;
-  border-radius: 999px;
-  color: #0d6b52;
-  font-size: 11px;
-  font-weight: 800;
-  padding: 4px 8px;
-  text-decoration: none;
+.asset-thumb {
+  aspect-ratio: 1;
+  background: #edf2ef;
+  border: 1px solid #d6e2dc;
+  border-radius: 7px;
+  cursor: pointer;
+  overflow: hidden;
+  padding: 0;
+}
+
+.asset-thumb:hover,
+.asset-thumb:focus-visible {
+  border-color: #18a678;
+  box-shadow: 0 0 0 2px rgba(24, 166, 120, 0.16);
+  outline: none;
+}
+
+.asset-thumb img {
+  display: block;
+  height: 100%;
+  object-fit: cover;
+  width: 100%;
 }
 
 .stats-grid {
