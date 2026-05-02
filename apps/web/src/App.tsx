@@ -2603,14 +2603,7 @@ export function App() {
         {...(isMobileDrawer && !isAiPanelOpen ? { inert: "" } : {})}
       >
         <div className="border-b border-neutral-200 px-5 py-4">
-          <div className="flex items-start justify-between gap-3">
-            <div className="brand-lockup">
-              <BrandMark />
-              <div className="min-w-0">
-                <BrandName />
-                <p className="brand-tagline">{BRAND_TAGLINE}</p>
-              </div>
-            </div>
+          <div className="flex items-start justify-end gap-3">
             <div className="flex shrink-0 items-center gap-2">
               <button
                 aria-label="云存储设置"
