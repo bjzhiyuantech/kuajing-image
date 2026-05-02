@@ -765,8 +765,7 @@ export function SidePanelApp() {
   const [localResultRecords, setLocalResultRecords] = useState<GenerationRecord[]>([]);
   const [editDialog, setEditDialog] = useState<EditImageDialogState | null>(null);
   const [uploadedReferenceImages, setUploadedReferenceImages] = useState<UploadedReferenceImage[]>([]);
-  const [referencePanelHighlighted, setReferencePanelHighlighted] = useState(false);
-  const referencePanelRef = useRef<HTMLElement | null>(null);
+  const [resultsPanelHighlighted, setResultsPanelHighlighted] = useState(false);
   const resultsPanelRef = useRef<HTMLElement | null>(null);
 
   const availableScenes = useMemo(
@@ -1298,11 +1297,15 @@ export function SidePanelApp() {
     setToolPanelOpen(true);
   }
 
-  function focusReferenceImagePanel(): void {
+  function focusResultsPanel(): void {
+    const scrollToBottom = () => {
+      const page = document.scrollingElement ?? document.documentElement;
+      window.scrollTo({ top: page.scrollHeight, behavior: "smooth" });
+      setResultsPanelHighlighted(true);
+      window.setTimeout(() => setResultsPanelHighlighted(false), 1800);
+    };
     window.requestAnimationFrame(() => {
-      referencePanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-      setReferencePanelHighlighted(true);
-      window.setTimeout(() => setReferencePanelHighlighted(false), 1800);
+      window.requestAnimationFrame(scrollToBottom);
     });
   }
 
@@ -1326,7 +1329,7 @@ export function SidePanelApp() {
       } satisfies StoredBatchJob
     });
     setToolPanelOpen(false);
-    focusReferenceImagePanel();
+    focusResultsPanel();
     void pollBatchJob(job.id);
   }
 
@@ -1800,7 +1803,7 @@ export function SidePanelApp() {
         </button>
       </section>
 
-      <section className={referencePanelHighlighted ? "panel reference-panel reference-panel-highlight" : "panel reference-panel"} ref={referencePanelRef}>
+      <section className="panel reference-panel">
         <div className="reference-image-field reference-image-field-standalone">
           <label>
             <span>{form.generationMode === "enhance" ? "商品主图 URL（必填）" : "商品主图 URL"}</span>
@@ -2082,7 +2085,7 @@ export function SidePanelApp() {
         </button>
       </section>
 
-      <section className="panel results-panel" ref={resultsPanelRef}>
+      <section className={resultsPanelHighlighted ? "panel results-panel results-panel-highlight" : "panel results-panel"} ref={resultsPanelRef}>
         <div className={`status status-${task.status}`}>
           {task.status === "succeeded" ? <CheckCircle2 size={16} /> : task.status === "running" ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
           {task.message}
