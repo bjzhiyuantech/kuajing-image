@@ -4,25 +4,71 @@ function readMeta(selector: string): string {
   return document.querySelector<HTMLMetaElement>(selector)?.content.trim() ?? "";
 }
 
+function absoluteUrl(value: string): string {
+  try {
+    return new URL(value, location.href).toString();
+  } catch {
+    return "";
+  }
+}
+
+function addImageUrl(imageUrls: Set<string>, value: string | null | undefined): void {
+  if (!value || value.startsWith("data:")) {
+    return;
+  }
+  const url = absoluteUrl(value.trim());
+  if (url) {
+    imageUrls.add(url);
+  }
+}
+
+function addSrcsetUrls(imageUrls: Set<string>, value: string | null | undefined): void {
+  if (!value) {
+    return;
+  }
+  for (const candidate of value.split(",")) {
+    addImageUrl(imageUrls, candidate.trim().split(/\s+/u)[0]);
+  }
+}
+
+function readProductTitle(): string {
+  const metaTitle = readMeta('meta[property="og:title"], meta[name="title"]');
+  const titleSelectors = [
+    "h1",
+    "[class*='offer-title']",
+    "[class*='product-title']",
+    "[class*='ProductTitle']",
+    "[class*='title'], [class*='Title']"
+  ];
+  const headingTitle =
+    titleSelectors
+      .map((selector) => document.querySelector<HTMLElement>(selector)?.textContent?.trim() ?? "")
+      .find((value) => value.length >= 4) ?? "";
+  return (headingTitle || metaTitle || document.title).trim();
+}
+
 function pageContext(): PageContext {
   const imageUrls = new Set<string>();
   const ogImage = readMeta('meta[property="og:image"], meta[name="og:image"]');
-  if (ogImage) {
-    imageUrls.add(new URL(ogImage, location.href).toString());
-  }
+  addImageUrl(imageUrls, ogImage);
 
-  for (const image of Array.from(document.images).slice(0, 80)) {
-    const src = image.currentSrc || image.src;
-    if (src && image.naturalWidth >= 240 && image.naturalHeight >= 240) {
-      imageUrls.add(new URL(src, location.href).toString());
+  for (const image of Array.from(document.images)) {
+    const renderedWidth = image.naturalWidth || image.width;
+    const renderedHeight = image.naturalHeight || image.height;
+    if (renderedWidth >= 160 && renderedHeight >= 160) {
+      addImageUrl(imageUrls, image.currentSrc || image.src);
+      addImageUrl(imageUrls, image.getAttribute("data-src"));
+      addImageUrl(imageUrls, image.getAttribute("data-lazy-src"));
+      addImageUrl(imageUrls, image.getAttribute("data-original"));
+      addSrcsetUrls(imageUrls, image.srcset || image.getAttribute("data-srcset"));
     }
   }
 
   return {
-    title: document.title.trim(),
+    title: readProductTitle(),
     description: readMeta('meta[name="description"], meta[property="og:description"]'),
     url: location.href,
-    imageUrls: Array.from(imageUrls).slice(0, 24)
+    imageUrls: Array.from(imageUrls).slice(0, 48)
   };
 }
 

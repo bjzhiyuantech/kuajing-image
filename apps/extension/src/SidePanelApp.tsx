@@ -717,6 +717,9 @@ export function SidePanelApp() {
     [availableScenes, form.sceneTemplateIds]
   );
 
+  const pageImageUrls = pageContext?.imageUrls ?? [];
+  const selectedReferenceImageUrl = form.referenceImageUrl.trim();
+
   const resultImages = useMemo(() => {
     const records = [...task.records, ...localResultRecords];
     return records.flatMap((record) =>
@@ -1383,10 +1386,14 @@ export function SidePanelApp() {
         ...current,
         product: {
           ...current.product,
-          title: current.product.title || context.title,
-          description: current.product.description || context.description
+          title: context.title || current.product.title,
+          description: context.description || current.product.description
         },
-        referenceImageUrl: current.referenceImageUrl || context.imageUrls[0] || ""
+        referenceImageUrl: context.imageUrls[0] || current.referenceImageUrl
+      }));
+      setTask((current) => ({
+        ...current,
+        message: context.imageUrls.length > 0 ? `已读取当前页信息，并找到 ${context.imageUrls.length} 张候选商品图。` : "已读取当前页信息，未发现可用商品图。"
       }));
     } catch {
       setTask((current) => ({
@@ -1661,6 +1668,7 @@ export function SidePanelApp() {
         <div>
           <h2>当前页面</h2>
           <p>{pageContext?.url ?? "可从商品页自动读取标题、描述和图片。"}</p>
+          {pageContext ? <span>{pageImageUrls.length > 0 ? `${pageImageUrls.length} 张候选图可选` : "未发现候选图"}</span> : null}
         </div>
         <button className="secondary-button" type="button" onClick={() => void refreshPageContext()}>
           <RefreshCw size={15} />
@@ -1875,10 +1883,39 @@ export function SidePanelApp() {
               ))}
             </select>
           </label>
+        </div>
+        <div className="reference-image-field">
           <label>
             <span>{form.generationMode === "enhance" ? "商品主图 URL（必填）" : "商品主图 URL"}</span>
             <input value={form.referenceImageUrl} onChange={(event) => setForm({ ...form, referenceImageUrl: event.target.value })} />
           </label>
+          {pageImageUrls.length > 0 ? (
+            <div className="reference-image-picker" aria-label="商品主图候选">
+              <div className="reference-image-picker-header">
+                <strong>从当前页图片选择参考图</strong>
+                <span>点击缩略图后会同步到上方 URL</span>
+              </div>
+              <div className="reference-image-grid">
+                {pageImageUrls.map((url, index) => (
+                  <button
+                    className={selectedReferenceImageUrl === url ? "reference-image-option active" : "reference-image-option"}
+                    key={url}
+                    title={url}
+                    type="button"
+                    onClick={() => setForm((current) => ({ ...current, referenceImageUrl: url }))}
+                  >
+                    <img alt={`候选商品图 ${index + 1}`} loading="lazy" src={url} />
+                    {selectedReferenceImageUrl === url ? <CheckCircle2 size={16} /> : null}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="reference-image-empty">
+              <ImageIcon size={15} />
+              <span>读取当前页后，这里会显示可选商品图。</span>
+            </div>
+          )}
         </div>
         <label>
           <span>补充方向</span>

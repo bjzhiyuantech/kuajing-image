@@ -27,6 +27,7 @@ textarea {
 .status,
 .asset-link,
 .result-actions,
+.reference-image-empty,
 .toggle-row,
 .brand-overlay-preview,
 .tool-tabs,
@@ -95,6 +96,13 @@ h2 {
   font-size: 12px;
   line-height: 1.45;
   word-break: break-all;
+}
+
+.page-panel span {
+  color: #7a8a82;
+  display: block;
+  font-size: 11px;
+  margin-top: 4px;
 }
 
 .quota-summary {
@@ -403,6 +411,98 @@ textarea:focus {
   font-size: 12px;
   line-height: 1.55;
   white-space: pre-wrap;
+}
+
+.reference-image-field {
+  margin-top: 10px;
+}
+
+.reference-image-field label {
+  margin-top: 0;
+}
+
+.reference-image-picker {
+  background: #f7faf8;
+  border: 1px solid #e4ebe7;
+  border-radius: 7px;
+  margin-top: 8px;
+  padding: 9px;
+}
+
+.reference-image-picker-header {
+  align-items: baseline;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.reference-image-picker-header strong {
+  color: #26352e;
+  font-size: 12px;
+}
+
+.reference-image-picker-header span {
+  color: #66766d;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.reference-image-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  max-height: 220px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.reference-image-option {
+  aspect-ratio: 1;
+  background: #edf2ef;
+  border: 1px solid #d8e3de;
+  border-radius: 6px;
+  cursor: pointer;
+  overflow: hidden;
+  padding: 0;
+  position: relative;
+}
+
+.reference-image-option.active {
+  border-color: #18a678;
+  box-shadow: 0 0 0 2px rgb(24 166 120 / 18%);
+}
+
+.reference-image-option img {
+  display: block;
+  height: 100%;
+  object-fit: cover;
+  width: 100%;
+}
+
+.reference-image-option svg {
+  background: #18a678;
+  border-radius: 999px;
+  color: #ffffff;
+  padding: 2px;
+  position: absolute;
+  right: 5px;
+  top: 5px;
+}
+
+.reference-image-empty {
+  background: #f7faf8;
+  border: 1px dashed #ccd7d1;
+  border-radius: 7px;
+  color: #66766d;
+  gap: 7px;
+  margin-top: 8px;
+  padding: 9px;
+}
+
+.reference-image-empty span {
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 .sticky-actions {
