@@ -113,6 +113,7 @@ const MAX_PLAN_DESCRIPTION_LENGTH = 1000;
 const MAX_CURRENCY_LENGTH = 16;
 const DEFAULT_ADMIN_PLAN_ID = "free";
 const DEFAULT_ADMIN_STORAGE_QUOTA_BYTES = 1024 * 1024 * 1024;
+const ECOMMERCE_BATCH_SCENE_CONCURRENCY = 3;
 
 interface ProjectPayload {
   name?: string;
@@ -926,14 +927,16 @@ async function runEcommerceBatchJob(jobId: string): Promise<void> {
   try {
     await updateEcommerceBatchJob(job.tenant, job.jobId, {
       status: "running",
-      message: "服务端正在并行生成场景，页面可以离开后稍晚回来查看。"
+      message: "服务端正在分批生成场景，页面可以离开后稍晚回来查看。"
     });
 
     const provider = createOpenAIImageProvider(job.providerConfig);
     const records = new Array<EcommerceBatchGenerateResponse["records"][number] | undefined>(job.input.sceneTemplateIds.length);
 
-    await Promise.all(
-      job.input.sceneTemplateIds.map(async (sceneTemplateId, index) => {
+    await mapWithConcurrency(
+      job.input.sceneTemplateIds.map((sceneTemplateId, index) => ({ sceneTemplateId, index })),
+      ECOMMERCE_BATCH_SCENE_CONCURRENCY,
+      async ({ sceneTemplateId, index }) => {
         try {
           const prompt = composeEcommercePrompt({
             product: job.input.product,
@@ -973,12 +976,12 @@ async function runEcommerceBatchJob(jobId: string): Promise<void> {
           const failedCount = job.records.filter((record) => record.status === "failed").length;
           await updateEcommerceBatchJob(job.tenant, job.jobId, {
             status: "running",
-            message: `服务端正在并行生成：${job.completedScenes}/${job.totalScenes} 个场景完成，${failedCount} 个失败。`,
+            message: `服务端正在分批生成：${job.completedScenes}/${job.totalScenes} 个场景完成，${failedCount} 个失败。`,
             completedScenes: job.completedScenes,
             records: job.records
           });
         }
-      })
+      }
     );
 
     const failedCount = job.records.filter((record) => record.status === "failed").length;
@@ -1036,6 +1039,24 @@ function failedEcommerceSceneRecord(
       }
     ]
   };
+}
+
+async function mapWithConcurrency<T>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T) => Promise<void>
+): Promise<void> {
+  let nextIndex = 0;
+
+  async function worker(): Promise<void> {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      await mapper(items[currentIndex]);
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()));
 }
 
 const webDistRoot = relative(process.cwd(), runtimePaths.webDistDir) || ".";
