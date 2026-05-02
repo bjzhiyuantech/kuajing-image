@@ -56,6 +56,7 @@ const ACTIVE_BATCH_JOB_STORAGE_KEY = "activeBatchJob";
 const AUTH_STORAGE_KEY = "auth";
 const DEFAULT_API_BASE_URL = "https://imagen.neimou.com";
 const TEXT_TRANSLATION_SCENE_ID = "text-translation" as const;
+const TEXT_TRANSLATION_CONCURRENCY = 4;
 const MOCK_BILLING_PLANS: BillingPlan[] = [
   {
     id: "starter",
@@ -363,6 +364,24 @@ function downloadUrl(url: string, fileName: string): void {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function mapWithConcurrency<T>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<void>
+): Promise<void> {
+  let nextIndex = 0;
+  const workerCount = Math.max(1, Math.min(concurrency, items.length));
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        await mapper(items[index], index);
+      }
+    })
+  );
 }
 
 function crc32(bytes: Uint8Array): number {
@@ -2368,72 +2387,119 @@ export function SidePanelApp() {
 
     const taskId = createClientId();
     const targetLanguage = form.textLanguage === "none" ? "ko" : form.textLanguage;
-    const translatedRecords: GenerationRecord[] = [];
+    const translatedRecordsByIndex: GenerationRecord[][] = selectedTranslationImageUrls.map(() => []);
+    let completedCount = 0;
+    let failedImageCount = 0;
     setBatchGenerationLocked(true);
     setHiddenResultKeys(new Set());
     setLocalResultRecords([]);
     setTask({
       id: taskId,
       status: "running",
-      message: `正在逐张翻译 ${selectedTranslationImageUrls.length} 张图片。`,
+      message: `正在翻译 ${selectedTranslationImageUrls.length} 张图片，最多 ${TEXT_TRANSLATION_CONCURRENCY} 张并发。`,
       records: [],
       totalScenes: selectedTranslationImageUrls.length,
       completedScenes: 0
     });
 
     try {
-      for (const [index, sourceUrl] of selectedTranslationImageUrls.entries()) {
-        const referenceImage = await referenceImageFromSources([sourceUrl]);
-        if (!referenceImage) {
-          throw new Error("翻译参考图读取失败。");
+      await mapWithConcurrency(selectedTranslationImageUrls, TEXT_TRANSLATION_CONCURRENCY, async (sourceUrl, index) => {
+        try {
+          const referenceImage = await referenceImageFromSources([sourceUrl]);
+          if (!referenceImage) {
+            throw new Error("翻译参考图读取失败。");
+          }
+          const size = form.sizeMode === "source" ? await sizeFromSourceUrl(sourceUrl) : form.size;
+          const requestProduct = {
+            ...form.product,
+            title: form.product.title.trim() || `文字翻译 ${index + 1}`
+          };
+          const response = await fetch(`${apiBaseUrl()}/api/ecommerce/images/batch-generate`, {
+            method: "POST",
+            headers: apiHeaders(true, token),
+            body: JSON.stringify({
+              product: requestProduct,
+              platform: form.platform,
+              market: form.market,
+              textLanguage: targetLanguage,
+              allowTextRecreation: form.allowTextRecreation,
+              removeWatermarkAndLogo: form.removeWatermarkAndLogo,
+              sceneTemplateIds: [TEXT_TRANSLATION_SCENE_ID],
+              size,
+              stylePresetId: "product",
+              quality: form.quality,
+              outputFormat: form.outputFormat,
+              countPerScene: 1,
+              referenceImage,
+              extraDirection: [form.extraDirection.trim(), `Source image ${index + 1}/${selectedTranslationImageUrls.length}`].filter(Boolean).join("\n\n")
+            })
+          });
+          const body = (await parseResponseOrThrow(response)) as EcommerceBatchGenerateResponse;
+          const finishedJob = await waitForBatchJob(body.jobId, token);
+          translatedRecordsByIndex[index] = finishedJob.records;
+          if (finishedJob.status === "failed") {
+            failedImageCount += 1;
+          }
+        } catch (error) {
+          failedImageCount += 1;
+          translatedRecordsByIndex[index] = [
+            {
+              id: `${taskId}-${index + 1}-failed`,
+              mode: "edit",
+              prompt: composeEcommercePrompt({
+                product: {
+                  ...form.product,
+                  title: form.product.title.trim() || `文字翻译 ${index + 1}`
+                },
+                platform: form.platform,
+                market: form.market,
+                textLanguage: targetLanguage,
+                allowTextRecreation: form.allowTextRecreation,
+                removeWatermarkAndLogo: form.removeWatermarkAndLogo,
+                sceneTemplateId: TEXT_TRANSLATION_SCENE_ID,
+                extraDirection: form.extraDirection
+              }),
+              effectivePrompt: "",
+              presetId: "product",
+              size: form.size,
+              quality: form.quality,
+              outputFormat: form.outputFormat,
+              count: 1,
+              status: "failed",
+              error: error instanceof Error ? error.message : "文字翻译失败。",
+              createdAt: new Date().toISOString(),
+              outputs: [
+                {
+                  id: `${taskId}-${index + 1}-failed-output`,
+                  status: "failed",
+                  error: error instanceof Error ? error.message : "文字翻译失败。"
+                }
+              ]
+            }
+          ];
+        } finally {
+          completedCount += 1;
+          setTask((current) => ({
+            ...current,
+            status: "running",
+            message: `已完成 ${completedCount}/${selectedTranslationImageUrls.length} 张图片翻译，${Math.min(TEXT_TRANSLATION_CONCURRENCY, selectedTranslationImageUrls.length)} 张并发处理中。`,
+            records: translatedRecordsByIndex.flat(),
+            completedScenes: completedCount,
+            totalScenes: selectedTranslationImageUrls.length
+          }));
         }
-        const size = form.sizeMode === "source" ? await sizeFromSourceUrl(sourceUrl) : form.size;
-        const response = await fetch(`${apiBaseUrl()}/api/ecommerce/images/batch-generate`, {
-          method: "POST",
-          headers: apiHeaders(true, token),
-          body: JSON.stringify({
-            product: {
-              ...form.product,
-              title: form.product.title.trim() || `文字翻译 ${index + 1}`
-            },
-            platform: form.platform,
-            market: form.market,
-            textLanguage: targetLanguage,
-            allowTextRecreation: form.allowTextRecreation,
-            removeWatermarkAndLogo: form.removeWatermarkAndLogo,
-            sceneTemplateIds: [TEXT_TRANSLATION_SCENE_ID],
-            size,
-            stylePresetId: "product",
-            quality: form.quality,
-            outputFormat: form.outputFormat,
-            countPerScene: 1,
-            referenceImage,
-            extraDirection: [form.extraDirection.trim(), `Source image ${index + 1}/${selectedTranslationImageUrls.length}`].filter(Boolean).join("\n\n")
-          })
-        });
-        const body = (await parseResponseOrThrow(response)) as EcommerceBatchGenerateResponse;
-        const finishedJob = await waitForBatchJob(body.jobId, token);
-        translatedRecords.push(...finishedJob.records);
-        setTask((current) => ({
-          ...current,
-          status: finishedJob.status,
-          message: `已完成 ${index + 1}/${selectedTranslationImageUrls.length} 张图片翻译。`,
-          records: translatedRecords,
-          completedScenes: index + 1,
-          totalScenes: selectedTranslationImageUrls.length
-        }));
-      }
+      });
 
-      const failedRecordCount = translatedRecords.filter((record) => record.status === "failed").length;
+      const translatedRecords = translatedRecordsByIndex.flat();
       const finalStatus =
-        failedRecordCount === 0 ? "succeeded" : failedRecordCount === translatedRecords.length ? "failed" : "partial";
+        failedImageCount === 0 ? "succeeded" : failedImageCount === selectedTranslationImageUrls.length ? "failed" : "partial";
       setTask({
         id: taskId,
         status: finalStatus,
         message:
           finalStatus === "succeeded"
             ? `已完成 ${selectedTranslationImageUrls.length} 张图片翻译，可一键打包下载。`
-            : `已完成 ${selectedTranslationImageUrls.length} 张图片翻译，其中 ${failedRecordCount} 张失败。`,
+            : `已完成 ${selectedTranslationImageUrls.length} 张图片翻译，其中 ${failedImageCount} 张失败。`,
         records: translatedRecords,
         totalScenes: selectedTranslationImageUrls.length,
         completedScenes: selectedTranslationImageUrls.length
@@ -2443,9 +2509,9 @@ export function SidePanelApp() {
         id: taskId,
         status: "failed",
         message: error instanceof Error ? error.message : "文字翻译失败，请稍后重试。",
-        records: translatedRecords,
+        records: translatedRecordsByIndex.flat(),
         totalScenes: selectedTranslationImageUrls.length,
-        completedScenes: translatedRecords.length
+        completedScenes: completedCount
       });
     } finally {
       setBatchGenerationLocked(false);
