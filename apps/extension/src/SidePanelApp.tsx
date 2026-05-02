@@ -765,6 +765,8 @@ export function SidePanelApp() {
   const [localResultRecords, setLocalResultRecords] = useState<GenerationRecord[]>([]);
   const [editDialog, setEditDialog] = useState<EditImageDialogState | null>(null);
   const [uploadedReferenceImages, setUploadedReferenceImages] = useState<UploadedReferenceImage[]>([]);
+  const [referencePanelHighlighted, setReferencePanelHighlighted] = useState(false);
+  const referencePanelRef = useRef<HTMLElement | null>(null);
   const resultsPanelRef = useRef<HTMLElement | null>(null);
 
   const availableScenes = useMemo(
@@ -1296,9 +1298,11 @@ export function SidePanelApp() {
     setToolPanelOpen(true);
   }
 
-  function scrollToResultsPanel(): void {
+  function focusReferenceImagePanel(): void {
     window.requestAnimationFrame(() => {
-      resultsPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      referencePanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      setReferencePanelHighlighted(true);
+      window.setTimeout(() => setReferencePanelHighlighted(false), 1800);
     });
   }
 
@@ -1322,7 +1326,7 @@ export function SidePanelApp() {
       } satisfies StoredBatchJob
     });
     setToolPanelOpen(false);
-    scrollToResultsPanel();
+    focusReferenceImagePanel();
     void pollBatchJob(job.id);
   }
 
@@ -1796,7 +1800,7 @@ export function SidePanelApp() {
         </button>
       </section>
 
-      <section className="panel">
+      <section className={referencePanelHighlighted ? "panel reference-panel reference-panel-highlight" : "panel reference-panel"} ref={referencePanelRef}>
         <div className="reference-image-field reference-image-field-standalone">
           <label>
             <span>{form.generationMode === "enhance" ? "商品主图 URL（必填）" : "商品主图 URL"}</span>

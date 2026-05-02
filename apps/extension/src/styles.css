@@ -112,6 +112,17 @@ h2 {
   padding: 13px;
 }
 
+.reference-panel {
+  scroll-margin-top: 12px;
+  transition: background-color 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.reference-panel-highlight {
+  background: #f0fbf5;
+  border-color: #18a678;
+  box-shadow: 0 0 0 3px rgb(24 166 120 / 18%), 0 8px 22px rgb(28 37 32 / 12%);
+}
+
 .page-panel {
   justify-content: space-between;
   gap: 10px;
