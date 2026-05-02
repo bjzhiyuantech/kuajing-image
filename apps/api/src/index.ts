@@ -70,6 +70,8 @@ import {
   listUserBillingOrders,
   listUserBillingTransactions,
   purchasePlan,
+  attachGenerationToCharge,
+  reserveGenerationCharge,
   saveAlipayConfig,
   saveBillingSettings
 } from "./billing.js";
@@ -82,7 +84,13 @@ import {
   type ImageProviderInput,
   type OpenAIImageProviderConfig
 } from "./image-provider.js";
-import { getStoredAssetFile, readStoredAsset, runReferenceImageGeneration, runTextToImageGeneration } from "./image-generation.js";
+import {
+  getStoredAssetFile,
+  readStoredAsset,
+  runReferenceImageGeneration,
+  runTextToImageGeneration,
+  type ReservedGenerationCharge
+} from "./image-generation.js";
 import {
   createEcommerceBatchJob,
   getEcommerceBatchJob,
@@ -445,8 +453,34 @@ app.post("/api/ecommerce/images/batch-generate", async (c) => {
 
   const tenant = await requestTenant(c);
   const now = new Date().toISOString();
+  const jobId = randomUUID();
+
+  const response = await createEcommerceBatchJob({
+    jobId,
+    tenant,
+    input: parsed.value,
+    message: "批量任务已创建，服务端正在排队生成。",
+    now
+  });
+
+  let charge: ReservedGenerationCharge;
+  try {
+    charge = await reserveGenerationCharge({
+      tenant,
+      imageCount: parsed.value.sceneTemplateIds.length * parsed.value.countPerScene
+    });
+    await attachGenerationToCharge(charge.transactionId, jobId);
+  } catch (error) {
+    await updateEcommerceBatchJob(tenant, jobId, {
+      status: "failed",
+      message: errorToMessage(error),
+      completedAt: new Date().toISOString()
+    });
+    throw error;
+  }
+
   const job: EcommerceBatchJob = {
-    jobId: randomUUID(),
+    jobId,
     tenant,
     input: parsed.value,
     providerConfig: providerConfig.config,
@@ -454,14 +488,6 @@ app.post("/api/ecommerce/images/batch-generate", async (c) => {
     completedScenes: 0,
     records: []
   };
-
-  const response = await createEcommerceBatchJob({
-    jobId: job.jobId,
-    tenant,
-    input: parsed.value,
-    message: "批量任务已创建，服务端正在排队生成。",
-    now
-  });
   runningEcommerceBatchJobs.set(job.jobId, job);
   void runEcommerceBatchJob(job.jobId);
 
@@ -889,8 +915,14 @@ async function runEcommerceBatchJob(jobId: string): Promise<void> {
             count: job.input.countPerScene ?? 1
           };
           const response = job.input.referenceImage
-            ? await runReferenceImageGeneration(job.tenant, { ...generationInput, referenceImage: job.input.referenceImage }, provider)
-            : await runTextToImageGeneration(job.tenant, generationInput, provider);
+            ? await runReferenceImageGeneration(
+                job.tenant,
+                { ...generationInput, referenceImage: job.input.referenceImage },
+                provider,
+                undefined,
+                { skipCharge: true }
+              )
+            : await runTextToImageGeneration(job.tenant, generationInput, provider, undefined, { skipCharge: true });
           records[index] = response.record;
         } catch (error) {
           records[index] = failedEcommerceSceneRecord(job.input, sceneTemplateId, errorToMessage(error));

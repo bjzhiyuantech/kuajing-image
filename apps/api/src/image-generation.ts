@@ -56,6 +56,17 @@ interface SavedProviderImage {
   cloudStorage?: AssetCloudStorageRecord;
 }
 
+export interface ReservedGenerationCharge {
+  transactionId: string;
+  quotaConsumed: number;
+  amountCents: number;
+}
+
+export interface GenerationBillingOptions {
+  charge?: ReservedGenerationCharge;
+  skipCharge?: boolean;
+}
+
 interface AssetCloudStorageRecord {
   provider: "cos" | "oss";
   bucket: string;
@@ -83,9 +94,10 @@ export async function runTextToImageGeneration(
   tenant: RequestTenant,
   input: ImageProviderInput,
   provider: ImageProvider,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  billing?: GenerationBillingOptions
 ): Promise<GenerationResponse> {
-  const charge = await reserveGenerationCharge({ tenant, imageCount: input.count });
+  const charge = billing?.charge ?? (billing?.skipCharge ? undefined : await reserveGenerationCharge({ tenant, imageCount: input.count }));
   const outputs = await mapWithConcurrency(
     Array.from({ length: input.count }, (_, index) => index),
     BATCH_CONCURRENCY,
@@ -100,7 +112,7 @@ export async function runTextToImageGeneration(
     },
     outputs
   );
-  await attachGenerationToCharge(charge.transactionId, record.id);
+  await attachGenerationToCharge(charge?.transactionId, record.id);
 
   return {
     record
@@ -111,9 +123,10 @@ export async function runReferenceImageGeneration(
   tenant: RequestTenant,
   input: EditImageProviderInput,
   provider: ImageProvider,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  billing?: GenerationBillingOptions
 ): Promise<GenerationResponse> {
-  const charge = await reserveGenerationCharge({ tenant, imageCount: input.count });
+  const charge = billing?.charge ?? (billing?.skipCharge ? undefined : await reserveGenerationCharge({ tenant, imageCount: input.count }));
   const outputs = await mapWithConcurrency(
     Array.from({ length: input.count }, (_, index) => index),
     BATCH_CONCURRENCY,
@@ -128,7 +141,7 @@ export async function runReferenceImageGeneration(
     },
     outputs
   );
-  await attachGenerationToCharge(charge.transactionId, record.id);
+  await attachGenerationToCharge(charge?.transactionId, record.id);
 
   return {
     record
