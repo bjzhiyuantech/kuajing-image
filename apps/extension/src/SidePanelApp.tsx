@@ -765,8 +765,7 @@ export function SidePanelApp() {
   const [localResultRecords, setLocalResultRecords] = useState<GenerationRecord[]>([]);
   const [editDialog, setEditDialog] = useState<EditImageDialogState | null>(null);
   const [uploadedReferenceImages, setUploadedReferenceImages] = useState<UploadedReferenceImage[]>([]);
-  const [resultsPanelHighlighted, setResultsPanelHighlighted] = useState(false);
-  const resultsPanelRef = useRef<HTMLElement | null>(null);
+  const [worksViewOpen, setWorksViewOpen] = useState(false);
 
   const availableScenes = useMemo(
     () => ECOMMERCE_SCENE_TEMPLATES.filter((template) => template.mode === form.generationMode),
@@ -1297,18 +1296,6 @@ export function SidePanelApp() {
     setToolPanelOpen(true);
   }
 
-  function focusResultsPanel(): void {
-    const scrollToBottom = () => {
-      const page = document.scrollingElement ?? document.documentElement;
-      window.scrollTo({ top: page.scrollHeight, behavior: "smooth" });
-      setResultsPanelHighlighted(true);
-      window.setTimeout(() => setResultsPanelHighlighted(false), 1800);
-    };
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(scrollToBottom);
-    });
-  }
-
   function openHistoryJob(job: EcommerceJobSummary): void {
     if (!requireAuth("job")) {
       return;
@@ -1329,7 +1316,8 @@ export function SidePanelApp() {
       } satisfies StoredBatchJob
     });
     setToolPanelOpen(false);
-    focusResultsPanel();
+    setWorksViewOpen(true);
+    window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "auto" }));
     void pollBatchJob(job.id);
   }
 
@@ -1339,6 +1327,98 @@ export function SidePanelApp() {
       next.add(key);
       return next;
     });
+  }
+
+  function renderResultImages(emptyText: string): JSX.Element {
+    if (resultImages.length === 0) {
+      return <p className="result-empty">{emptyText}</p>;
+    }
+
+    return (
+      <div className="result-grid">
+        {resultImages.map((item) => (
+          <article className="result-image-card" key={item.key}>
+            <button className="result-image-preview" type="button" onClick={() => void openGalleryPreview(item.asset)}>
+              <img alt={item.record.prompt} height={item.asset.height} src={assetPreviewUrl(item.asset)} width={item.asset.width} />
+              {brandOverlayReady ? (
+                <span className={`brand-result-overlay brand-result-overlay-${form.brandOverlay.placement}`}>
+                  {form.brandOverlay.logoDataUrl ? <img alt="" src={form.brandOverlay.logoDataUrl} /> : <strong>{form.brandOverlay.text.trim()}</strong>}
+                </span>
+              ) : null}
+            </button>
+            <div className="result-image-meta">
+              <span>{item.asset.width} x {item.asset.height} · {item.record.outputFormat}</span>
+              <div className="result-actions">
+                <button className="mini-button icon-mini" type="button" title="预览" onClick={() => void openGalleryPreview(item.asset)}>
+                  <ImageIcon size={13} />
+                </button>
+                <button
+                  className="mini-button icon-mini"
+                  type="button"
+                  title={brandOverlayReady ? "下载带品牌图" : "下载"}
+                  onClick={() => void downloadResultImage(item)}
+                >
+                  <Download size={13} />
+                </button>
+                <button className="mini-button icon-mini" type="button" title="修改重新生成" onClick={() => openEditImageDialog(item)}>
+                  <Edit3 size={13} />
+                </button>
+                <button className="mini-button icon-mini danger-mini" type="button" title="从当前列表移除" onClick={() => hideResultImage(item.key)}>
+                  <Trash2 size={13} />
+                </button>
+              </div>
+            </div>
+          </article>
+        ))}
+      </div>
+    );
+  }
+
+  function renderEditDialog(): JSX.Element | null {
+    if (!editDialog) {
+      return null;
+    }
+
+    return (
+      <div className="edit-modal" role="dialog" aria-modal="true" aria-labelledby="edit-image-title">
+        <div className="edit-modal-card">
+          <div className="edit-modal-header">
+            <div>
+              <strong id="edit-image-title">修改提示词重新生成</strong>
+              <span>会以当前图片为参考生成一张新图，并追加到列表。</span>
+            </div>
+            <button className="mini-button icon-mini" disabled={editDialog.loading} type="button" onClick={() => setEditDialog(null)}>
+              <X size={14} />
+            </button>
+          </div>
+          <img
+            alt="当前参考图"
+            className="edit-modal-preview"
+            height={editDialog.item.asset.height}
+            src={assetPreviewUrl(editDialog.item.asset)}
+            width={editDialog.item.asset.width}
+          />
+          <label>
+            <span>提示词</span>
+            <textarea
+              rows={7}
+              value={editDialog.prompt}
+              onChange={(event) => setEditDialog({ ...editDialog, prompt: event.target.value, error: "" })}
+            />
+          </label>
+          {editDialog.error ? <p className="tool-error">{editDialog.error}</p> : null}
+          <div className="edit-modal-actions">
+            <button className="mini-button" disabled={editDialog.loading} type="button" onClick={() => setEditDialog(null)}>
+              取消
+            </button>
+            <button className="primary-button" disabled={editDialog.loading} type="button" onClick={() => void submitEditImage()}>
+              {editDialog.loading ? <Loader2 className="spin" size={15} /> : <Wand2 size={15} />}
+              重新生成
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   function openEditImageDialog(item: ResultImageItem): void {
@@ -1773,6 +1853,51 @@ export function SidePanelApp() {
     }
   }
 
+  if (worksViewOpen) {
+    return (
+      <main className="app-shell works-shell">
+        <header className="topbar works-topbar">
+          <div>
+            <p className="eyebrow">Generated works</p>
+            <h1>作品结果</h1>
+          </div>
+          <div className="topbar-actions">
+            <button className="secondary-button" type="button" onClick={() => setWorksViewOpen(false)}>
+              <X size={15} />
+              返回
+            </button>
+            <button
+              className="primary-button works-refresh-button"
+              type="button"
+              onClick={() => void pollBatchJob(task.id)}
+            >
+              <RefreshCw size={15} />
+              刷新
+            </button>
+          </div>
+        </header>
+
+        <section className="panel works-panel">
+          <div className={`status status-${task.status}`}>
+            {task.status === "succeeded" ? <CheckCircle2 size={16} /> : task.status === "running" ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
+            {task.message}
+          </div>
+          <div className="works-meta">
+            <span>{task.id}</span>
+            <strong>
+              {task.status === "pending" || task.status === "running"
+                ? `${task.completedScenes ?? 0}/${task.totalScenes ?? resultImages.length} 场景`
+                : `${resultImages.length} 张作品`}
+            </strong>
+          </div>
+          {renderResultImages(task.status === "running" ? "图片生成中，完成后会显示在这里。" : "这个历史任务暂无可展示图片。")}
+        </section>
+
+        {renderEditDialog()}
+      </main>
+    );
+  }
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -2085,93 +2210,15 @@ export function SidePanelApp() {
         </button>
       </section>
 
-      <section className={resultsPanelHighlighted ? "panel results-panel results-panel-highlight" : "panel results-panel"} ref={resultsPanelRef}>
+      <section className="panel results-panel">
         <div className={`status status-${task.status}`}>
           {task.status === "succeeded" ? <CheckCircle2 size={16} /> : task.status === "running" ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
           {task.message}
         </div>
-        {resultImages.length > 0 ? (
-          <div className="result-grid">
-            {resultImages.map((item) => (
-              <article className="result-image-card" key={item.key}>
-                <button className="result-image-preview" type="button" onClick={() => void openGalleryPreview(item.asset)}>
-                  <img alt={item.record.prompt} height={item.asset.height} src={assetPreviewUrl(item.asset)} width={item.asset.width} />
-                  {brandOverlayReady ? (
-                    <span className={`brand-result-overlay brand-result-overlay-${form.brandOverlay.placement}`}>
-                      {form.brandOverlay.logoDataUrl ? <img alt="" src={form.brandOverlay.logoDataUrl} /> : <strong>{form.brandOverlay.text.trim()}</strong>}
-                    </span>
-                  ) : null}
-                </button>
-                <div className="result-image-meta">
-                  <span>{item.asset.width} x {item.asset.height} · {item.record.outputFormat}</span>
-                  <div className="result-actions">
-                    <button className="mini-button icon-mini" type="button" title="预览" onClick={() => void openGalleryPreview(item.asset)}>
-                      <ImageIcon size={13} />
-                    </button>
-                    <button
-                      className="mini-button icon-mini"
-                      type="button"
-                      title={brandOverlayReady ? "下载带品牌图" : "下载"}
-                      onClick={() => void downloadResultImage(item)}
-                    >
-                      <Download size={13} />
-                    </button>
-                    <button className="mini-button icon-mini" type="button" title="修改重新生成" onClick={() => openEditImageDialog(item)}>
-                      <Edit3 size={13} />
-                    </button>
-                    <button className="mini-button icon-mini danger-mini" type="button" title="从当前列表移除" onClick={() => hideResultImage(item.key)}>
-                      <Trash2 size={13} />
-                    </button>
-                  </div>
-                </div>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <p className="result-empty">{task.status === "running" ? "图片生成中，完成后会显示在这里。" : "生成成功的图片会显示在这里。"}</p>
-        )}
+        {renderResultImages(task.status === "running" ? "图片生成中，完成后会显示在这里。" : "生成成功的图片会显示在这里。")}
       </section>
 
-      {editDialog ? (
-        <div className="edit-modal" role="dialog" aria-modal="true" aria-labelledby="edit-image-title">
-          <div className="edit-modal-card">
-            <div className="edit-modal-header">
-              <div>
-                <strong id="edit-image-title">修改提示词重新生成</strong>
-                <span>会以当前图片为参考生成一张新图，并追加到列表。</span>
-              </div>
-              <button className="mini-button icon-mini" disabled={editDialog.loading} type="button" onClick={() => setEditDialog(null)}>
-                <X size={14} />
-              </button>
-            </div>
-            <img
-              alt="当前参考图"
-              className="edit-modal-preview"
-              height={editDialog.item.asset.height}
-              src={assetPreviewUrl(editDialog.item.asset)}
-              width={editDialog.item.asset.width}
-            />
-            <label>
-              <span>提示词</span>
-              <textarea
-                rows={7}
-                value={editDialog.prompt}
-                onChange={(event) => setEditDialog({ ...editDialog, prompt: event.target.value, error: "" })}
-              />
-            </label>
-            {editDialog.error ? <p className="tool-error">{editDialog.error}</p> : null}
-            <div className="edit-modal-actions">
-              <button className="mini-button" disabled={editDialog.loading} type="button" onClick={() => setEditDialog(null)}>
-                取消
-              </button>
-              <button className="primary-button" disabled={editDialog.loading} type="button" onClick={() => void submitEditImage()}>
-                {editDialog.loading ? <Loader2 className="spin" size={15} /> : <Wand2 size={15} />}
-                重新生成
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      {renderEditDialog()}
 
       <section className="tool-dock" aria-label="扩展工具">
         <div className="tool-tabs">
@@ -2429,8 +2476,8 @@ export function SidePanelApp() {
                       </div>
                       <p>{job.id}</p>
                       <button className="mini-button history-open" type="button" onClick={() => openHistoryJob(job)}>
-                        <RefreshCw size={13} />
-                        打开/刷新
+                        <ImageIcon size={13} />
+                        打开作品
                       </button>
                       {job.sourcePageUrl ? (
                         <a className="source-link" href={job.sourcePageUrl} target="_blank" rel="noreferrer" title={job.sourcePageUrl}>
