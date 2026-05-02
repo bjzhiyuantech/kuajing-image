@@ -2189,18 +2189,28 @@ export function SidePanelApp() {
                 ))}
               </select>
             </label>
-            <label>
-              <span>是否二创</span>
-              <select
-                disabled={form.textLanguage === "none"}
-                value={form.allowTextRecreation ? "yes" : "no"}
-                onChange={(event) => setForm({ ...form, allowTextRecreation: event.target.value === "yes" })}
-              >
-                <option value="yes">是</option>
-                <option value="no">否</option>
-              </select>
-            </label>
           </div>
+        </section>
+      ) : null}
+
+      {form.generationMode === "enhance" ? (
+        <section className="panel">
+          <h2>二创设置</h2>
+          <label>
+            <span>是否二创</span>
+            <select
+              value={form.allowTextRecreation ? "yes" : "no"}
+              onChange={(event) => setForm({ ...form, allowTextRecreation: event.target.value === "yes" })}
+            >
+              <option value="yes">是</option>
+              <option value="no">否</option>
+            </select>
+          </label>
+        </section>
+      ) : null}
+
+      {form.generationMode === "enhance" ? (
+        <section className="panel">
           <div className="toggle-row">
             <div>
               <h2>去水印 / Logo</h2>
