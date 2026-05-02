@@ -2570,7 +2570,7 @@ export function App() {
         aria-hidden={isMobileDrawer && !isAiPanelOpen ? true : undefined}
         aria-labelledby="ai-panel-title"
         aria-modal={isMobileDrawer && isAiPanelOpen ? true : undefined}
-        className="ai-panel fixed inset-y-0 right-0 z-20 flex flex-col border-l border-neutral-200 bg-white shadow-2xl shadow-neutral-950/15"
+        className="ai-panel fixed inset-y-0 left-0 z-20 flex flex-col border-r border-neutral-200 bg-white shadow-2xl shadow-neutral-950/15"
         data-drawer-state={isAiPanelOpen ? "open" : "closed"}
         data-testid="ai-panel"
         id="ai-panel"
