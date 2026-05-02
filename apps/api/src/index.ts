@@ -3,7 +3,7 @@ import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
-import { asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { parsePreviewWidth, readStoredAssetPreview } from "./asset-preview.js";
@@ -704,13 +704,26 @@ app.put("/api/admin/plans/:planId", async (c) => {
     return c.json(errorResponse("not_found", "套餐不存在。"), 404);
   }
 
-  await db
-    .update(subscriptionPlans)
-    .set({
-      ...parsed.value,
-      updatedAt: new Date().toISOString()
-    })
-    .where(eq(subscriptionPlans.id, planId));
+  const updatedAt = new Date().toISOString();
+  await db.transaction(async (tx) => {
+    await tx
+      .update(subscriptionPlans)
+      .set({
+        ...parsed.value,
+        updatedAt
+      })
+      .where(eq(subscriptionPlans.id, planId));
+
+    if (parsed.value.imageQuota !== undefined) {
+      await tx
+        .update(users)
+        .set({
+          quotaTotal: parsed.value.imageQuota,
+          updatedAt
+        })
+        .where(and(eq(users.planId, planId), eq(users.quotaTotal, Number(existing.imageQuota ?? 0))));
+    }
+  });
 
   return c.json({ plan: await getPlanOrThrow(planId) });
 });

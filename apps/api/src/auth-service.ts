@@ -8,7 +8,6 @@ import { subscriptionPlans, users, workspaceMembers, workspaces } from "./schema
 
 const DEFAULT_PLAN_ID = "free";
 const DEFAULT_PLAN_NAME = "Free";
-const DEFAULT_IMAGE_QUOTA = 20;
 const DEFAULT_STORAGE_QUOTA_BYTES = 1024 * 1024 * 1024;
 
 export interface AuthSession {
@@ -44,6 +43,7 @@ export async function registerUser(input: RegisterInput): Promise<AuthResponse> 
   const now = new Date().toISOString();
   const userId = randomUUID();
   const workspaceId = randomUUID();
+  const defaultPlan = await getDefaultPlan();
   try {
     await db.transaction(async (tx) => {
       await tx.insert(users).values({
@@ -52,11 +52,11 @@ export async function registerUser(input: RegisterInput): Promise<AuthResponse> 
         passwordHash: hashPassword(password),
         displayName,
         role: "user",
-        planId: DEFAULT_PLAN_ID,
-        quotaTotal: DEFAULT_IMAGE_QUOTA,
+        planId: defaultPlan.id,
+        quotaTotal: defaultPlan.imageQuota,
         quotaUsed: 0,
         balanceCents: 0,
-        storageQuotaBytes: DEFAULT_STORAGE_QUOTA_BYTES,
+        storageQuotaBytes: defaultPlan.storageQuotaBytes,
         storageUsedBytes: 0,
         currency: "CNY",
         createdAt: now,
@@ -92,16 +92,16 @@ export async function registerUser(input: RegisterInput): Promise<AuthResponse> 
       passwordHash: "",
       displayName,
       role: "user",
-      planId: DEFAULT_PLAN_ID,
-      quotaTotal: DEFAULT_IMAGE_QUOTA,
+      planId: defaultPlan.id,
+      quotaTotal: defaultPlan.imageQuota,
       quotaUsed: 0,
       balanceCents: 0,
-      storageQuotaBytes: DEFAULT_STORAGE_QUOTA_BYTES,
+      storageQuotaBytes: defaultPlan.storageQuotaBytes,
       storageUsedBytes: 0,
       currency: "CNY",
       createdAt: now,
       updatedAt: now
-    }, { name: DEFAULT_PLAN_NAME }),
+    }, { name: defaultPlan.name }),
     workspace: {
       id: workspaceId,
       name: `${displayName}'s Workspace`,
@@ -225,6 +225,16 @@ async function findPlanById(planId: string | null | undefined): Promise<(typeof 
   }
   const [row] = await db.select().from(subscriptionPlans).where(eq(subscriptionPlans.id, planId)).limit(1);
   return row;
+}
+
+async function getDefaultPlan(): Promise<Pick<typeof subscriptionPlans.$inferSelect, "id" | "name" | "imageQuota" | "storageQuotaBytes">> {
+  const plan = await findPlanById(DEFAULT_PLAN_ID);
+  return {
+    id: plan?.id ?? DEFAULT_PLAN_ID,
+    name: plan?.name ?? DEFAULT_PLAN_NAME,
+    imageQuota: Number(plan?.imageQuota ?? 0),
+    storageQuotaBytes: Number(plan?.storageQuotaBytes ?? DEFAULT_STORAGE_QUOTA_BYTES)
+  };
 }
 
 async function findDefaultWorkspace(userId: string): Promise<AuthWorkspace | undefined> {

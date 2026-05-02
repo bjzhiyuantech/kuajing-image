@@ -772,6 +772,9 @@ export function SidePanelApp() {
       if (nextAuth.token && !nextAuth.user) {
         void refreshMe(nextAuth.token, activeJob?.apiBaseUrl ?? nextSettings.apiBaseUrl);
       }
+      if (nextAuth.token) {
+        void syncWebAuth(nextAuth.token, activeJob?.apiBaseUrl ?? nextSettings.apiBaseUrl);
+      }
       if (activeJob?.jobId) {
         setTask({
           id: activeJob.jobId,
@@ -878,6 +881,54 @@ export function SidePanelApp() {
       url.searchParams.set("authToken", auth.token.trim());
     }
     return url.toString();
+  }
+
+  function webAuthUrl(token: string, baseUrl = apiBaseUrl()): string {
+    const url = new URL("/", `${baseUrl.replace(/\/$/u, "")}/`);
+    url.searchParams.set("authToken", token.trim());
+    return url.toString();
+  }
+
+  async function syncWebAuth(token: string, baseUrl = apiBaseUrl()): Promise<void> {
+    const trimmedToken = token.trim();
+    if (!trimmedToken) {
+      return;
+    }
+
+    const normalizedBaseUrl = baseUrl.replace(/\/$/u, "");
+    const appOrigin = new URL(normalizedBaseUrl).origin;
+    const tabs = await chrome.tabs.query({});
+    const appTabs = tabs.filter((tab) => {
+      if (!tab.url) {
+        return false;
+      }
+      try {
+        return new URL(tab.url).origin === appOrigin;
+      } catch {
+        return false;
+      }
+    });
+
+    if (appTabs.length === 0) {
+      await chrome.tabs.create({ url: webAuthUrl(trimmedToken, normalizedBaseUrl), active: false });
+      return;
+    }
+
+    await Promise.all(
+      appTabs.map(async (tab) => {
+        if (!tab.id) {
+          return;
+        }
+        try {
+          await chrome.tabs.sendMessage(tab.id, {
+            type: "kuajing-image:sync-auth",
+            token: trimmedToken
+          });
+        } catch {
+          await chrome.tabs.update(tab.id, { url: webAuthUrl(trimmedToken, normalizedBaseUrl) });
+        }
+      })
+    );
   }
 
   async function openGalleryPreview(asset: GeneratedAsset): Promise<void> {
@@ -991,6 +1042,7 @@ export function SidePanelApp() {
       }
       const user = nextAuth.user ?? (await refreshMe(nextAuth.token));
       await saveAuth({ token: nextAuth.token, user });
+      void syncWebAuth(nextAuth.token);
       setAuthForm((current) => ({ ...current, password: "" }));
       setAuthError("");
       const action = pendingAuthAction;

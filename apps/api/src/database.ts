@@ -387,6 +387,7 @@ async function createSchema(): Promise<void> {
 
 async function ensureDemoTenant(): Promise<void> {
   const now = new Date().toISOString();
+  const defaultPlan = await getDefaultSubscriptionPlan();
   await upsertTenantRows({
     userId: DEMO_USER_ID,
     workspaceId: DEMO_WORKSPACE_ID,
@@ -397,10 +398,10 @@ async function ensureDemoTenant(): Promise<void> {
     workspaceName: "Demo Workspace",
     role: "owner",
     planId: DEFAULT_PLAN_ID,
-    quotaTotal: defaultSubscriptionPlans[0].imageQuota,
+    quotaTotal: defaultPlan.imageQuota,
     quotaUsed: 0,
     balanceCents: 0,
-    storageQuotaBytes: defaultSubscriptionPlans[0].storageQuotaBytes,
+    storageQuotaBytes: defaultPlan.storageQuotaBytes,
     storageUsedBytes: 0,
     now
   });
@@ -415,6 +416,7 @@ async function ensureConfiguredAdmin(): Promise<void> {
   const userId = (await findUserIdByEmail(email)) ?? stableId("admin-user", email);
   const workspaceId = stableId("admin-workspace", email);
   const now = new Date().toISOString();
+  const defaultPlan = await getDefaultSubscriptionPlan();
   await upsertTenantRows({
     userId,
     workspaceId,
@@ -425,10 +427,10 @@ async function ensureConfiguredAdmin(): Promise<void> {
     workspaceName: `${authConfig.adminDisplayName}'s Workspace`,
     role: "owner",
     planId: DEFAULT_PLAN_ID,
-    quotaTotal: defaultSubscriptionPlans[0].imageQuota,
+    quotaTotal: defaultPlan.imageQuota,
     quotaUsed: 0,
     balanceCents: 0,
-    storageQuotaBytes: defaultSubscriptionPlans[0].storageQuotaBytes,
+    storageQuotaBytes: defaultPlan.storageQuotaBytes,
     storageUsedBytes: 0,
     now
   });
@@ -527,10 +529,18 @@ async function migrateUsersTable(): Promise<void> {
   await normalizeDuplicateUserEmails();
   await addIndexIfMissing("users", "users_email_unique_idx", "UNIQUE KEY users_email_unique_idx (email)");
   await addIndexIfMissing("users", "users_plan_id_idx", "KEY users_plan_id_idx (plan_id)");
+  const defaultPlan = await getDefaultSubscriptionPlan();
   await pool.query(
     "UPDATE users SET plan_id = ?, quota_total = IF(quota_total = 0, ?, quota_total), storage_quota_bytes = IF(storage_quota_bytes = 0, ?, storage_quota_bytes) WHERE plan_id IS NULL OR plan_id = ''",
-    [DEFAULT_PLAN_ID, defaultSubscriptionPlans[0].imageQuota, defaultSubscriptionPlans[0].storageQuotaBytes]
+    [DEFAULT_PLAN_ID, defaultPlan.imageQuota, defaultPlan.storageQuotaBytes]
   );
+  if (defaultPlan.imageQuota !== defaultSubscriptionPlans[0].imageQuota) {
+    await pool.query("UPDATE users SET quota_total = ? WHERE plan_id = ? AND quota_total = ?", [
+      defaultPlan.imageQuota,
+      DEFAULT_PLAN_ID,
+      defaultSubscriptionPlans[0].imageQuota
+    ]);
+  }
 }
 
 async function migrateBillingTransactionsTable(): Promise<void> {
@@ -658,16 +668,7 @@ async function seedDefaultSubscriptionPlans(): Promise<void> {
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON DUPLICATE KEY UPDATE
-          name = VALUES(name),
-          description = VALUES(description),
-          image_quota = VALUES(image_quota),
-          storage_quota_bytes = VALUES(storage_quota_bytes),
-          price_cents = VALUES(price_cents),
-          currency = VALUES(currency),
-          enabled = VALUES(enabled),
-          sort_order = VALUES(sort_order),
-          benefits_json = VALUES(benefits_json),
-          updated_at = VALUES(updated_at)
+          id = id
       `,
       [
         plan.id,
@@ -685,6 +686,18 @@ async function seedDefaultSubscriptionPlans(): Promise<void> {
       ]
     );
   }
+}
+
+async function getDefaultSubscriptionPlan(): Promise<{ imageQuota: number; storageQuotaBytes: number }> {
+  const [rows] = await pool.query<RowDataPacket[]>(
+    "SELECT image_quota AS imageQuota, storage_quota_bytes AS storageQuotaBytes FROM subscription_plans WHERE id = ? LIMIT 1",
+    [DEFAULT_PLAN_ID]
+  );
+  const row = rows[0];
+  return {
+    imageQuota: Number(row?.imageQuota ?? defaultSubscriptionPlans[0].imageQuota),
+    storageQuotaBytes: Number(row?.storageQuotaBytes ?? defaultSubscriptionPlans[0].storageQuotaBytes)
+  };
 }
 
 async function addColumnIfMissing(tableName: string, columnName: string, definition: string): Promise<void> {

@@ -27,10 +27,23 @@ function pageContext(): PageContext {
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message?.type !== "kuajing-image:get-page-context") {
-    return false;
+  if (message?.type === "kuajing-image:get-page-context") {
+    sendResponse(pageContext());
+    return true;
   }
 
-  sendResponse(pageContext());
-  return true;
+  if (message?.type === "kuajing-image:sync-auth" && typeof message.token === "string") {
+    window.postMessage(
+      {
+        source: "kuajing-image-extension",
+        type: "kuajing-image:auth-token",
+        token: message.token
+      },
+      window.location.origin
+    );
+    sendResponse({ ok: true });
+    return true;
+  }
+
+  return false;
 });

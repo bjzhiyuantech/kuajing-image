@@ -1058,6 +1058,17 @@ function authenticatedAssetUrl(url: string): string {
   return `${url}${separator}token=${encodeURIComponent(token)}`;
 }
 
+function isExtensionAuthMessage(value: unknown): value is { source: string; type: string; token: string } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { source?: unknown }).source === "kuajing-image-extension" &&
+    (value as { type?: unknown }).type === "kuajing-image:auth-token" &&
+    typeof (value as { token?: unknown }).token === "string" &&
+    (value as { token: string }).token.trim().length > 0
+  );
+}
+
 function previewWidthForAssetContext(asset: Extract<TLAsset, { type: "image" }>, context: TLAssetContext): AssetPreviewWidth {
   const dpr = Number.isFinite(context.dpr) && context.dpr > 0 ? context.dpr : window.devicePixelRatio || 1;
   const requestedWidth = Math.max(1, Math.ceil(asset.props.w * context.screenScale * dpr));
@@ -1548,6 +1559,23 @@ export function App() {
     }
   }, [navigateToRoute, route]);
 
+  const restoreStoredSession = useCallback(async (): Promise<void> => {
+    if (!getStoredAuthToken()) {
+      setAuthStatus("anonymous");
+      return;
+    }
+
+    try {
+      const user = await fetchCurrentUser();
+      setCurrentUser(user);
+      setAuthStatus("authenticated");
+    } catch {
+      clearStoredAuthToken();
+      setCurrentUser(null);
+      setAuthStatus("anonymous");
+    }
+  }, []);
+
   useEffect(() => {
     let isMounted = true;
 
@@ -1580,6 +1608,23 @@ export function App() {
       isMounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    const handleExtensionAuthMessage = (event: MessageEvent): void => {
+      if (event.origin !== window.location.origin || !isExtensionAuthMessage(event.data)) {
+        return;
+      }
+
+      storeAuthToken(event.data.token);
+      setAuthStatus("checking");
+      void restoreStoredSession();
+    };
+
+    window.addEventListener("message", handleExtensionAuthMessage);
+    return () => {
+      window.removeEventListener("message", handleExtensionAuthMessage);
+    };
+  }, [restoreStoredSession]);
 
   useEffect(() => {
     const handleUnauthorized = (): void => {
