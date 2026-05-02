@@ -810,6 +810,7 @@ export function SidePanelApp() {
     const percent = quotaTotal > 0 ? Math.min(100, Math.round((quotaUsed / quotaTotal) * 100)) : 0;
     return { quotaTotal, quotaUsed, remaining, percent };
   }, [auth.user, billingState.data.quotaTotal, billingState.data.quotaUsed]);
+  const currentPlanLabel = auth.token ? auth.user?.planName || billingState.data.currentPlan?.name || "套餐" : "套餐";
 
   useEffect(() => {
     void chrome.storage.local.get([AUTH_STORAGE_KEY, ACTIVE_BATCH_JOB_STORAGE_KEY]).then((result) => {
@@ -1772,9 +1773,15 @@ export function SidePanelApp() {
           <p className="eyebrow">Cross-border image studio</p>
           <h1>跨境图片助手</h1>
         </div>
-        <button className="icon-button" title="账户" type="button" onClick={() => openTool("account")}>
-          <UserCircle2 size={18} />
-        </button>
+        <div className="topbar-actions">
+          <button className="plan-badge" title="查看套餐" type="button" onClick={() => openTool("billing")}>
+            <Package size={14} />
+            <span>{currentPlanLabel}</span>
+          </button>
+          <button className="icon-button" title="账户" type="button" onClick={() => openTool("account")}>
+            <UserCircle2 size={18} />
+          </button>
+        </div>
       </header>
 
       <section className="panel page-panel">
@@ -1789,24 +1796,47 @@ export function SidePanelApp() {
         </button>
       </section>
 
-      <section className="panel quota-summary">
-        <div className="quota-title-row">
-          <div>
-            <h2>张数与余额</h2>
-            <p>{auth.token ? auth.user?.planName || billingState.data.currentPlan?.name || "当前套餐待同步" : "登录后同步套餐和余额"}</p>
+      <section className="panel">
+        <div className="reference-image-field reference-image-field-standalone">
+          <label>
+            <span>{form.generationMode === "enhance" ? "商品主图 URL（必填）" : "商品主图 URL"}</span>
+            <input value={form.referenceImageUrl} onChange={(event) => updateReferenceImageUrl(event.target.value)} />
+          </label>
+          <div className="reference-upload-row">
+            <label className="mini-button reference-upload-button">
+              <Upload size={13} />
+              上传图片
+              <input accept="image/*" multiple type="file" onChange={(event) => void uploadReferenceImages(event)} />
+            </label>
+            <span>可选 1-2 张，第二张会作为不同角度参考。</span>
           </div>
-          <button className="mini-button" type="button" onClick={() => openTool("billing")}>
-            <Package size={13} />
-            套餐
-          </button>
-        </div>
-        <div className="quota-meter" aria-label={`已使用 ${accountQuota.quotaUsed}，总额度 ${accountQuota.quotaTotal}`}>
-          <span style={{ width: `${accountQuota.percent}%` }} />
-        </div>
-        <div className="quota-summary-grid">
-          <div><span>已用张数</span><strong>{formatCount(accountQuota.quotaUsed)}</strong></div>
-          <div><span>套餐余量</span><strong>{formatCount(accountQuota.remaining)}</strong></div>
-          <div><span>账户余额</span><strong>{formatMoney(billingState.data.balanceCents || auth.user?.balanceCents || 0, billingState.data.currency || auth.user?.currency)}</strong></div>
+          {referenceImageOptions.length > 0 ? (
+            <div className="reference-image-picker" aria-label="商品主图候选">
+              <div className="reference-image-picker-header">
+                <strong>从当前页图片选择参考图</strong>
+                <span>已选 {selectedReferenceImageUrls.length}/2 张，第三张会替换最早选择</span>
+              </div>
+              <div className="reference-image-grid">
+                {referenceImageOptions.map((item, index) => (
+                  <button
+                    className={selectedReferenceImageUrls.includes(item.url) ? "reference-image-option active" : "reference-image-option"}
+                    key={item.key}
+                    title={item.label}
+                    type="button"
+                    onClick={() => toggleReferenceImage(item.url)}
+                  >
+                    <img alt={item.uploaded ? item.label : `候选商品图 ${index + 1}`} loading="lazy" src={item.url} />
+                    {selectedReferenceImageUrls.includes(item.url) ? <CheckCircle2 size={16} /> : null}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="reference-image-empty">
+              <ImageIcon size={15} />
+              <span>读取当前页后，这里会显示可选商品图。</span>
+            </div>
+          )}
         </div>
       </section>
 
@@ -2026,47 +2056,6 @@ export function SidePanelApp() {
               ))}
             </select>
           </label>
-        </div>
-        <div className="reference-image-field">
-          <label>
-            <span>{form.generationMode === "enhance" ? "商品主图 URL（必填）" : "商品主图 URL"}</span>
-            <input value={form.referenceImageUrl} onChange={(event) => updateReferenceImageUrl(event.target.value)} />
-          </label>
-          <div className="reference-upload-row">
-            <label className="mini-button reference-upload-button">
-              <Upload size={13} />
-              上传图片
-              <input accept="image/*" multiple type="file" onChange={(event) => void uploadReferenceImages(event)} />
-            </label>
-            <span>可选 1-2 张，第二张会作为不同角度参考。</span>
-          </div>
-          {referenceImageOptions.length > 0 ? (
-            <div className="reference-image-picker" aria-label="商品主图候选">
-              <div className="reference-image-picker-header">
-                <strong>从当前页图片选择参考图</strong>
-                <span>已选 {selectedReferenceImageUrls.length}/2 张，第三张会替换最早选择</span>
-              </div>
-              <div className="reference-image-grid">
-                {referenceImageOptions.map((item, index) => (
-                  <button
-                    className={selectedReferenceImageUrls.includes(item.url) ? "reference-image-option active" : "reference-image-option"}
-                    key={item.key}
-                    title={item.label}
-                    type="button"
-                    onClick={() => toggleReferenceImage(item.url)}
-                  >
-                    <img alt={item.uploaded ? item.label : `候选商品图 ${index + 1}`} loading="lazy" src={item.url} />
-                    {selectedReferenceImageUrls.includes(item.url) ? <CheckCircle2 size={16} /> : null}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <div className="reference-image-empty">
-              <ImageIcon size={15} />
-              <span>读取当前页后，这里会显示可选商品图。</span>
-            </div>
-          )}
         </div>
         <label>
           <span>补充方向</span>

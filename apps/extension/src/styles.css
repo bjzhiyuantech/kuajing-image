@@ -35,6 +35,8 @@ textarea {
 .tool-panel-header,
 .tool-actions,
 .mini-button,
+.topbar-actions,
+.plan-badge,
 .account-heading,
 .button-row,
 .quota-title-row,
@@ -50,6 +52,30 @@ textarea {
   justify-content: space-between;
   gap: 12px;
   padding: 8px 2px 14px;
+}
+
+.topbar-actions {
+  gap: 8px;
+}
+
+.plan-badge {
+  background: #ffffff;
+  border: 1px solid #ccd7d1;
+  border-radius: 8px;
+  color: #26352e;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  gap: 6px;
+  height: 34px;
+  max-width: 120px;
+  padding: 0 10px;
+}
+
+.plan-badge span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .eyebrow {
@@ -415,6 +441,10 @@ textarea:focus {
 
 .reference-image-field {
   margin-top: 10px;
+}
+
+.reference-image-field-standalone {
+  margin-top: 0;
 }
 
 .reference-image-field label {
