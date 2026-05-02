@@ -815,15 +815,16 @@ export function SidePanelApp() {
   }, [auth.user, billingState.data.quotaTotal, billingState.data.quotaUsed]);
   const activePlanBlocksPurchase = useMemo(() => {
     const expiresAt = billingState.data.currentPlanExpiresAt || auth.user?.planExpiresAt;
+    const currentPlanId = billingState.data.currentPlan?.id || auth.user?.planId;
     return Boolean(
-      auth.user?.planId &&
-        auth.user.planId !== "free" &&
+      currentPlanId &&
+        currentPlanId !== "free" &&
         expiresAt &&
         new Date(expiresAt).getTime() > Date.now() &&
         accountQuota.remaining > 0
     );
-  }, [accountQuota.remaining, auth.user, billingState.data.currentPlanExpiresAt]);
-  const currentPlanLabel = auth.token ? auth.user?.planName || billingState.data.currentPlan?.name || "套餐" : "套餐";
+  }, [accountQuota.remaining, auth.user, billingState.data.currentPlan, billingState.data.currentPlanExpiresAt]);
+  const currentPlanLabel = auth.token ? billingState.data.currentPlan?.name || auth.user?.planName || auth.user?.planId || "套餐" : "套餐";
 
   useEffect(() => {
     void chrome.storage.local.get([AUTH_STORAGE_KEY, ACTIVE_BATCH_JOB_STORAGE_KEY]).then((result) => {
@@ -1209,6 +1210,7 @@ export function SidePanelApp() {
         error: "",
         loading: false
       });
+      void refreshMe(token);
       setBillingAction("");
     } catch (error) {
       setBillingState({
@@ -2286,7 +2288,7 @@ export function SidePanelApp() {
                       </button>
                     </div>
                     <div className="account-meta">
-                      <div><span>当前套餐</span><strong>{auth.user?.planName || auth.user?.planId || billingState.data.currentPlan?.name || "未设置"}</strong></div>
+                      <div><span>当前套餐</span><strong>{billingState.data.currentPlan?.name || auth.user?.planName || auth.user?.planId || "未设置"}</strong></div>
                       <div><span>套餐到期</span><strong>{billingState.data.currentPlanExpiresAt || auth.user?.planExpiresAt ? formatDateTime(billingState.data.currentPlanExpiresAt || auth.user?.planExpiresAt) : "长期"}</strong></div>
                       <div><span>账户余额</span><strong>{formatMoney(billingState.data.balanceCents ?? auth.user?.balanceCents ?? 0, billingState.data.currency || auth.user?.currency)}</strong></div>
                       <div><span>已用张数</span><strong>{formatCount(accountQuota.quotaUsed)}/{formatCount(accountQuota.quotaTotal)}</strong></div>

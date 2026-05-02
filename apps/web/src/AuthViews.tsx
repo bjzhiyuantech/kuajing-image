@@ -203,12 +203,13 @@ export function AccountPage({ user }: { user: AuthUser }) {
   const storageQuota = billing.summary.storageQuotaBytes ?? user.storageQuotaBytes ?? 0;
   const storageUsed = billing.summary.storageUsedBytes ?? user.storageUsedBytes ?? 0;
   const storagePercent = storageQuota > 0 ? Math.min(100, Math.round((storageUsed / storageQuota) * 100)) : 0;
+  const currentPlanId = billing.currentPlan?.id || user.planId;
   const currentPlanName = billing.currentPlan?.name || user.planName || user.planId || "未设置";
   const currentPlanExpiresAt = billing.currentPlanExpiresAt || user.planExpiresAt;
   const plans = billing.plans.length > 0 ? billing.plans : fallbackBillingPlans;
   const activePlanBlocksPurchase = Boolean(
-    user.planId &&
-      user.planId !== "free" &&
+    currentPlanId &&
+      currentPlanId !== "free" &&
       currentPlanExpiresAt &&
       new Date(currentPlanExpiresAt).getTime() > Date.now() &&
       quotaRemaining > 0
@@ -401,7 +402,7 @@ export function AccountPage({ user }: { user: AuthUser }) {
 
           <div className="plan-grid">
             {plans.map((plan) => (
-              <article className="plan-card" data-current={plan.id === user.planId} key={plan.id}>
+              <article className="plan-card" data-current={plan.id === currentPlanId} key={plan.id}>
                 <div>
                   <p className="plan-card__name">{plan.name}</p>
                   <p className="plan-card__price">{formatMoney(plan.priceCents, plan.currency)}</p>
@@ -419,7 +420,7 @@ export function AccountPage({ user }: { user: AuthUser }) {
                 <div className="plan-card__actions">
                   <button
                     className="secondary-action h-10"
-                    disabled={Boolean(billingActionLoading) || plan.id === user.planId || !plan.enabled}
+                    disabled={Boolean(billingActionLoading) || plan.id === currentPlanId || !plan.enabled}
                     type="button"
                     onClick={() => void purchasePlan(plan, "balance")}
                   >
@@ -428,7 +429,7 @@ export function AccountPage({ user }: { user: AuthUser }) {
                   </button>
                   <button
                     className="primary-action h-10"
-                    disabled={Boolean(billingActionLoading) || plan.id === user.planId || !plan.enabled}
+                    disabled={Boolean(billingActionLoading) || plan.id === currentPlanId || !plan.enabled}
                     type="button"
                     onClick={() => void purchasePlan(plan, "alipay")}
                   >
