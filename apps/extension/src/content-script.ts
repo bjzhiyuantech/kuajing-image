@@ -1,9 +1,5 @@
 import type { PageContext } from "./types";
 
-function readMeta(selector: string): string {
-  return document.querySelector<HTMLMetaElement>(selector)?.content.trim() ?? "";
-}
-
 function normalizeText(value: string): string {
   return value.replace(/\s+/gu, " ").trim();
 }
@@ -21,6 +17,24 @@ interface ImageCandidate {
   score: number;
 }
 
+const IMAGE_URL_PATTERN = /(?:https?:)?\/\/[^"'()<>\s\\]+?\.(?:jpg|jpeg|png|webp|gif|bmp|avif)(?:\?[^"'()<>\s\\]*)?/giu;
+const DETAIL_ROOT_SELECTOR =
+  "#detail, [class*='detail'], [class*='Detail'], [class*='desc'], [class*='Desc'], [class*='content'], [class*='Content'], [class*='rich'], [class*='Rich'], [id*='detail'], [id*='Detail'], [id*='desc'], [id*='Desc'], [data-module*='detail'], [data-module*='Detail']";
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function normalizeUrlCandidate(value: string): string {
+  return value
+    .trim()
+    .replace(/^url\(["']?/u, "")
+    .replace(/["']?\)$/u, "")
+    .replace(/\\u002f/giu, "/")
+    .replace(/\\\//gu, "/")
+    .replace(/&amp;/gu, "&");
+}
+
 function isLikelyDecorativeImage(url: string, context = ""): boolean {
   const lower = `${url} ${context}`.toLowerCase();
   return /logo|icon|sprite|avatar|qrcode|qr-code|barcode|xiaohongshu|小红书|pinduoduo|拼多多|douyin|抖音|kuaishou|快手|jd|京东|taobao|淘宝|alipay|支付|wangwang|旺旺/u.test(
@@ -35,10 +49,14 @@ function addImageCandidate(
   score: number,
   context = ""
 ): void {
-  if (!value || value.startsWith("data:") || value.startsWith("blob:")) {
+  if (!value) {
     return;
   }
-  const url = absoluteUrl(value.trim());
+  const normalizedValue = normalizeUrlCandidate(value);
+  if (!normalizedValue || normalizedValue.startsWith("data:") || normalizedValue.startsWith("blob:")) {
+    return;
+  }
+  const url = absoluteUrl(normalizedValue);
   if (!url || seen.has(url) || isLikelyDecorativeImage(url, context)) {
     return;
   }
@@ -87,7 +105,11 @@ function readLazyImageAttributes(element: Element): string[] {
     .filter((value): value is string => Boolean(value?.trim()));
 }
 
-function readProductTitle(): string {
+function readDocMeta(doc: Document, selector: string): string {
+  return doc.querySelector<HTMLMetaElement>(selector)?.content.trim() ?? "";
+}
+
+function readProductTitle(doc: Document): string {
   const titleSelectors = [
     "h1",
     "[class*='title-text']",
@@ -101,17 +123,17 @@ function readProductTitle(): string {
     "[class*='Subject']"
   ];
   const candidates = titleSelectors.flatMap((selector) =>
-    Array.from(document.querySelectorAll<HTMLElement>(selector)).map((element) => normalizeText(element.textContent ?? ""))
+    Array.from(doc.querySelectorAll<HTMLElement>(selector)).map((element) => normalizeText(element.textContent ?? ""))
   );
-  candidates.push(readMeta('meta[property="og:title"], meta[name="title"]'));
-  candidates.push(document.title.split(/[-_|—]/u)[0] ?? document.title);
+  candidates.push(readDocMeta(doc, 'meta[property="og:title"], meta[name="title"]'));
+  candidates.push(doc.title.split(/[-_|—]/u)[0] ?? doc.title);
 
   return (
     candidates
       .map(normalizeText)
       .filter((value) => value.length >= 4 && !/^1688|阿里巴巴|找本店|商品$/u.test(value))
       .sort((left, right) => titleScore(right) - titleScore(left))[0] ??
-    normalizeText(document.title)
+    normalizeText(doc.title)
   );
 }
 
@@ -161,12 +183,12 @@ function imageScore(image: HTMLImageElement): number {
   return score;
 }
 
-function addBackgroundImageCandidates(candidates: ImageCandidate[], seen: Set<string>): void {
-  const roots = document.querySelectorAll<HTMLElement>(
-    "#detail, [class*='detail'], [class*='Detail'], [class*='desc'], [class*='Desc'], [class*='content'], [class*='Content'], [class*='main'], [class*='gallery'], [class*='album'], [class*='rich'], [class*='Rich'], [id*='detail'], [id*='Detail'], [id*='desc'], [id*='Desc']"
+function addBackgroundImageCandidates(doc: Document, candidates: ImageCandidate[], seen: Set<string>): void {
+  const roots = doc.querySelectorAll<HTMLElement>(
+    `${DETAIL_ROOT_SELECTOR}, [class*='main'], [class*='gallery'], [class*='album']`
   );
   for (const element of Array.from(roots).slice(0, 200)) {
-    const background = getComputedStyle(element).backgroundImage;
+    const background = element.ownerDocument.defaultView?.getComputedStyle(element).backgroundImage ?? "";
     const matches = background.matchAll(/url\(["']?([^"')]+)["']?\)/gu);
     for (const match of matches) {
       addImageCandidate(candidates, seen, match[1], 55, elementContext(element));
@@ -174,10 +196,8 @@ function addBackgroundImageCandidates(candidates: ImageCandidate[], seen: Set<st
   }
 }
 
-function addDetailImageCandidates(candidates: ImageCandidate[], seen: Set<string>): void {
-  const detailRoots = document.querySelectorAll<HTMLElement>(
-    "#detail, [class*='detail'], [class*='Detail'], [class*='desc'], [class*='Desc'], [class*='content'], [class*='Content'], [class*='rich'], [class*='Rich'], [id*='detail'], [id*='Detail'], [id*='desc'], [id*='Desc'], [data-module*='detail'], [data-module*='Detail']"
-  );
+function addDetailImageCandidates(doc: Document, candidates: ImageCandidate[], seen: Set<string>): void {
+  const detailRoots = doc.querySelectorAll<HTMLElement>(DETAIL_ROOT_SELECTOR);
   for (const root of Array.from(detailRoots).slice(0, 80)) {
     const context = elementContext(root);
     for (const element of Array.from(root.querySelectorAll("img, source, picture, [srcset], [data-src], [data-srcset], [data-original], [data-ks-lazyload], [data-lazyload], [data-lazy-src], [data-image], [data-image-url]")).slice(0, 400)) {
@@ -189,29 +209,114 @@ function addDetailImageCandidates(candidates: ImageCandidate[], seen: Set<string
   }
 }
 
-function pageContext(): PageContext {
-  const imageCandidates: ImageCandidate[] = [];
-  const seenImageUrls = new Set<string>();
-  const ogImage = readMeta('meta[property="og:image"], meta[name="og:image"]');
-  addImageCandidate(imageCandidates, seenImageUrls, ogImage, 70);
+function addMarkupImageCandidates(doc: Document, candidates: ImageCandidate[], seen: Set<string>): void {
+  const roots = doc.querySelectorAll<HTMLElement>(DETAIL_ROOT_SELECTOR);
+  const markupParts = Array.from(roots)
+    .slice(0, 20)
+    .map((element) => element.outerHTML);
+  markupParts.push(doc.documentElement.innerHTML);
 
-  for (const image of Array.from(document.images)) {
-    const score = imageScore(image);
-    if (score > 0) {
-      const context = elementContext(image);
-      addImageCandidate(imageCandidates, seenImageUrls, image.currentSrc || image.src, score, context);
-      addImageCandidate(imageCandidates, seenImageUrls, image.getAttribute("data-src"), score + 10, context);
-      addImageCandidate(imageCandidates, seenImageUrls, image.getAttribute("data-lazy-src"), score + 10, context);
-      addImageCandidate(imageCandidates, seenImageUrls, image.getAttribute("data-original"), score + 10, context);
-      addSrcsetCandidates(imageCandidates, seenImageUrls, image.srcset || image.getAttribute("data-srcset"), score + 10, context);
+  for (const markup of markupParts) {
+    const normalizedMarkup = markup.replace(/\\u002f/giu, "/").replace(/\\\//gu, "/").replace(/&amp;/gu, "&");
+    const matches = normalizedMarkup.matchAll(IMAGE_URL_PATTERN);
+    for (const match of matches) {
+      addImageCandidate(candidates, seen, match[0], 65, "page markup detail image");
     }
   }
-  addBackgroundImageCandidates(imageCandidates, seenImageUrls);
-  addDetailImageCandidates(imageCandidates, seenImageUrls);
+}
+
+function addScriptImageCandidates(doc: Document, candidates: ImageCandidate[], seen: Set<string>): void {
+  for (const script of Array.from(doc.scripts).slice(0, 80)) {
+    const text = script.textContent ?? "";
+    if (!text) {
+      continue;
+    }
+    const normalizedText = text.replace(/\\u002f/giu, "/").replace(/\\\//gu, "/").replace(/&amp;/gu, "&");
+    for (const match of normalizedText.matchAll(IMAGE_URL_PATTERN)) {
+      addImageCandidate(candidates, seen, match[0], 60, "script image url");
+    }
+  }
+}
+
+function collectAccessibleDocuments(doc: Document, depth = 0, seen = new Set<Document>()): Document[] {
+  if (seen.has(doc) || depth > 2) {
+    return [];
+  }
+
+  seen.add(doc);
+  const docs = [doc];
+  for (const frame of Array.from(doc.querySelectorAll<HTMLIFrameElement>("iframe"))) {
+    try {
+      const frameDocument = frame.contentDocument;
+      if (frameDocument) {
+        docs.push(...collectAccessibleDocuments(frameDocument, depth + 1, seen));
+      }
+    } catch {
+      // Cross-origin iframes cannot be inspected from the content script.
+    }
+  }
+  return docs;
+}
+
+async function hydrateDetailImages(doc: Document): Promise<void> {
+  const firstDetailRoot = doc.querySelector<HTMLElement>(DETAIL_ROOT_SELECTOR);
+  const originalX = window.scrollX;
+  const originalY = window.scrollY;
+  const detailRoots = Array.from(doc.querySelectorAll<HTMLElement>(DETAIL_ROOT_SELECTOR)).slice(0, 12);
+  const step = Math.max(Math.floor(window.innerHeight * 0.8), 600);
+
+  if (firstDetailRoot) {
+    firstDetailRoot.scrollIntoView({ block: "start", inline: "nearest" });
+    await sleep(300);
+  }
+
+  for (let pass = 0; pass < 3; pass += 1) {
+    for (const root of detailRoots) {
+      root.scrollIntoView({ block: "center", inline: "nearest" });
+      await sleep(120);
+    }
+    const maxScrollY = Math.max(doc.body.scrollHeight, doc.documentElement.scrollHeight);
+    for (let top = 0; top <= maxScrollY; top += step) {
+      window.scrollTo({ top });
+      await sleep(180);
+    }
+    await sleep(320);
+  }
+
+  window.scrollTo({ left: originalX, top: originalY });
+}
+
+async function pageContext(): Promise<PageContext> {
+  await hydrateDetailImages(document);
+
+  const imageCandidates: ImageCandidate[] = [];
+  const seenImageUrls = new Set<string>();
+  const documents = collectAccessibleDocuments(document);
+
+  for (const doc of documents) {
+    const ogImage = readDocMeta(doc, 'meta[property="og:image"], meta[name="og:image"]');
+    addImageCandidate(imageCandidates, seenImageUrls, ogImage, 70);
+
+    for (const image of Array.from(doc.images)) {
+      const score = imageScore(image);
+      if (score > 0) {
+        const context = elementContext(image);
+        addImageCandidate(imageCandidates, seenImageUrls, image.currentSrc || image.src, score, context);
+        addImageCandidate(imageCandidates, seenImageUrls, image.getAttribute("data-src"), score + 10, context);
+        addImageCandidate(imageCandidates, seenImageUrls, image.getAttribute("data-lazy-src"), score + 10, context);
+        addImageCandidate(imageCandidates, seenImageUrls, image.getAttribute("data-original"), score + 10, context);
+        addSrcsetCandidates(imageCandidates, seenImageUrls, image.srcset || image.getAttribute("data-srcset"), score + 10, context);
+      }
+    }
+    addBackgroundImageCandidates(doc, imageCandidates, seenImageUrls);
+    addDetailImageCandidates(doc, imageCandidates, seenImageUrls);
+    addMarkupImageCandidates(doc, imageCandidates, seenImageUrls);
+    addScriptImageCandidates(doc, imageCandidates, seenImageUrls);
+  }
 
   return {
-    title: readProductTitle(),
-    description: readMeta('meta[name="description"], meta[property="og:description"]'),
+    title: readProductTitle(document),
+    description: readDocMeta(document, 'meta[name="description"], meta[property="og:description"]'),
     url: location.href,
     imageUrls: imageCandidates
       .sort((left, right) => right.score - left.score)
@@ -222,7 +327,7 @@ function pageContext(): PageContext {
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "kuajing-image:get-page-context") {
-    sendResponse(pageContext());
+    void pageContext().then(sendResponse);
     return true;
   }
 
