@@ -61,6 +61,26 @@ function addSrcsetCandidates(
   }
 }
 
+function readLazyImageAttributes(element: Element): string[] {
+  return [
+    "src",
+    "data-src",
+    "data-lazy-src",
+    "data-lazyload-src",
+    "data-lazyload",
+    "data-original",
+    "data-original-src",
+    "data-ks-lazyload",
+    "data-img",
+    "data-url",
+    "data-image",
+    "data-actualsrc",
+    "data-lazy"
+  ]
+    .map((name) => element.getAttribute(name))
+    .filter((value): value is string => Boolean(value?.trim()));
+}
+
 function readProductTitle(): string {
   const titleSelectors = [
     "h1",
@@ -137,13 +157,28 @@ function imageScore(image: HTMLImageElement): number {
 
 function addBackgroundImageCandidates(candidates: ImageCandidate[], seen: Set<string>): void {
   const roots = document.querySelectorAll<HTMLElement>(
-    "[class*='detail'], [class*='desc'], [class*='content'], [class*='Content'], [class*='main'], [class*='gallery'], [class*='album']"
+    "[class*='detail'], [class*='desc'], [class*='content'], [class*='Content'], [class*='main'], [class*='gallery'], [class*='album'], [class*='rich'], [class*='Rich'], [id*='detail'], [id*='desc']"
   );
   for (const element of Array.from(roots).slice(0, 200)) {
     const background = getComputedStyle(element).backgroundImage;
     const matches = background.matchAll(/url\(["']?([^"')]+)["']?\)/gu);
     for (const match of matches) {
       addImageCandidate(candidates, seen, match[1], 55, elementContext(element));
+    }
+  }
+}
+
+function addDetailImageCandidates(candidates: ImageCandidate[], seen: Set<string>): void {
+  const detailRoots = document.querySelectorAll<HTMLElement>(
+    "[class*='detail'], [class*='desc'], [class*='content'], [class*='Content'], [class*='rich'], [class*='Rich'], [id*='detail'], [id*='desc'], [data-module*='detail']"
+  );
+  for (const root of Array.from(detailRoots).slice(0, 80)) {
+    const context = elementContext(root);
+    for (const element of Array.from(root.querySelectorAll("img, source, [data-src], [data-original], [data-ks-lazyload], [data-lazyload]")).slice(0, 300)) {
+      for (const value of readLazyImageAttributes(element)) {
+        addImageCandidate(candidates, seen, value, 90, `${context} ${elementContext(element)}`);
+      }
+      addSrcsetCandidates(candidates, seen, element.getAttribute("srcset") || element.getAttribute("data-srcset"), 90, context);
     }
   }
 }
@@ -166,6 +201,7 @@ function pageContext(): PageContext {
     }
   }
   addBackgroundImageCandidates(imageCandidates, seenImageUrls);
+  addDetailImageCandidates(imageCandidates, seenImageUrls);
 
   return {
     title: readProductTitle(),

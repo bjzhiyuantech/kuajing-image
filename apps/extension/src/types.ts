@@ -55,6 +55,7 @@ export interface BatchFormState {
   outputFormat: OutputFormat;
   countPerScene: 1 | 2 | 4;
   referenceImageUrl: string;
+  referenceImageUrls: string[];
   extraDirection: string;
   brandOverlay: {
     enabled: boolean;

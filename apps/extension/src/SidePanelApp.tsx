@@ -17,6 +17,7 @@ import {
   Settings,
   Sparkles,
   Trash2,
+  Upload,
   UserCircle2,
   Wallet,
   Wand2,
@@ -152,6 +153,12 @@ interface EditImageDialogState {
   loading: boolean;
 }
 
+interface UploadedReferenceImage {
+  id: string;
+  dataUrl: string;
+  fileName: string;
+}
+
 const defaultForm: BatchFormState = {
   product: {
     title: "",
@@ -174,6 +181,7 @@ const defaultForm: BatchFormState = {
   outputFormat: "png",
   countPerScene: 1,
   referenceImageUrl: "",
+  referenceImageUrls: [],
   extraDirection: "",
   brandOverlay: {
     enabled: false,
@@ -235,7 +243,7 @@ function createClientId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-async function referenceImageFromUrl(url: string): Promise<{ dataUrl: string; fileName?: string }> {
+async function referenceImageFromUrl(url: string): Promise<ReferenceImageInput> {
   const response = await fetch(url);
   if (!response.ok) {
     throw new Error("参考图读取失败，请换一张商品主图。");
@@ -289,6 +297,58 @@ function imageFromUrl(url: string): Promise<HTMLImageElement> {
     image.onerror = () => reject(new Error("图片载入失败。"));
     image.src = url;
   });
+}
+
+function drawContainedImage(ctx: CanvasRenderingContext2D, image: HTMLImageElement, x: number, y: number, width: number, height: number): void {
+  const scale = Math.min(width / image.naturalWidth, height / image.naturalHeight);
+  const drawWidth = image.naturalWidth * scale;
+  const drawHeight = image.naturalHeight * scale;
+  ctx.drawImage(image, x + (width - drawWidth) / 2, y + (height - drawHeight) / 2, drawWidth, drawHeight);
+}
+
+async function mergeReferenceImages(images: ReferenceImageInput[]): Promise<ReferenceImageInput> {
+  if (images.length === 0) {
+    throw new Error("请先选择参考图。");
+  }
+  if (images.length === 1) {
+    return images[0];
+  }
+
+  const loadedImages = await Promise.all(images.slice(0, 2).map((item) => imageFromUrl(item.dataUrl)));
+  const cellSize = 720;
+  const gap = 18;
+  const padding = 28;
+  const canvas = document.createElement("canvas");
+  canvas.width = cellSize * loadedImages.length + gap * (loadedImages.length - 1) + padding * 2;
+  canvas.height = cellSize + padding * 2;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    throw new Error("参考图合成失败。");
+  }
+
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  loadedImages.forEach((image, index) => {
+    const x = padding + index * (cellSize + gap);
+    ctx.fillStyle = "#f7faf8";
+    ctx.fillRect(x, padding, cellSize, cellSize);
+    drawContainedImage(ctx, image, x + 18, padding + 18, cellSize - 36, cellSize - 36);
+  });
+
+  return {
+    dataUrl: canvas.toDataURL("image/png"),
+    fileName: "reference-angles.png"
+  };
+}
+
+async function referenceImageFromSources(urls: string[]): Promise<ReferenceImageInput | undefined> {
+  const trimmedUrls = urls.map((url) => url.trim()).filter(Boolean).slice(0, 2);
+  if (trimmedUrls.length === 0) {
+    return undefined;
+  }
+
+  const images = await Promise.all(trimmedUrls.map((url) => referenceImageFromUrl(url)));
+  return mergeReferenceImages(images);
 }
 
 function roundedRect(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number): void {
@@ -704,6 +764,7 @@ export function SidePanelApp() {
   const [hiddenResultKeys, setHiddenResultKeys] = useState<Set<string>>(() => new Set());
   const [localResultRecords, setLocalResultRecords] = useState<GenerationRecord[]>([]);
   const [editDialog, setEditDialog] = useState<EditImageDialogState | null>(null);
+  const [uploadedReferenceImages, setUploadedReferenceImages] = useState<UploadedReferenceImage[]>([]);
   const resultsPanelRef = useRef<HTMLElement | null>(null);
 
   const availableScenes = useMemo(
@@ -718,6 +779,14 @@ export function SidePanelApp() {
 
   const pageImageUrls = pageContext?.imageUrls ?? [];
   const selectedReferenceImageUrl = form.referenceImageUrl.trim();
+  const selectedReferenceImageUrls = form.referenceImageUrls.length > 0 ? form.referenceImageUrls : selectedReferenceImageUrl ? [selectedReferenceImageUrl] : [];
+  const referenceImageOptions = useMemo(
+    () => [
+      ...uploadedReferenceImages.map((image) => ({ key: image.id, url: image.dataUrl, label: image.fileName, uploaded: true })),
+      ...pageImageUrls.map((url, index) => ({ key: url, url, label: `候选商品图 ${index + 1}`, uploaded: false }))
+    ],
+    [pageImageUrls, uploadedReferenceImages]
+  );
 
   const resultImages = useMemo(() => {
     const records = [...task.records, ...localResultRecords];
@@ -733,22 +802,6 @@ export function SidePanelApp() {
   }, [hiddenResultKeys, localResultRecords, task.records]);
 
   const brandOverlayReady = form.brandOverlay.enabled && Boolean(form.brandOverlay.logoDataUrl || form.brandOverlay.text.trim());
-
-  const previewPrompt = useMemo(() => {
-    const firstScene = form.sceneTemplateIds[0];
-    if (!firstScene || !form.product.title.trim()) {
-      return "";
-    }
-
-    return composeEcommercePrompt({
-      product: form.product,
-      platform: form.platform,
-      market: form.market,
-      textLanguage: form.textLanguage,
-      sceneTemplateId: firstScene,
-      extraDirection: form.extraDirection
-    });
-  }, [form]);
 
   const accountQuota = useMemo(() => {
     const quotaTotal = billingState.data.quotaTotal || auth.user?.quotaTotal || 0;
@@ -1387,7 +1440,8 @@ export function SidePanelApp() {
           title: context.title || current.product.title,
           description: context.description || current.product.description
         },
-        referenceImageUrl: context.imageUrls[0] || current.referenceImageUrl
+        referenceImageUrl: context.imageUrls[0] || current.referenceImageUrl,
+        referenceImageUrls: context.imageUrls[0] ? [context.imageUrls[0]] : current.referenceImageUrls
       }));
       setTask((current) => ({
         ...current,
@@ -1409,6 +1463,66 @@ export function SidePanelApp() {
         ...patch
       }
     }));
+  }
+
+  function updateReferenceImageUrl(url: string): void {
+    const trimmedUrl = url.trim();
+    setForm((current) => ({
+      ...current,
+      referenceImageUrl: url,
+      referenceImageUrls: trimmedUrl ? [trimmedUrl] : []
+    }));
+  }
+
+  function toggleReferenceImage(url: string): void {
+    setForm((current) => {
+      const exists = current.referenceImageUrls.includes(url);
+      const nextUrls = exists
+        ? current.referenceImageUrls.filter((item) => item !== url)
+        : [...current.referenceImageUrls, url].slice(-2);
+      return {
+        ...current,
+        referenceImageUrl: nextUrls[0] ?? "",
+        referenceImageUrls: nextUrls
+      };
+    });
+  }
+
+  async function uploadReferenceImages(event: ChangeEvent<HTMLInputElement>): Promise<void> {
+    try {
+      const files = Array.from(event.target.files ?? []).filter((file) => file.type.startsWith("image/")).slice(0, 2);
+      event.target.value = "";
+      if (files.length === 0) {
+        return;
+      }
+
+      const uploadedImages = await Promise.all(
+        files.map(async (file) => {
+          if (file.size > 50 * 1024 * 1024) {
+            throw new Error("上传参考图超过 50MB，请换一张较小的图片。");
+          }
+          return {
+            id: createClientId(),
+            dataUrl: await blobToDataUrl(file, "上传参考图转换失败。"),
+            fileName: file.name || "uploaded-reference.png"
+          } satisfies UploadedReferenceImage;
+        })
+      );
+      setUploadedReferenceImages((current) => [...uploadedImages, ...current].slice(0, 8));
+      setForm((current) => {
+        const nextUrls = [...uploadedImages.map((image) => image.dataUrl), ...current.referenceImageUrls].slice(0, 2);
+        return {
+          ...current,
+          referenceImageUrl: nextUrls[0] ?? "",
+          referenceImageUrls: nextUrls
+        };
+      });
+    } catch (error) {
+      setTask((current) => ({
+        ...current,
+        message: error instanceof Error ? error.message : "上传参考图失败。"
+      }));
+    }
   }
 
   function updateBrandOverlay(patch: Partial<BatchFormState["brandOverlay"]>): void {
@@ -1580,7 +1694,7 @@ export function SidePanelApp() {
       setTask({ id: "validation", status: "failed", message: "请先填写商品标题。", records: [] });
       return;
     }
-    if (form.generationMode === "enhance" && !form.referenceImageUrl.trim()) {
+    if (form.generationMode === "enhance" && selectedReferenceImageUrls.length === 0) {
       setTask({ id: "validation", status: "failed", message: "原图增强需要参考图 URL，请先读取商品页或手动填写主图地址。", records: [] });
       return;
     }
@@ -1591,13 +1705,13 @@ export function SidePanelApp() {
     setTask({
       id: taskId,
       status: "running",
-      message: form.referenceImageUrl.trim() ? "正在读取参考图并提交批量生成任务。" : "正在提交批量生成任务。",
+      message: selectedReferenceImageUrls.length > 0 ? "正在读取参考图并提交批量生成任务。" : "正在提交批量生成任务。",
       records: []
     });
 
     const fallbackRecords = selectedScenes.map((scene): GenerationRecord => ({
       id: `${taskId}-${scene.id}`,
-      mode: form.referenceImageUrl ? "edit" : "generate",
+      mode: selectedReferenceImageUrls.length > 0 ? "edit" : "generate",
       prompt: composeEcommercePrompt({
         product: form.product,
         platform: form.platform,
@@ -1618,9 +1732,7 @@ export function SidePanelApp() {
     }));
 
     try {
-      const referenceImage = form.referenceImageUrl.trim()
-        ? await referenceImageFromUrl(form.referenceImageUrl.trim())
-        : undefined;
+      const referenceImage = await referenceImageFromSources(selectedReferenceImageUrls);
       const response = await fetch(`${apiBaseUrl()}/api/ecommerce/images/batch-generate`, {
         method: "POST",
         headers: apiHeaders(true, token),
@@ -1918,25 +2030,33 @@ export function SidePanelApp() {
         <div className="reference-image-field">
           <label>
             <span>{form.generationMode === "enhance" ? "商品主图 URL（必填）" : "商品主图 URL"}</span>
-            <input value={form.referenceImageUrl} onChange={(event) => setForm({ ...form, referenceImageUrl: event.target.value })} />
+            <input value={form.referenceImageUrl} onChange={(event) => updateReferenceImageUrl(event.target.value)} />
           </label>
-          {pageImageUrls.length > 0 ? (
+          <div className="reference-upload-row">
+            <label className="mini-button reference-upload-button">
+              <Upload size={13} />
+              上传图片
+              <input accept="image/*" multiple type="file" onChange={(event) => void uploadReferenceImages(event)} />
+            </label>
+            <span>可选 1-2 张，第二张会作为不同角度参考。</span>
+          </div>
+          {referenceImageOptions.length > 0 ? (
             <div className="reference-image-picker" aria-label="商品主图候选">
               <div className="reference-image-picker-header">
                 <strong>从当前页图片选择参考图</strong>
-                <span>点击缩略图后会同步到上方 URL</span>
+                <span>已选 {selectedReferenceImageUrls.length}/2 张，第三张会替换最早选择</span>
               </div>
               <div className="reference-image-grid">
-                {pageImageUrls.map((url, index) => (
+                {referenceImageOptions.map((item, index) => (
                   <button
-                    className={selectedReferenceImageUrl === url ? "reference-image-option active" : "reference-image-option"}
-                    key={url}
-                    title={url}
+                    className={selectedReferenceImageUrls.includes(item.url) ? "reference-image-option active" : "reference-image-option"}
+                    key={item.key}
+                    title={item.label}
                     type="button"
-                    onClick={() => setForm((current) => ({ ...current, referenceImageUrl: url }))}
+                    onClick={() => toggleReferenceImage(item.url)}
                   >
-                    <img alt={`候选商品图 ${index + 1}`} loading="lazy" src={url} />
-                    {selectedReferenceImageUrl === url ? <CheckCircle2 size={16} /> : null}
+                    <img alt={item.uploaded ? item.label : `候选商品图 ${index + 1}`} loading="lazy" src={item.url} />
+                    {selectedReferenceImageUrls.includes(item.url) ? <CheckCircle2 size={16} /> : null}
                   </button>
                 ))}
               </div>
@@ -1953,13 +2073,6 @@ export function SidePanelApp() {
           <textarea rows={3} value={form.extraDirection} onChange={(event) => setForm({ ...form, extraDirection: event.target.value })} />
         </label>
       </section>
-
-      {previewPrompt ? (
-        <section className="panel prompt-preview">
-          <h2>Prompt 预览</h2>
-          <p>{previewPrompt}</p>
-        </section>
-      ) : null}
 
       <section className="sticky-actions">
         <div>

@@ -421,6 +421,35 @@ textarea:focus {
   margin-top: 0;
 }
 
+.reference-upload-row {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.reference-upload-row span {
+  color: #66766d;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.reference-upload-button {
+  cursor: pointer;
+  flex: 0 0 auto;
+  margin: 0;
+  position: relative;
+}
+
+.reference-upload-button input {
+  inset: 0;
+  cursor: pointer;
+  height: 100%;
+  opacity: 0;
+  position: absolute;
+  width: 100%;
+}
+
 .reference-image-picker {
   background: #f7faf8;
   border: 1px solid #e4ebe7;
