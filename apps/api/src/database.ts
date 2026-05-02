@@ -127,6 +127,7 @@ async function createSchema(): Promise<void> {
       display_name VARCHAR(255) NOT NULL,
       role VARCHAR(32) NOT NULL DEFAULT 'user',
       plan_id VARCHAR(64),
+      plan_expires_at VARCHAR(32),
       quota_total BIGINT NOT NULL DEFAULT 0,
       quota_used BIGINT NOT NULL DEFAULT 0,
       balance_cents BIGINT NOT NULL DEFAULT 0,
@@ -455,14 +456,15 @@ async function upsertTenantRows(input: {
 }): Promise<void> {
   await pool.query(
     `
-      INSERT INTO users (id, email, password_hash, display_name, role, plan_id, quota_total, quota_used, balance_cents, storage_quota_bytes, storage_used_bytes, currency, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO users (id, email, password_hash, display_name, role, plan_id, plan_expires_at, quota_total, quota_used, balance_cents, storage_quota_bytes, storage_used_bytes, currency, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
         email = VALUES(email),
         password_hash = IF(VALUES(password_hash) <> '', VALUES(password_hash), password_hash),
         display_name = VALUES(display_name),
         role = VALUES(role),
         plan_id = IF(plan_id IS NULL OR plan_id = '', VALUES(plan_id), plan_id),
+        plan_expires_at = plan_expires_at,
         quota_total = IF(quota_total = 0, VALUES(quota_total), quota_total),
         quota_used = quota_used,
         balance_cents = balance_cents,
@@ -478,6 +480,7 @@ async function upsertTenantRows(input: {
       input.displayName,
       input.userRole ?? "user",
       input.planId ?? DEFAULT_PLAN_ID,
+      null,
       input.quotaTotal ?? defaultSubscriptionPlans[0].imageQuota,
       input.quotaUsed ?? 0,
       input.balanceCents ?? 0,
@@ -520,6 +523,7 @@ async function migrateUsersTable(): Promise<void> {
   await addColumnIfMissing("users", "password_hash", "VARCHAR(512) NOT NULL DEFAULT ''");
   await addColumnIfMissing("users", "role", "VARCHAR(32) NOT NULL DEFAULT 'user'");
   await addColumnIfMissing("users", "plan_id", "VARCHAR(64)");
+  await addColumnIfMissing("users", "plan_expires_at", "VARCHAR(32)");
   await addColumnIfMissing("users", "quota_total", "BIGINT NOT NULL DEFAULT 0");
   await addColumnIfMissing("users", "quota_used", "BIGINT NOT NULL DEFAULT 0");
   await addColumnIfMissing("users", "balance_cents", "BIGINT NOT NULL DEFAULT 0");
@@ -534,6 +538,10 @@ async function migrateUsersTable(): Promise<void> {
     "UPDATE users SET plan_id = ?, quota_total = IF(quota_total = 0, ?, quota_total), storage_quota_bytes = IF(storage_quota_bytes = 0, ?, storage_quota_bytes) WHERE plan_id IS NULL OR plan_id = ''",
     [DEFAULT_PLAN_ID, defaultPlan.imageQuota, defaultPlan.storageQuotaBytes]
   );
+  await pool.query("UPDATE users SET plan_expires_at = ? WHERE plan_id <> ? AND (plan_expires_at IS NULL OR plan_expires_at = '')", [
+    defaultPlanExpiryFrom(new Date()),
+    DEFAULT_PLAN_ID
+  ]);
   if (defaultPlan.imageQuota !== defaultSubscriptionPlans[0].imageQuota) {
     await pool.query("UPDATE users SET quota_total = ? WHERE plan_id = ? AND quota_total = ?", [
       defaultPlan.imageQuota,
@@ -541,6 +549,12 @@ async function migrateUsersTable(): Promise<void> {
       defaultSubscriptionPlans[0].imageQuota
     ]);
   }
+}
+
+function defaultPlanExpiryFrom(base: Date): string {
+  const expiresAt = new Date(base);
+  expiresAt.setMonth(expiresAt.getMonth() + 1);
+  return expiresAt.toISOString();
 }
 
 async function migrateBillingTransactionsTable(): Promise<void> {

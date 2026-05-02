@@ -21,6 +21,7 @@ export interface AuthUser {
   role?: string;
   planId?: string;
   planName?: string;
+  planExpiresAt?: string;
   quotaTotal?: number;
   quotaUsed?: number;
   balanceCents?: number;

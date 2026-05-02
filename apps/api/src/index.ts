@@ -99,6 +99,7 @@ import {
   updateEcommerceBatchJob
 } from "./ecommerce-jobs.js";
 import { deleteGalleryOutput, getGalleryImages, getProjectState, saveProjectSnapshot } from "./project-store.js";
+import { planExpiryFrom, resetExpiredUserPlans } from "./plan-expiration.js";
 import { runtimePaths, serverConfig } from "./runtime.js";
 import { assets, ecommerceBatchJobs, subscriptionPlans, users, workspaceMembers } from "./schema.js";
 import { getStorageConfig, saveStorageConfig, testStorageConfig } from "./storage-config.js";
@@ -787,14 +788,16 @@ app.put("/api/admin/users/:userId/plan", async (c) => {
   const quotaTotal = parsed.value.quotaTotal ?? (resetQuota ? plan.imageQuota : Number(existing.quotaTotal ?? 0));
   const storageQuotaBytes =
     parsed.value.storageQuotaBytes ?? (resetQuota ? plan.storageQuotaBytes : Number(existing.storageQuotaBytes ?? 0));
+  const now = new Date();
 
   await db
     .update(users)
     .set({
       planId: plan.id,
+      planExpiresAt: plan.id === "free" ? null : planExpiryFrom(now),
       quotaTotal,
       storageQuotaBytes,
-      updatedAt: new Date().toISOString()
+      updatedAt: now.toISOString()
     })
     .where(eq(users.id, userId));
 
@@ -1175,6 +1178,7 @@ async function getAdminStats(): Promise<AdminStatsResponse> {
 }
 
 async function getAdminUsers(): Promise<AdminUsersResponse> {
+  await resetExpiredUserPlans();
   const [userRows, memberRows, assetRows] = await Promise.all([
     db
       .select({
@@ -1265,6 +1269,7 @@ function toAdminUserItem(
     role: user.role === "admin" ? "admin" : "user",
     planId: user.planId ?? undefined,
     planName: plan?.name,
+    planExpiresAt: user.planExpiresAt ?? undefined,
     quotaTotal: Number(user.quotaTotal ?? 0),
     quotaUsed: Number(user.quotaUsed ?? 0),
     balanceCents: Number(user.balanceCents ?? 0),

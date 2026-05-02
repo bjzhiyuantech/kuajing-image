@@ -14,6 +14,7 @@ export const users = mysqlTable(
     displayName: shortText("display_name").notNull(),
     role: shortText("role", 32).notNull(),
     planId: id("plan_id"),
+    planExpiresAt: isoDate("plan_expires_at"),
     quotaTotal: bigint("quota_total", { mode: "number" }).notNull(),
     quotaUsed: bigint("quota_used", { mode: "number" }).notNull(),
     balanceCents: bigint("balance_cents", { mode: "number" }).notNull(),

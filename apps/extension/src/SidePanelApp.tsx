@@ -123,6 +123,7 @@ interface BillingOverview {
   balanceCents: number;
   currency: string;
   currentPlan?: BillingPlan;
+  currentPlanExpiresAt?: string;
   plans: BillingPlan[];
   transactions: BillingTransaction[];
   orders: BillingOrder[];
@@ -509,6 +510,7 @@ function normalizeBillingResponse(payload: unknown, user: AuthUser | null): Bill
       0,
     currency: firstString(balance, ["currency"]) ?? firstString(data, ["currency"]) ?? user?.currency ?? "CNY",
     currentPlan: currentPlan ?? undefined,
+    currentPlanExpiresAt: firstString(data, ["currentPlanExpiresAt", "current_plan_expires_at"]) ?? user?.planExpiresAt,
     plans: planItems.map((item, index) => normalizePlan(item, index)).filter((plan): plan is BillingPlan => Boolean(plan)),
     transactions,
     orders,
@@ -662,6 +664,7 @@ function normalizeUser(value: unknown): AuthUser | null {
     role: firstString(source, ["role", "plan"]),
     planId: firstString(source, ["planId", "plan_id"]),
     planName: firstString(source, ["planName", "plan_name"]),
+    planExpiresAt: firstString(source, ["planExpiresAt", "plan_expires_at"]),
     quotaTotal: firstNumber(source, ["quotaTotal", "quota_total", "totalQuota"]),
     quotaUsed: firstNumber(source, ["quotaUsed", "quota_used", "usedQuota"]),
     balanceCents: firstNumber(source, ["balanceCents", "balance_cents", "balance"]),
@@ -2270,6 +2273,7 @@ export function SidePanelApp() {
                     </div>
                     <div className="account-meta">
                       <div><span>当前套餐</span><strong>{auth.user?.planName || auth.user?.planId || billingState.data.currentPlan?.name || "未设置"}</strong></div>
+                      <div><span>套餐到期</span><strong>{billingState.data.currentPlanExpiresAt || auth.user?.planExpiresAt ? formatDateTime(billingState.data.currentPlanExpiresAt || auth.user?.planExpiresAt) : "长期"}</strong></div>
                       <div><span>账户余额</span><strong>{formatMoney(billingState.data.balanceCents ?? auth.user?.balanceCents ?? 0, billingState.data.currency || auth.user?.currency)}</strong></div>
                       <div><span>已用张数</span><strong>{formatCount(accountQuota.quotaUsed)}/{formatCount(accountQuota.quotaTotal)}</strong></div>
                       <div><span>套餐余量</span><strong>{formatCount(accountQuota.remaining)}</strong></div>

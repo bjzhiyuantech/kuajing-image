@@ -465,6 +465,7 @@ export interface AuthUser {
   role: UserRole;
   planId?: string;
   planName?: string;
+  planExpiresAt?: string;
   quotaTotal: number;
   quotaUsed: number;
   balanceCents: number;
@@ -645,6 +646,7 @@ export interface BillingOrdersResponse {
 export interface BillingSummaryResponse {
   balance: BillingBalance;
   currentPlan?: BillingPlan;
+  currentPlanExpiresAt?: string;
   plans?: BillingPlan[];
   usage?: BillingUsage;
   storage?: BillingStorageUsage;

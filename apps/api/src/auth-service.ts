@@ -4,6 +4,7 @@ import { hashPassword, requireJwtSecret, signJwt, verifyJwt, verifyPassword } fr
 import type { RequestTenant } from "./auth-context.js";
 import type { AuthMeResponse, AuthResponse, AuthUser, AuthWorkspace } from "./contracts.js";
 import { db } from "./database.js";
+import { ensureUserPlanCurrent } from "./plan-expiration.js";
 import { subscriptionPlans, users, workspaceMembers, workspaces } from "./schema.js";
 
 const DEFAULT_PLAN_ID = "free";
@@ -53,6 +54,7 @@ export async function registerUser(input: RegisterInput): Promise<AuthResponse> 
         displayName,
         role: "user",
         planId: defaultPlan.id,
+        planExpiresAt: null,
         quotaTotal: defaultPlan.imageQuota,
         quotaUsed: 0,
         balanceCents: 0,
@@ -93,6 +95,7 @@ export async function registerUser(input: RegisterInput): Promise<AuthResponse> 
       displayName,
       role: "user",
       planId: defaultPlan.id,
+      planExpiresAt: null,
       quotaTotal: defaultPlan.imageQuota,
       quotaUsed: 0,
       balanceCents: 0,
@@ -117,14 +120,16 @@ export async function loginUser(input: LoginInput): Promise<AuthResponse> {
   if (!user || !verifyPassword(input.password, user.passwordHash)) {
     throw new AuthError("invalid_credentials", "邮箱或密码不正确。", 401);
   }
+  await ensureUserPlanCurrent(user.id);
+  const currentUser = (await findUserByEmail(email)) ?? user;
 
-  const workspace = await findDefaultWorkspace(user.id);
+  const workspace = await findDefaultWorkspace(currentUser.id);
   if (!workspace) {
     throw new AuthError("workspace_missing", "用户工作区不存在。", 403);
   }
 
   return buildAuthResponse({
-    user: toAuthUser(user, await findPlanById(user.planId)),
+    user: toAuthUser(currentUser, await findPlanById(currentUser.planId)),
     workspace
   });
 }
@@ -144,6 +149,7 @@ export async function getAuthSessionFromToken(token: string): Promise<AuthSessio
     return undefined;
   }
 
+  await ensureUserPlanCurrent(payload.sub);
   const [row] = await db
     .select({
       user: users,
@@ -277,6 +283,7 @@ function toAuthUser(row: typeof users.$inferSelect, plan?: Pick<typeof subscript
     role: row.role === "admin" ? "admin" : "user",
     planId: row.planId ?? undefined,
     planName: plan?.name,
+    planExpiresAt: row.planExpiresAt ?? undefined,
     quotaTotal: Number(row.quotaTotal ?? 0),
     quotaUsed: Number(row.quotaUsed ?? 0),
     balanceCents: Number(row.balanceCents ?? 0),

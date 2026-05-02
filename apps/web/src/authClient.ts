@@ -9,6 +9,7 @@ export interface AuthUser {
   role: AuthRole;
   planId?: string;
   planName?: string;
+  planExpiresAt?: string;
   quotaTotal?: number;
   quotaUsed?: number;
   balanceCents?: number;
@@ -173,6 +174,7 @@ export function parseAuthUser(value: unknown): AuthUser {
     role: stringFrom(value.role) || "user",
     planId: stringFrom(value.planId ?? value.plan_id),
     planName: stringFrom(value.planName ?? value.plan_name ?? (isRecord(value.plan) ? value.plan.name : undefined)),
+    planExpiresAt: stringFrom(value.planExpiresAt ?? value.plan_expires_at),
     quotaTotal: numberFrom(value.quota_total ?? value.quotaTotal),
     quotaUsed: numberFrom(value.quota_used ?? value.quotaUsed),
     balanceCents: numberFrom(value.balance_cents ?? value.balanceCents ?? (isRecord(value.balance) ? value.balance.amountCents ?? value.balance.cents : undefined)),

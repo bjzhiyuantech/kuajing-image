@@ -18,6 +18,7 @@ import type {
   SaveBillingSettingsRequest
 } from "./contracts.js";
 import { db } from "./database.js";
+import { ensureUserPlanCurrent, planExpiryFrom } from "./plan-expiration.js";
 import { billingOrders, billingTransactions, subscriptionPlans, systemSettings, users } from "./schema.js";
 
 const BILLING_SETTINGS_KEY = "billing.imageUnitPrice";
@@ -93,6 +94,7 @@ export async function saveAlipayConfig(input: SaveAlipayConfigRequest): Promise<
 }
 
 export async function getBillingSummary(tenant: RequestTenant): Promise<BillingSummaryResponse> {
+  await ensureUserPlanCurrent(tenant.userId);
   const [user] = await db.select().from(users).where(eq(users.id, tenant.userId)).limit(1);
   if (!user) {
     throw new BillingError("user_not_found", "用户不存在。", 404);
@@ -112,6 +114,7 @@ export async function getBillingSummary(tenant: RequestTenant): Promise<BillingS
       currency: user.currency || settingsResponse.settings.currency
     },
     currentPlan: currentPlanRow[0] ? toBillingPlan(currentPlanRow[0]) : undefined,
+    currentPlanExpiresAt: user.planExpiresAt ?? undefined,
     plans: planRows.map(toBillingPlan),
     usage: {
       quotaTotal: Number(user.quotaTotal ?? 0),
@@ -174,6 +177,7 @@ export async function purchasePlan(
   planId: string,
   input: PurchasePlanRequest
 ): Promise<CreatePaymentResponse> {
+  await ensureUserPlanCurrent(tenant.userId);
   const [plan] = await db.select().from(subscriptionPlans).where(eq(subscriptionPlans.id, planId)).limit(1);
   if (!plan || Number(plan.enabled ?? 0) !== 1) {
     throw new BillingError("plan_not_found", "套餐不存在或已停用。", 404);
@@ -280,6 +284,7 @@ export async function reserveGenerationCharge(input: {
     throw new BillingError("invalid_billing_quantity", "生图数量必须大于 0。");
   }
 
+  await ensureUserPlanCurrent(input.tenant.userId);
   const { settings } = await getBillingSettings();
   return db.transaction(async (tx) => {
     const [user] = await tx.select().from(users).where(eq(users.id, input.tenant.userId)).limit(1).for("update");
@@ -450,6 +455,7 @@ async function applyPlanPurchaseByBalance(tenant: RequestTenant, plan: typeof su
       .update(users)
       .set({
         planId: plan.id,
+        planExpiresAt: planExpiryFrom(),
         quotaTotal: Number(plan.imageQuota ?? 0),
         quotaUsed: 0,
         storageQuotaBytes: Number(plan.storageQuotaBytes ?? 0),
@@ -524,6 +530,7 @@ async function applyPaidOrder(
         .update(users)
         .set({
           planId: order.planId,
+          planExpiresAt: planExpiryFrom(),
           quotaTotal: Number(order.imageQuota ?? 0),
           quotaUsed: 0,
           storageQuotaBytes: Number(order.storageQuotaBytes ?? 0),

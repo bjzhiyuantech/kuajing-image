@@ -2,6 +2,7 @@ import {
   AlertTriangle,
   BarChart3,
   CheckCircle2,
+  Clock,
   CreditCard,
   Database,
   ExternalLink,
@@ -195,14 +196,15 @@ export function AccountPage({ user }: { user: AuthUser }) {
   const [billingAction, setBillingAction] = useState("");
   const [billingActionLoading, setBillingActionLoading] = useState("");
   const [billingError, setBillingError] = useState("");
-  const quotaTotal = user.quotaTotal ?? 0;
-  const quotaUsed = user.quotaUsed ?? 0;
+  const quotaTotal = billing.summary.quotaTotal ?? user.quotaTotal ?? 0;
+  const quotaUsed = billing.summary.quotaUsed ?? user.quotaUsed ?? 0;
   const quotaRemaining = billing.summary.packageRemaining ?? Math.max(0, quotaTotal - quotaUsed);
   const quotaPercent = quotaTotal > 0 ? Math.min(100, Math.round((quotaUsed / quotaTotal) * 100)) : 0;
-  const storageQuota = user.storageQuotaBytes ?? 0;
-  const storageUsed = user.storageUsedBytes ?? 0;
+  const storageQuota = billing.summary.storageQuotaBytes ?? user.storageQuotaBytes ?? 0;
+  const storageUsed = billing.summary.storageUsedBytes ?? user.storageUsedBytes ?? 0;
   const storagePercent = storageQuota > 0 ? Math.min(100, Math.round((storageUsed / storageQuota) * 100)) : 0;
   const currentPlanName = billing.currentPlan?.name || user.planName || user.planId || "未设置";
+  const currentPlanExpiresAt = billing.currentPlanExpiresAt || user.planExpiresAt;
   const plans = billing.plans.length > 0 ? billing.plans : fallbackBillingPlans;
 
   async function loadBilling({ preserveNotice = false, signal }: { preserveNotice?: boolean; signal?: AbortSignal } = {}): Promise<void> {
@@ -342,6 +344,7 @@ export function AccountPage({ user }: { user: AuthUser }) {
           <InfoTile label="显示名" value={user.displayName} icon={<User className="size-4" aria-hidden="true" />} />
           <InfoTile label="角色" value={roleLabel(user.role)} icon={<ShieldCheck className="size-4" aria-hidden="true" />} />
           <InfoTile label="当前套餐" value={currentPlanName} icon={<Package className="size-4" aria-hidden="true" />} />
+          <InfoTile label="套餐到期" value={currentPlanExpiresAt ? formatDateTime(currentPlanExpiresAt) : "长期"} icon={<Clock className="size-4" aria-hidden="true" />} />
         </div>
 
         <section className="billing-panel billing-panel--account" aria-labelledby="billing-title">
@@ -995,7 +998,7 @@ export function AdminPage() {
                           <td>{user.email || "-"}</td>
                           <td>{user.displayName || "-"}</td>
                           <td>{roleLabel(user.role)}</td>
-                          <td>{user.planName || user.planId || "未设置"}</td>
+                          <td>{user.planName || user.planId || "未设置"}{user.planExpiresAt ? ` · ${formatDateTime(user.planExpiresAt)}` : ""}</td>
                           <td>{formatMoney(user.balanceCents ?? 0, "CNY")}</td>
                           <td>{quotaLabel(user)}</td>
                           <td>{storageLabel(user)}</td>
@@ -1255,12 +1258,17 @@ interface BillingSummary {
   currency?: string;
   recordCount: number;
   packageRemaining: number;
+  quotaTotal?: number;
+  quotaUsed?: number;
+  storageQuotaBytes?: number;
+  storageUsedBytes?: number;
 }
 
 interface AccountBillingState {
   summary: BillingSummary;
   settings: BillingSettingsView;
   currentPlan?: BillingPlan;
+  currentPlanExpiresAt?: string;
   plans: BillingPlan[];
   transactions: BillingTransactionRow[];
   orders: BillingOrderRow[];
@@ -1290,6 +1298,7 @@ interface AdminUserRow {
   role: string;
   planId?: string;
   planName?: string;
+  planExpiresAt?: string;
   quotaTotal?: number;
   quotaUsed?: number;
   balanceCents?: number;
@@ -1411,6 +1420,7 @@ function parseBillingSummary(value: unknown, fallback: BillingSummary): BillingS
   const quota = isRecord(body.quota) ? body.quota : {};
   const balance = isRecord(body.balance) ? body.balance : {};
   const usage = isRecord(body.usage) ? body.usage : {};
+  const storage = isRecord(body.storage) ? body.storage : {};
   return {
     balanceCents:
       numberFrom(
@@ -1444,7 +1454,11 @@ function parseBillingSummary(value: unknown, fallback: BillingSummary): BillingS
           usage.package_remaining ??
           quota.remaining
       ) ??
-      fallback.packageRemaining
+      fallback.packageRemaining,
+    quotaTotal: numberFrom(body.quotaTotal ?? body.quota_total ?? usage.quotaTotal ?? usage.quota_total ?? usage.total),
+    quotaUsed: numberFrom(body.quotaUsed ?? body.quota_used ?? usage.quotaUsed ?? usage.quota_used ?? usage.used),
+    storageQuotaBytes: numberFrom(body.storageQuotaBytes ?? body.storage_quota_bytes ?? storage.quotaBytes ?? storage.quota_bytes),
+    storageUsedBytes: numberFrom(body.storageUsedBytes ?? body.storage_used_bytes ?? storage.usedBytes ?? storage.used_bytes)
   };
 }
 
@@ -1484,6 +1498,7 @@ function parseAccountBilling(value: unknown, user: AuthUser): AccountBillingStat
       currency: stringFrom(settings.currency) || "CNY"
     },
     currentPlan,
+    currentPlanExpiresAt: stringFrom(body.currentPlanExpiresAt ?? body.current_plan_expires_at),
     plans,
     transactions: parseBillingTransactions(body),
     orders: parseBillingOrders(body)
@@ -1554,6 +1569,7 @@ function parseUsers(value: unknown): AdminUserRow[] {
     role: stringFrom(item.role) || "user",
     planId: stringFrom(item.planId ?? item.plan_id),
     planName: stringFrom(item.planName ?? item.plan_name ?? (isRecord(item.plan) ? item.plan.name : undefined)),
+    planExpiresAt: stringFrom(item.planExpiresAt ?? item.plan_expires_at),
     quotaTotal: numberFrom(item.quota_total ?? item.quotaTotal),
     quotaUsed: numberFrom(item.quota_used ?? item.quotaUsed),
     balanceCents: numberFrom(item.balance_cents ?? item.balanceCents ?? item.balance),
