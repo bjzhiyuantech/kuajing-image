@@ -1050,6 +1050,9 @@ export function SidePanelApp() {
   }, []);
 
   useEffect(() => {
+    if (textTranslationViewOpen) {
+      return;
+    }
     if (task.status !== "pending" && task.status !== "running") {
       setBatchGenerationLocked(false);
       return;
@@ -1078,7 +1081,7 @@ export function SidePanelApp() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [auth.token, task.id, task.status]);
+  }, [auth.token, task.id, task.status, textTranslationViewOpen]);
 
   useEffect(() => {
     if (!toolPanelOpen) {
