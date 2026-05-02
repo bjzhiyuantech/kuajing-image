@@ -29,6 +29,7 @@ export interface PersistedEcommerceBatchRequest {
   market: EcommerceMarket;
   textLanguage?: EcommerceTextLanguage;
   allowTextRecreation?: boolean;
+  removeWatermarkAndLogo?: boolean;
   sceneTemplateIds: EcommerceSceneTemplateId[];
   sourcePageUrl?: string;
   size: ImageSize;

@@ -229,6 +229,7 @@ export interface EcommercePromptContext {
   market: EcommerceMarket;
   textLanguage?: EcommerceTextLanguage;
   allowTextRecreation?: boolean;
+  removeWatermarkAndLogo?: boolean;
   sceneTemplateId: EcommerceSceneTemplateId;
   extraDirection?: string;
 }
@@ -765,6 +766,7 @@ export interface EcommerceBatchGenerateRequest {
   market: EcommerceMarket;
   textLanguage?: EcommerceTextLanguage;
   allowTextRecreation?: boolean;
+  removeWatermarkAndLogo?: boolean;
   sceneTemplateIds: EcommerceSceneTemplateId[];
   sourcePageUrl?: string;
   sizePresetId?: ImageSizePresetId;
@@ -864,7 +866,17 @@ export function composeEcommercePrompt(context: EcommercePromptContext): string 
       : "";
   const textRecreationGuard =
     textLanguage && textLanguage.id !== "none" && context.allowTextRecreation === false
-      ? "No secondary creative rewrite for image text: do not modify the original image style. Only translate the original image text into the corresponding target-language text."
+      ? [
+          "Strict non-creative translation mode:",
+          "Keep the original composition, crop, camera angle, product position, background, spacing, typography hierarchy, text block positions, line breaks, alignment, and approximate font weight/style as close to the source image as possible.",
+          `Translate each original text phrase literally and faithfully into ${textLanguage.promptLabel}; preserve the original meaning and claims without rewriting, summarizing, expanding, replacing, or inventing new copy.`,
+          "Do not add new slogans, brand words, frames, decorative text, selling points, paragraphs, or layout elements. Do not remove original selling-point text unless it is an actual watermark/logo cleanup target.",
+          "Only replace the source text with the corresponding translated text in the same visual location; keep all non-text visual content unchanged."
+        ].join(" ")
+      : "";
+  const cleanupGuard =
+    context.removeWatermarkAndLogo !== false
+      ? "Cleanup rule: remove watermarks, logos, unrelated icons, stickers, badges, decorative image overlays, and any text that is not product selling-point copy. Keep the product itself and useful selling-point copy clear and readable."
       : "";
 
   return [
@@ -874,6 +886,7 @@ export function composeEcommercePrompt(context: EcommercePromptContext): string 
     modeGuard,
     textLanguageGuard,
     textRecreationGuard,
+    cleanupGuard,
     "Keep the result accurate and commercially usable. Avoid watermarks, unreadable text, misleading claims, and extra hands or people unless explicitly requested."
   ].filter(Boolean).join("\n");
 }

@@ -30,6 +30,8 @@ import {
   ECOMMERCE_PLATFORMS,
   ECOMMERCE_SCENE_TEMPLATES,
   ECOMMERCE_TEXT_LANGUAGES,
+  IMAGE_SIZE_MULTIPLE,
+  MAX_IMAGE_ASPECT_RATIO,
   SIZE_PRESETS,
   composeEcommercePrompt,
   type BillingOrder,
@@ -176,7 +178,9 @@ const defaultForm: BatchFormState = {
   market: "us",
   textLanguage: "none",
   allowTextRecreation: true,
+  removeWatermarkAndLogo: true,
   sceneTemplateIds: ["marketplace-main", "logo-benefit", "feature-benefit"],
+  sizeMode: "preset",
   size: { width: 1024, height: 1024 },
   stylePresetId: "product",
   quality: "auto",
@@ -224,6 +228,9 @@ const styleOptions: Array<{ id: StylePresetId; label: string }> = [
   { id: "illustration", label: "精致插画" },
   { id: "none", label: "无风格" }
 ];
+
+const SOURCE_ASPECT_SIZE_OPTION = "source-aspect";
+const SOURCE_ASPECT_BASE_SIZE = 1024;
 
 const isApiAssetUrl = (url: string): boolean => url.startsWith("/api/assets/");
 
@@ -299,6 +306,26 @@ function imageFromUrl(url: string): Promise<HTMLImageElement> {
     image.onerror = () => reject(new Error("图片载入失败。"));
     image.src = url;
   });
+}
+
+function roundToImageSizeMultiple(value: number): number {
+  return Math.max(IMAGE_SIZE_MULTIPLE, Math.round(value / IMAGE_SIZE_MULTIPLE) * IMAGE_SIZE_MULTIPLE);
+}
+
+function sizeFromImageAspect(width: number, height: number): { width: number; height: number } {
+  const rawRatio = width > 0 && height > 0 ? width / height : 1;
+  const ratio = Math.min(MAX_IMAGE_ASPECT_RATIO, Math.max(1 / MAX_IMAGE_ASPECT_RATIO, rawRatio));
+  if (ratio >= 1) {
+    return {
+      width: roundToImageSizeMultiple(SOURCE_ASPECT_BASE_SIZE * ratio),
+      height: SOURCE_ASPECT_BASE_SIZE
+    };
+  }
+
+  return {
+    width: SOURCE_ASPECT_BASE_SIZE,
+    height: roundToImageSizeMultiple(SOURCE_ASPECT_BASE_SIZE / ratio)
+  };
 }
 
 function drawContainedImage(ctx: CanvasRenderingContext2D, image: HTMLImageElement, x: number, y: number, width: number, height: number): void {
@@ -784,6 +811,7 @@ export function SidePanelApp() {
   const pageImageUrls = pageContext?.imageUrls ?? [];
   const selectedReferenceImageUrl = form.referenceImageUrl.trim();
   const selectedReferenceImageUrls = form.referenceImageUrls.length > 0 ? form.referenceImageUrls : selectedReferenceImageUrl ? [selectedReferenceImageUrl] : [];
+  const selectedReferenceImageUrlsKey = selectedReferenceImageUrls.join("|");
   const referenceImageOptions = useMemo(
     () => [
       ...uploadedReferenceImages.map((image) => ({ key: image.id, url: image.dataUrl, label: image.fileName, uploaded: true })),
@@ -806,6 +834,13 @@ export function SidePanelApp() {
   }, [hiddenResultKeys, localResultRecords, task.records]);
 
   const brandOverlayReady = form.brandOverlay.enabled && Boolean(form.brandOverlay.logoDataUrl || form.brandOverlay.text.trim());
+
+  useEffect(() => {
+    if (form.sizeMode !== "source") {
+      return;
+    }
+    void applySourceAspectSize(selectedReferenceImageUrls);
+  }, [form.sizeMode, selectedReferenceImageUrlsKey]);
 
   const accountQuota = useMemo(() => {
     const quotaTotal = billingState.data.quotaTotal ?? auth.user?.quotaTotal ?? 0;
@@ -1582,6 +1617,32 @@ export function SidePanelApp() {
     }));
   }
 
+  async function applySourceAspectSize(urls = selectedReferenceImageUrls): Promise<void> {
+    const sourceUrl = urls[0]?.trim();
+    if (!sourceUrl) {
+      setTask((current) => ({
+        ...current,
+        message: "原图比例需要先选择一张参考图。"
+      }));
+      return;
+    }
+
+    try {
+      const image = await imageFromUrl(sourceUrl);
+      const nextSize = sizeFromImageAspect(image.naturalWidth, image.naturalHeight);
+      setForm((current) => (current.sizeMode === "source" ? { ...current, size: nextSize } : current));
+      setTask((current) => ({
+        ...current,
+        message: `已按原图比例设置尺寸：${nextSize.width} x ${nextSize.height}。`
+      }));
+    } catch {
+      setTask((current) => ({
+        ...current,
+        message: "原图比例读取失败，请换一张参考图或手动选择固定尺寸。"
+      }));
+    }
+  }
+
   function toggleReferenceImage(url: string): void {
     setForm((current) => {
       const exists = current.referenceImageUrls.includes(url);
@@ -1786,7 +1847,8 @@ export function SidePanelApp() {
       sceneTemplateIds: defaultSceneIdsByMode[generationMode],
       stylePresetId: generationMode === "enhance" ? "product" : "photoreal",
       textLanguage: generationMode === "enhance" ? current.textLanguage : "none",
-      allowTextRecreation: generationMode === "enhance" ? current.allowTextRecreation : true
+      allowTextRecreation: generationMode === "enhance" ? current.allowTextRecreation : true,
+      removeWatermarkAndLogo: generationMode === "enhance" ? current.removeWatermarkAndLogo : true
     }));
     setTask((current) => ({
       ...current,
@@ -1827,6 +1889,7 @@ export function SidePanelApp() {
         market: form.market,
         textLanguage: form.textLanguage,
         allowTextRecreation: form.allowTextRecreation,
+        removeWatermarkAndLogo: form.removeWatermarkAndLogo,
         sceneTemplateId: scene.id,
         extraDirection: form.extraDirection
       }),
@@ -1852,6 +1915,7 @@ export function SidePanelApp() {
           market: form.market,
           textLanguage: form.textLanguage,
           allowTextRecreation: form.allowTextRecreation,
+          removeWatermarkAndLogo: form.removeWatermarkAndLogo,
           sceneTemplateIds: form.sceneTemplateIds,
           sourcePageUrl: pageContext?.url,
           size: form.size,
@@ -2111,6 +2175,20 @@ export function SidePanelApp() {
               </select>
             </label>
           </div>
+          <div className="toggle-row">
+            <div>
+              <h2>去水印 / Logo</h2>
+              <p>勾选后，会移除水印、Logo、非卖点介绍文字以及无关图片元素。</p>
+            </div>
+            <label className="switch-control">
+              <input
+                checked={form.removeWatermarkAndLogo}
+                type="checkbox"
+                onChange={(event) => setForm({ ...form, removeWatermarkAndLogo: event.target.checked })}
+              />
+              <span />
+            </label>
+          </div>
         </section>
       ) : null}
 
@@ -2179,12 +2257,20 @@ export function SidePanelApp() {
           <label>
             <span>尺寸</span>
             <select
-              value={`${form.size.width}x${form.size.height}`}
+              value={form.sizeMode === "source" ? SOURCE_ASPECT_SIZE_OPTION : `${form.size.width}x${form.size.height}`}
               onChange={(event) => {
+                if (event.target.value === SOURCE_ASPECT_SIZE_OPTION) {
+                  setForm({ ...form, sizeMode: "source" });
+                  void applySourceAspectSize();
+                  return;
+                }
                 const [width, height] = event.target.value.split("x").map((value) => Number.parseInt(value, 10));
-                setForm({ ...form, size: { width, height } });
+                setForm({ ...form, sizeMode: "preset", size: { width, height } });
               }}
             >
+              <option disabled={selectedReferenceImageUrls.length === 0} value={SOURCE_ASPECT_SIZE_OPTION}>
+                原图比例{form.sizeMode === "source" ? ` (${form.size.width}x${form.size.height})` : ""}
+              </option>
               {SIZE_PRESETS.slice(0, 6).map((preset) => (
                 <option key={preset.id} value={`${preset.width}x${preset.height}`}>{preset.label}</option>
               ))}
@@ -2498,7 +2584,19 @@ export function SidePanelApp() {
                   const progress = job.progress ?? (total > 0 ? Math.round((completed / total) * 100) : undefined);
                   const assets = job.records?.flatMap((record) => record.outputs.flatMap((output) => output.asset ? [output.asset] : [])) ?? [];
                   return (
-                    <article className="history-card" key={job.id}>
+                    <article
+                      className="history-card"
+                      key={job.id}
+                      onClick={() => openHistoryJob(job)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          openHistoryJob(job);
+                        }
+                      }}
+                      role="button"
+                      tabIndex={0}
+                    >
                       <div className="history-card-top">
                         <strong>{job.status}</strong>
                         <span>{formatDateTime(job.createdAt)}</span>
@@ -2510,12 +2608,26 @@ export function SidePanelApp() {
                         </div>
                       </div>
                       <p>{job.id}</p>
-                      <button className="mini-button history-open" type="button" onClick={() => openHistoryJob(job)}>
+                      <button
+                        className="mini-button history-open"
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          openHistoryJob(job);
+                        }}
+                      >
                         <ImageIcon size={13} />
                         打开作品
                       </button>
                       {job.sourcePageUrl ? (
-                        <a className="source-link" href={job.sourcePageUrl} target="_blank" rel="noreferrer" title={job.sourcePageUrl}>
+                        <a
+                          className="source-link"
+                          href={job.sourcePageUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          title={job.sourcePageUrl}
+                          onClick={(event) => event.stopPropagation()}
+                        >
                           <ExternalLink size={13} />
                           <span>{formatSourceUrl(job.sourcePageUrl)}</span>
                         </a>
@@ -2524,10 +2636,19 @@ export function SidePanelApp() {
                       )}
                       {assets.length > 0 ? (
                         <div className="asset-list">
-                          {assets.slice(0, 6).map((asset) => (
-                            <a href={authenticatedApiUrl(asset.url)} key={asset.id} target="_blank" rel="noreferrer">
-                              图片
-                            </a>
+                          {assets.map((asset, index) => (
+                            <button
+                              className="asset-thumb"
+                              key={asset.id}
+                              title={`打开第 ${index + 1} 张图片`}
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void openGalleryPreview(asset);
+                              }}
+                            >
+                              <img alt={`任务图片 ${index + 1}`} loading="lazy" src={assetPreviewUrl(asset, 192)} />
+                            </button>
                           ))}
                         </div>
                       ) : (

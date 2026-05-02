@@ -905,6 +905,7 @@ async function runEcommerceBatchJob(jobId: string): Promise<void> {
             market: job.input.market,
             textLanguage: job.input.textLanguage,
             allowTextRecreation: job.input.allowTextRecreation,
+            removeWatermarkAndLogo: job.input.removeWatermarkAndLogo,
             sceneTemplateId,
             extraDirection: job.input.extraDirection
           });
@@ -974,6 +975,7 @@ function failedEcommerceSceneRecord(
     market: input.market,
     textLanguage: input.textLanguage,
     allowTextRecreation: input.allowTextRecreation,
+    removeWatermarkAndLogo: input.removeWatermarkAndLogo,
     sceneTemplateId,
     extraDirection: input.extraDirection
   });
@@ -2064,6 +2066,7 @@ function parseEcommerceBatchPayload(input: unknown): ParseResult<ResolvedEcommer
       market: market.value,
       textLanguage: textLanguage.value,
       allowTextRecreation: parseOptionalBoolean(input.allowTextRecreation) ?? true,
+      removeWatermarkAndLogo: parseOptionalBoolean(input.removeWatermarkAndLogo) ?? true,
       sceneTemplateIds: sceneTemplateIds.value,
       size: resolvedSize.size,
       stylePresetId: stylePreset.value,
