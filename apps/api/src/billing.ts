@@ -544,6 +544,15 @@ async function applyPaidOrder(
       })
       .where(eq(billingOrders.id, order.id));
 
+    const [existingTransaction] = await tx
+      .select({ id: billingTransactions.id })
+      .from(billingTransactions)
+      .where(and(eq(billingTransactions.relatedId, order.id), eq(billingTransactions.type, order.type)))
+      .limit(1);
+    if (existingTransaction) {
+      return;
+    }
+
     await tx.insert(billingTransactions).values({
       id: randomUUID(),
       userId: user.id,
@@ -561,7 +570,7 @@ async function applyPaidOrder(
       imageCount: Number(order.imageQuota ?? 0),
       quotaCount: Number(order.imageQuota ?? 0),
       unitPriceCents: 0,
-      relatedId: null,
+      relatedId: order.id,
       note: order.type === "recharge" ? "支付宝充值到账" : "支付宝购买套餐生效",
       createdByUserId: user.id,
       metadataJson: JSON.stringify({ orderId: order.id, outTradeNo: order.outTradeNo, planId: order.planId }),
