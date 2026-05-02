@@ -315,6 +315,37 @@ async function createSchema(): Promise<void> {
   await migrateBillingTransactionsTable();
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS billing_orders (
+      id VARCHAR(64) PRIMARY KEY,
+      out_trade_no VARCHAR(128) NOT NULL,
+      user_id VARCHAR(64) NOT NULL,
+      workspace_id VARCHAR(64),
+      type VARCHAR(64) NOT NULL,
+      status VARCHAR(32) NOT NULL,
+      title VARCHAR(255) NOT NULL,
+      amount_cents BIGINT NOT NULL DEFAULT 0,
+      currency VARCHAR(16) NOT NULL DEFAULT 'CNY',
+      plan_id VARCHAR(64),
+      image_quota BIGINT NOT NULL DEFAULT 0,
+      storage_quota_bytes BIGINT NOT NULL DEFAULT 0,
+      payment_provider VARCHAR(32) NOT NULL DEFAULT 'alipay',
+      payment_url TEXT,
+      provider_trade_no VARCHAR(128),
+      paid_at VARCHAR(32),
+      closed_at VARCHAR(32),
+      metadata_json LONGTEXT,
+      notify_json LONGTEXT,
+      created_at VARCHAR(32) NOT NULL,
+      updated_at VARCHAR(32) NOT NULL,
+      UNIQUE KEY billing_orders_out_trade_no_unique_idx (out_trade_no),
+      KEY billing_orders_user_created_at_idx (user_id, created_at),
+      KEY billing_orders_status_created_at_idx (status, created_at),
+      CONSTRAINT billing_orders_user_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+  await migrateBillingOrdersTable();
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS ecommerce_batch_jobs (
       id VARCHAR(64) PRIMARY KEY,
       workspace_id VARCHAR(64) NOT NULL,
@@ -537,6 +568,34 @@ async function migrateBillingTransactionsTable(): Promise<void> {
     "billing_transactions",
     "billing_transactions_type_created_at_idx",
     "KEY billing_transactions_type_created_at_idx (type, created_at)"
+  );
+}
+
+async function migrateBillingOrdersTable(): Promise<void> {
+  await addColumnIfMissing("billing_orders", "workspace_id", "VARCHAR(64)");
+  await addColumnIfMissing("billing_orders", "plan_id", "VARCHAR(64)");
+  await addColumnIfMissing("billing_orders", "image_quota", "BIGINT NOT NULL DEFAULT 0");
+  await addColumnIfMissing("billing_orders", "storage_quota_bytes", "BIGINT NOT NULL DEFAULT 0");
+  await addColumnIfMissing("billing_orders", "payment_url", "TEXT");
+  await addColumnIfMissing("billing_orders", "provider_trade_no", "VARCHAR(128)");
+  await addColumnIfMissing("billing_orders", "paid_at", "VARCHAR(32)");
+  await addColumnIfMissing("billing_orders", "closed_at", "VARCHAR(32)");
+  await addColumnIfMissing("billing_orders", "metadata_json", "LONGTEXT");
+  await addColumnIfMissing("billing_orders", "notify_json", "LONGTEXT");
+  await addIndexIfMissing(
+    "billing_orders",
+    "billing_orders_out_trade_no_unique_idx",
+    "UNIQUE KEY billing_orders_out_trade_no_unique_idx (out_trade_no)"
+  );
+  await addIndexIfMissing(
+    "billing_orders",
+    "billing_orders_user_created_at_idx",
+    "KEY billing_orders_user_created_at_idx (user_id, created_at)"
+  );
+  await addIndexIfMissing(
+    "billing_orders",
+    "billing_orders_status_created_at_idx",
+    "KEY billing_orders_status_created_at_idx (status, created_at)"
   );
 }
 

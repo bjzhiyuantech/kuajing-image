@@ -491,6 +491,10 @@ body {
   gap: 1rem;
 }
 
+.billing-panel--account {
+  gap: 0.9rem;
+}
+
 .billing-panel__header {
   display: flex;
   align-items: flex-start;
@@ -511,6 +515,51 @@ body {
   border: 1px solid #99f6e4;
   background: #f0fdfa;
   color: #0f766e;
+}
+
+.billing-alert--warning {
+  border: 1px solid #fde68a;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.account-billing-overview {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.billing-stat-card {
+  border: 1px solid #dbe5ef;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 0.85rem;
+}
+
+.billing-stat-card span {
+  display: block;
+  color: #64748b;
+  font-size: 0.74rem;
+  font-weight: 800;
+}
+
+.billing-stat-card strong {
+  display: block;
+  margin-top: 0.3rem;
+  color: #0f172a;
+  font-size: 1.06rem;
+  font-weight: 900;
+}
+
+.recharge-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: end;
+}
+
+.recharge-form label {
+  margin-top: 0;
 }
 
 .plan-grid {
@@ -617,6 +666,79 @@ body {
   height: 0.35rem;
   border-radius: 999px;
   background: #14b8a6;
+}
+
+.plan-card__actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.compact-ledger {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.compact-ledger h3 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 0.92rem;
+  font-weight: 850;
+}
+
+.compact-ledger p {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.84rem;
+}
+
+.compact-ledger__list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.compact-ledger__item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.8rem;
+  align-items: start;
+  border: 1px solid #dbe5ef;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 0.8rem;
+}
+
+.compact-ledger__item strong,
+.compact-ledger__item em {
+  display: block;
+  font-style: normal;
+}
+
+.compact-ledger__item strong {
+  color: #0f172a;
+  font-size: 0.9rem;
+  font-weight: 850;
+}
+
+.compact-ledger__item span {
+  display: block;
+  margin-top: 0.2rem;
+  color: #64748b;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.compact-ledger__item em {
+  color: #0f766e;
+  font-size: 0.92rem;
+  font-weight: 900;
+  text-align: right;
+}
+
+.account-ledger-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
 }
 
 .quota-meter {
@@ -1020,7 +1142,7 @@ body {
 }
 
 .app-shell {
-  padding-right: var(--ai-panel-width);
+  padding-left: var(--ai-panel-width);
 }
 
 .ai-panel {
@@ -1123,13 +1245,13 @@ body {
 
   .app-shell {
     --mobile-drawer-width: min(420px, calc(100vw - 40px));
-    padding-right: 0;
+    padding-left: 0;
   }
 
   .ai-panel {
     width: var(--mobile-drawer-width);
     max-width: var(--mobile-drawer-width);
-    transform: translateX(calc(100% + 40px));
+    transform: translateX(calc(-100% - 40px));
     transition:
       transform 180ms ease,
       visibility 0s linear 180ms;
@@ -1154,7 +1276,7 @@ body {
     position: fixed;
     inset: 0;
     top: var(--app-nav-height);
-    right: var(--mobile-drawer-width);
+    left: var(--mobile-drawer-width);
     z-index: 1900;
     cursor: default;
     border: 0;
@@ -1264,7 +1386,10 @@ body {
   .admin-billing-grid,
   .admin-form-grid--two,
   .plan-grid,
-  .recharge-form {
+  .recharge-form,
+  .account-billing-overview,
+  .account-ledger-grid,
+  .plan-card__actions {
     grid-template-columns: 1fr;
   }
 
@@ -2195,9 +2320,9 @@ a:focus-visible {
 }
 
 .ai-panel {
-  border-left-color: var(--line);
+  border-right-color: var(--line);
   background: var(--paper-panel);
-  box-shadow: -20px 0 70px rgb(51 36 24 / 0.16);
+  box-shadow: 20px 0 70px rgb(51 36 24 / 0.16);
 }
 
 .ai-panel > div:first-child,
@@ -3076,7 +3201,7 @@ a:focus-visible {
   }
 
   .ai-panel {
-    box-shadow: -20px 0 60px rgb(21 17 13 / 0.24);
+    box-shadow: 20px 0 60px rgb(21 17 13 / 0.24);
   }
 
   .ai-panel-backdrop {

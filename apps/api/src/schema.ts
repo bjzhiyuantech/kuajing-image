@@ -92,6 +92,40 @@ export const billingTransactions = mysqlTable(
   })
 );
 
+export const billingOrders = mysqlTable(
+  "billing_orders",
+  {
+    id: id("id").primaryKey(),
+    outTradeNo: shortText("out_trade_no", 128).notNull(),
+    userId: id("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    workspaceId: id("workspace_id"),
+    type: shortText("type", 64).notNull(),
+    status: shortText("status", 32).notNull(),
+    title: shortText("title", 255).notNull(),
+    amountCents: bigint("amount_cents", { mode: "number" }).notNull(),
+    currency: shortText("currency", 16).notNull(),
+    planId: id("plan_id"),
+    imageQuota: bigint("image_quota", { mode: "number" }).notNull(),
+    storageQuotaBytes: bigint("storage_quota_bytes", { mode: "number" }).notNull(),
+    paymentProvider: shortText("payment_provider", 32).notNull(),
+    paymentUrl: text("payment_url"),
+    providerTradeNo: shortText("provider_trade_no", 128),
+    paidAt: isoDate("paid_at"),
+    closedAt: isoDate("closed_at"),
+    metadataJson: longtext("metadata_json"),
+    notifyJson: longtext("notify_json"),
+    createdAt: isoDate("created_at").notNull(),
+    updatedAt: isoDate("updated_at").notNull()
+  },
+  (table) => ({
+    outTradeNoIdx: uniqueIndex("billing_orders_out_trade_no_unique_idx").on(table.outTradeNo),
+    userCreatedAtIdx: index("billing_orders_user_created_at_idx").on(table.userId, table.createdAt),
+    statusCreatedAtIdx: index("billing_orders_status_created_at_idx").on(table.status, table.createdAt)
+  })
+);
+
 export const workspaces = mysqlTable("workspaces", {
   id: id("id").primaryKey(),
   name: shortText("name").notNull(),

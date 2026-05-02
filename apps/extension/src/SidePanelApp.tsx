@@ -22,7 +22,7 @@ import {
   Wand2,
   X
 } from "lucide-react";
-import type { FormEvent } from "react";
+import type { ChangeEvent, FormEvent } from "react";
 import { useEffect, useMemo, useState } from "react";
 import {
   ECOMMERCE_MARKETS,
@@ -30,6 +30,7 @@ import {
   ECOMMERCE_SCENE_TEMPLATES,
   SIZE_PRESETS,
   composeEcommercePrompt,
+  type BillingOrder,
   type BillingTransaction,
   type BillingPlan,
   type EcommerceBatchGenerateResponse,
@@ -125,6 +126,8 @@ interface BillingOverview {
   currentPlan?: BillingPlan;
   plans: BillingPlan[];
   transactions: BillingTransaction[];
+  orders: BillingOrder[];
+  imageUnitPriceCents: number;
   quotaTotal: number;
   quotaUsed: number;
   packageTotal?: number;
@@ -172,7 +175,14 @@ const defaultForm: BatchFormState = {
   outputFormat: "png",
   countPerScene: 1,
   referenceImageUrl: "",
-  extraDirection: ""
+  extraDirection: "",
+  brandOverlay: {
+    enabled: false,
+    logoDataUrl: "",
+    logoFileName: "",
+    text: "",
+    placement: "top-right"
+  }
 };
 
 const defaultSceneIdsByMode: Record<EcommerceGenerationMode, EcommerceSceneTemplateId[]> = {
@@ -181,7 +191,7 @@ const defaultSceneIdsByMode: Record<EcommerceGenerationMode, EcommerceSceneTempl
 };
 
 const generationModes: Array<{ id: EcommerceGenerationMode; label: string; hint: string }> = [
-  { id: "enhance", label: "原图增强", hint: "保留商品原貌，加 Logo、卖点文字和电商排版。" },
+  { id: "enhance", label: "原图增强", hint: "保留商品原貌，生成卖点文字和电商排版。" },
   { id: "creative", label: "场景创作", hint: "依据主图生成生活方式、模特穿戴和搭配场景。" }
 ];
 
@@ -241,18 +251,68 @@ async function referenceImageFromUrl(url: string): Promise<{ dataUrl: string; fi
   }
 
   return {
-    dataUrl: await blobToDataUrl(blob),
+    dataUrl: await blobToDataUrl(blob, "参考图转换失败。"),
     fileName: fileNameFromUrl(url)
   };
 }
 
-function blobToDataUrl(blob: Blob): Promise<string> {
+function blobToDataUrl(blob: Blob, errorMessage = "图片转换失败。"): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(new Error("参考图转换失败。"));
+    reader.onerror = () => reject(new Error(errorMessage));
     reader.readAsDataURL(blob);
   });
+}
+
+function downloadBlob(blob: Blob, fileName: string): void {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  anchor.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function downloadUrl(url: string, fileName: string): void {
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  anchor.target = "_blank";
+  anchor.rel = "noreferrer";
+  anchor.click();
+}
+
+function imageFromUrl(url: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("图片载入失败。"));
+    image.src = url;
+  });
+}
+
+function roundedRect(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number): void {
+  const safeRadius = Math.min(radius, width / 2, height / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + safeRadius, y);
+  ctx.lineTo(x + width - safeRadius, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + safeRadius);
+  ctx.lineTo(x + width, y + height - safeRadius);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - safeRadius, y + height);
+  ctx.lineTo(x + safeRadius, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - safeRadius);
+  ctx.lineTo(x, y + safeRadius);
+  ctx.quadraticCurveTo(x, y, x + safeRadius, y);
+  ctx.closePath();
+}
+
+function brandedFileName(fileName: string): string {
+  const index = fileName.lastIndexOf(".");
+  if (index <= 0) {
+    return `${fileName}-brand`;
+  }
+  return `${fileName.slice(0, index)}-brand${fileName.slice(index)}`;
 }
 
 function fileNameFromUrl(url: string): string | undefined {
@@ -368,8 +428,10 @@ function normalizeBillingResponse(payload: unknown, user: AuthUser | null): Bill
   const data = asRecord(root.data ?? root.billing ?? payload);
   const balance = asRecord(data.balance ?? root.balance);
   const usage = asRecord(data.usage ?? root.usage ?? data.quota ?? root.quota);
+  const settings = asRecord(data.settings ?? root.settings);
   const currentPlan = normalizePlan(data.currentPlan ?? data.plan ?? root.currentPlan ?? root.plan);
   const transactions = normalizeBillingTransactions(data.transactions ?? root.transactions);
+  const orders = normalizeBillingOrders(data.orders ?? root.orders);
   const latestBalance = transactions.find((transaction) => typeof transaction.balanceAfterCents === "number")?.balanceAfterCents;
   const planItems = Array.isArray(data.plans)
     ? data.plans
@@ -390,6 +452,8 @@ function normalizeBillingResponse(payload: unknown, user: AuthUser | null): Bill
     currentPlan: currentPlan ?? undefined,
     plans: planItems.map((item, index) => normalizePlan(item, index)).filter((plan): plan is BillingPlan => Boolean(plan)),
     transactions,
+    orders,
+    imageUnitPriceCents: firstNumber(settings, ["imageUnitPriceCents", "image_unit_price_cents", "singleImagePriceCents"]) ?? 0,
     quotaTotal: firstNumber(usage, ["quotaTotal", "total", "imageQuota"]) ?? user?.quotaTotal ?? 0,
     quotaUsed: firstNumber(usage, ["quotaUsed", "used", "usedQuota"]) ?? user?.quotaUsed ?? 0,
     packageTotal: firstNumber(usage, ["packageTotal", "planQuota", "packageQuota"]) ?? user?.packageTotal,
@@ -399,6 +463,11 @@ function normalizeBillingResponse(payload: unknown, user: AuthUser | null): Bill
       user?.packageRemaining ??
       Math.max((user?.quotaTotal ?? 0) - (user?.quotaUsed ?? 0), 0)
   };
+}
+
+function mergeBillingOrders(overview: BillingOverview, payload: unknown): BillingOverview {
+  const orders = normalizeBillingOrders(payload);
+  return orders.length > 0 ? { ...overview, orders } : overview;
 }
 
 function normalizeBillingTransactions(value: unknown): BillingTransaction[] {
@@ -430,6 +499,58 @@ function normalizeBillingTransactions(value: unknown): BillingTransaction[] {
   });
 }
 
+function normalizeBillingOrders(value: unknown): BillingOrder[] {
+  const root = asRecord(value);
+  const items = Array.isArray(value)
+    ? value
+    : Array.isArray(root.orders)
+      ? root.orders
+      : Array.isArray(root.items)
+        ? root.items
+        : Array.isArray(root.data)
+          ? root.data
+          : [];
+  return items.map((item, index) => {
+    const source = asRecord(item);
+    return {
+      id: firstString(source, ["id", "orderId"]) ?? `order-${index}`,
+      outTradeNo: firstString(source, ["outTradeNo", "out_trade_no"]) ?? "",
+      userId: firstString(source, ["userId", "user_id"]),
+      userEmail: firstString(source, ["userEmail", "user_email"]),
+      workspaceId: firstString(source, ["workspaceId", "workspace_id"]),
+      type: firstString(source, ["type"]) ?? "-",
+      status: firstString(source, ["status"]) ?? "-",
+      title: firstString(source, ["title"]) ?? "-",
+      amountCents: firstNumber(source, ["amountCents", "amount_cents", "priceCents"]) ?? 0,
+      currency: firstString(source, ["currency"]) ?? "CNY",
+      planId: firstString(source, ["planId", "plan_id"]),
+      imageQuota: firstNumber(source, ["imageQuota", "image_quota"]),
+      storageQuotaBytes: firstNumber(source, ["storageQuotaBytes", "storage_quota_bytes"]),
+      paymentProvider: firstString(source, ["paymentProvider", "payment_provider", "provider"]) ?? "-",
+      paymentUrl: firstString(source, ["paymentUrl", "payment_url", "checkoutUrl", "checkout_url"]),
+      providerTradeNo: firstString(source, ["providerTradeNo", "provider_trade_no"]),
+      paidAt: firstString(source, ["paidAt", "paid_at"]),
+      closedAt: firstString(source, ["closedAt", "closed_at"]),
+      createdAt: firstString(source, ["createdAt", "created_at"]) ?? "",
+      updatedAt: firstString(source, ["updatedAt", "updated_at"]) ?? ""
+    };
+  });
+}
+
+function paymentUrlFrom(payload: unknown): string {
+  const root = asRecord(payload);
+  const data = asRecord(root.data);
+  const order = asRecord(root.order ?? data.order);
+  const payment = asRecord(root.payment ?? data.payment);
+  return (
+    firstString(root, ["paymentUrl", "payment_url", "checkoutUrl", "checkout_url", "payUrl", "pay_url"]) ??
+    firstString(data, ["paymentUrl", "payment_url", "checkoutUrl", "checkout_url", "payUrl", "pay_url"]) ??
+    firstString(order, ["paymentUrl", "payment_url", "checkoutUrl", "checkout_url"]) ??
+    firstString(payment, ["paymentUrl", "payment_url", "checkoutUrl", "checkout_url"]) ??
+    ""
+  );
+}
+
 function formatMoney(cents: number, currency = "CNY"): string {
   return new Intl.NumberFormat("zh-CN", {
     style: "currency",
@@ -457,6 +578,14 @@ function billingTransactionLabel(type: string): string {
   if (type === "recharge") return "充值";
   if (type === "plan_purchase") return "套餐购买";
   return type || "明细";
+}
+
+function billingOrderStatusLabel(status: string): string {
+  if (status === "pending") return "等待支付";
+  if (status === "paid" || status === "succeeded") return "支付成功";
+  if (status === "failed") return "支付失败";
+  if (status === "cancelled" || status === "canceled") return "已取消";
+  return status || "未知";
 }
 
 function normalizeUser(value: unknown): AuthUser | null {
@@ -563,6 +692,8 @@ export function SidePanelApp() {
       currency: "CNY",
       plans: MOCK_BILLING_PLANS,
       transactions: [],
+      orders: [],
+      imageUnitPriceCents: 0,
       quotaTotal: 0,
       quotaUsed: 0
     },
@@ -598,6 +729,8 @@ export function SidePanelApp() {
       })
     );
   }, [hiddenResultKeys, localResultRecords, task.records]);
+
+  const brandOverlayReady = form.brandOverlay.enabled && Boolean(form.brandOverlay.logoDataUrl || form.brandOverlay.text.trim());
 
   const previewPrompt = useMemo(() => {
     const firstScene = form.sceneTemplateIds[0];
@@ -941,47 +1074,114 @@ export function SidePanelApp() {
     }
     setBillingState((current) => ({ ...current, error: "", loading: true }));
     try {
-      const response = await fetch(`${apiBaseUrl()}/api/billing/transactions?limit=20`, {
-        headers: apiHeaders(false, token)
-      });
-      const body = await parseResponseOrThrow(response);
+      const [summaryResult, ordersResult] = await Promise.allSettled([
+        fetch(`${apiBaseUrl()}/api/billing/summary`, {
+          headers: apiHeaders(false, token)
+        }),
+        fetch(`${apiBaseUrl()}/api/billing/orders`, {
+          headers: apiHeaders(false, token)
+        })
+      ]);
+      if (summaryResult.status !== "fulfilled") {
+        throw summaryResult.reason instanceof Error ? summaryResult.reason : new Error("计费数据读取失败。");
+      }
+      const summaryResponse = summaryResult.value;
+      const body = await parseResponseOrThrow(summaryResponse);
+      let ordersBody: unknown = {};
+      if (ordersResult.status === "fulfilled" && ordersResult.value.ok) {
+        ordersBody = await ordersResult.value.json();
+      }
+      const overview = mergeBillingOrders(normalizeBillingResponse(body, auth.user), ordersBody);
       setBillingState({
-        data: normalizeBillingResponse(body, auth.user),
+        data: overview,
         error: "",
         loading: false
       });
-      setBillingAction("支付宝充值和套餐在线购买会在支付下单接口接入后开放；当前余额由后台调整。");
+      setBillingAction("");
     } catch (error) {
       setBillingState({
         data: normalizeBillingResponse({}, auth.user),
-        error: error instanceof Error ? error.message : "计费明细读取失败。",
+        error: error instanceof Error ? error.message : "计费数据读取失败。",
         loading: false
       });
     }
+  }
+
+  async function openPaymentUrl(url: string): Promise<void> {
+    await chrome.tabs.create({ url });
+  }
+
+  function billingReturnUrl(): string {
+    const url = new URL(window.location.href);
+    url.searchParams.set("billingReturn", "1");
+    url.searchParams.set("source", "extension");
+    return url.toString();
   }
 
   async function submitRecharge(): Promise<void> {
     if (!auth.token.trim() && !requireAuth("billing")) {
       return;
     }
-    const amount = Number(rechargeAmount);
-    if (!Number.isFinite(amount) || amount <= 0) {
+    const amountCents = Math.round(Number(rechargeAmount) * 100);
+    if (!Number.isFinite(amountCents) || amountCents <= 0) {
       setBillingAction("请输入有效充值金额。");
       return;
     }
 
     setBillingActionLoading(true);
-    setBillingAction("支付宝充值会在支付接口接入后开放。");
-    setBillingActionLoading(false);
+    setBillingAction("");
+    try {
+      const response = await fetch(`${apiBaseUrl()}/api/billing/recharge`, {
+        method: "POST",
+        headers: apiHeaders(true),
+        body: JSON.stringify({ amountCents, returnUrl: billingReturnUrl() })
+      });
+      const body = await parseResponseOrThrow(response);
+      const paymentUrl = paymentUrlFrom(body);
+      if (paymentUrl) {
+        setBillingAction("充值订单已创建，正在打开支付页面。支付完成回到个人中心后会刷新，也可点这里刷新。");
+        await openPaymentUrl(paymentUrl);
+        return;
+      }
+      setBillingAction("充值订单已创建，请在订单列表查看支付状态。");
+      await refreshBilling(true);
+    } catch (error) {
+      setBillingAction(error instanceof Error ? error.message : "充值下单失败。");
+    } finally {
+      setBillingActionLoading(false);
+    }
   }
 
-  async function purchasePlan(plan: BillingPlan): Promise<void> {
+  async function purchasePlan(plan: BillingPlan, paymentMethod: "balance" | "alipay"): Promise<void> {
     if (!auth.token.trim() && !requireAuth("billing")) {
       return;
     }
+    if (paymentMethod === "balance" && billingState.data.balanceCents < plan.priceCents) {
+      setBillingAction(`余额不足，还差 ${formatMoney(plan.priceCents - billingState.data.balanceCents, plan.currency)}。可先充值或用支付宝购买。`);
+      return;
+    }
     setBillingActionLoading(true);
-    setBillingAction(`${plan.name} 会在支付接口接入后开放购买。`);
-    setBillingActionLoading(false);
+    setBillingAction("");
+    try {
+      const response = await fetch(`${apiBaseUrl()}/api/billing/plans/${encodeURIComponent(plan.id)}/purchase`, {
+        method: "POST",
+        headers: apiHeaders(true),
+        body: JSON.stringify({ paymentMethod, returnUrl: billingReturnUrl() })
+      });
+      const body = await parseResponseOrThrow(response);
+      const paymentUrl = paymentUrlFrom(body);
+      if (paymentMethod === "alipay" && paymentUrl) {
+        setBillingAction("套餐订单已创建，正在打开支付页面。支付完成后会刷新个人中心权益。");
+        await openPaymentUrl(paymentUrl);
+        return;
+      }
+      setBillingAction(paymentMethod === "balance" ? "套餐已使用余额购买成功，正在刷新权益。" : "套餐订单已创建，请完成支付后刷新。");
+      await refreshBilling(true);
+    } catch (error) {
+      setBillingAction(error instanceof Error ? error.message : "套餐购买失败。");
+    } finally {
+      setBillingActionLoading(false);
+    }
   }
 
   function openTool(tab: ToolTab): void {
@@ -1154,6 +1354,139 @@ export function SidePanelApp() {
     }));
   }
 
+  function updateBrandOverlay(patch: Partial<BatchFormState["brandOverlay"]>): void {
+    setForm((current) => ({
+      ...current,
+      brandOverlay: {
+        ...current.brandOverlay,
+        ...patch
+      }
+    }));
+  }
+
+  async function handleLogoUpload(event: ChangeEvent<HTMLInputElement>): Promise<void> {
+    const file = event.currentTarget.files?.[0];
+    if (!file) {
+      return;
+    }
+    if (!file.type.startsWith("image/")) {
+      setTask((current) => ({ ...current, message: "Logo 文件需要是图片格式。" }));
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setTask((current) => ({ ...current, message: "Logo 图片超过 5MB，请换一张更小的图片。" }));
+      return;
+    }
+
+    try {
+      updateBrandOverlay({
+        enabled: true,
+        logoDataUrl: await blobToDataUrl(file, "Logo 转换失败。"),
+        logoFileName: file.name
+      });
+    } catch (error) {
+      setTask((current) => ({
+        ...current,
+        message: error instanceof Error ? error.message : "Logo 转换失败。"
+      }));
+    }
+  }
+
+  async function downloadResultImage(item: ResultImageItem): Promise<void> {
+    if (!brandOverlayReady) {
+      downloadUrl(assetDownloadUrl(item.asset), item.asset.fileName);
+      return;
+    }
+
+    try {
+      const sourceResponse = await fetch(assetDownloadUrl(item.asset));
+      if (!sourceResponse.ok) {
+        throw new Error("原图下载失败。");
+      }
+      const sourceBlob = await sourceResponse.blob();
+      const sourceUrl = URL.createObjectURL(sourceBlob);
+      try {
+        const sourceImage = await imageFromUrl(sourceUrl);
+        const canvas = document.createElement("canvas");
+        const width = sourceImage.naturalWidth || item.asset.width;
+        const height = sourceImage.naturalHeight || item.asset.height;
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          throw new Error("无法创建图片画布。");
+        }
+        if (item.asset.mimeType === "image/jpeg") {
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(0, 0, width, height);
+        }
+        ctx.drawImage(sourceImage, 0, 0, width, height);
+        await drawBrandOverlay(ctx, width, height);
+        const mimeType = item.asset.mimeType === "image/jpeg" || item.asset.mimeType === "image/webp" ? item.asset.mimeType : "image/png";
+        canvas.toBlob((blob) => {
+          if (!blob) {
+            setTask((current) => ({ ...current, message: "品牌叠加图导出失败。" }));
+            return;
+          }
+          downloadBlob(blob, brandedFileName(item.asset.fileName));
+        }, mimeType, 0.94);
+      } finally {
+        URL.revokeObjectURL(sourceUrl);
+      }
+    } catch (error) {
+      setTask((current) => ({
+        ...current,
+        message: error instanceof Error ? error.message : "品牌叠加图导出失败。"
+      }));
+    }
+  }
+
+  async function drawBrandOverlay(ctx: CanvasRenderingContext2D, width: number, height: number): Promise<void> {
+    const margin = Math.round(Math.min(width, height) * 0.045);
+    const paddingX = Math.round(Math.min(width, height) * 0.026);
+    const paddingY = Math.round(Math.min(width, height) * 0.018);
+    let overlayWidth = 0;
+    let overlayHeight = 0;
+    const logoUrl = form.brandOverlay.logoDataUrl;
+    const brandText = form.brandOverlay.text.trim();
+    let logoImage: HTMLImageElement | undefined;
+
+    if (logoUrl) {
+      logoImage = await imageFromUrl(logoUrl);
+      const maxLogoWidth = Math.round(width * 0.2);
+      const maxLogoHeight = Math.round(height * 0.1);
+      const scale = Math.min(maxLogoWidth / logoImage.naturalWidth, maxLogoHeight / logoImage.naturalHeight, 1);
+      overlayWidth = Math.round(logoImage.naturalWidth * scale);
+      overlayHeight = Math.round(logoImage.naturalHeight * scale);
+    } else {
+      const fontSize = Math.round(Math.max(24, Math.min(width, height) * 0.045));
+      ctx.font = `800 ${fontSize}px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+      overlayWidth = Math.ceil(ctx.measureText(brandText).width);
+      overlayHeight = Math.ceil(fontSize * 1.2);
+    }
+
+    const chipWidth = overlayWidth + paddingX * 2;
+    const chipHeight = overlayHeight + paddingY * 2;
+    const left = form.brandOverlay.placement.endsWith("right") ? width - margin - chipWidth : margin;
+    const top = form.brandOverlay.placement.startsWith("bottom") ? height - margin - chipHeight : margin;
+    ctx.save();
+    ctx.fillStyle = "rgba(255, 255, 255, 0.88)";
+    ctx.shadowColor = "rgba(0, 0, 0, 0.16)";
+    ctx.shadowBlur = Math.round(Math.min(width, height) * 0.014);
+    ctx.shadowOffsetY = Math.round(Math.min(width, height) * 0.004);
+    roundedRect(ctx, left, top, chipWidth, chipHeight, Math.round(Math.min(width, height) * 0.018));
+    ctx.fill();
+    ctx.shadowColor = "transparent";
+    if (logoImage) {
+      ctx.drawImage(logoImage, left + paddingX, top + paddingY, overlayWidth, overlayHeight);
+    } else {
+      ctx.fillStyle = "#10251d";
+      ctx.textBaseline = "middle";
+      ctx.fillText(brandText, left + paddingX, top + chipHeight / 2);
+    }
+    ctx.restore();
+  }
+
   function toggleScene(sceneId: EcommerceSceneTemplateId): void {
     setForm((current) => {
       const exists = current.sceneTemplateIds.includes(sceneId);
@@ -1286,7 +1619,7 @@ export function SidePanelApp() {
       <section className="panel quota-summary">
         <div className="quota-title-row">
           <div>
-            <h2>次数与余额</h2>
+            <h2>张数与余额</h2>
             <p>{auth.token ? auth.user?.planName || billingState.data.currentPlan?.name || "当前套餐待同步" : "登录后同步套餐和余额"}</p>
           </div>
           <button className="mini-button" type="button" onClick={() => openTool("billing")}>
@@ -1298,7 +1631,7 @@ export function SidePanelApp() {
           <span style={{ width: `${accountQuota.percent}%` }} />
         </div>
         <div className="quota-summary-grid">
-          <div><span>已用次数</span><strong>{formatCount(accountQuota.quotaUsed)}</strong></div>
+          <div><span>已用张数</span><strong>{formatCount(accountQuota.quotaUsed)}</strong></div>
           <div><span>套餐余量</span><strong>{formatCount(accountQuota.remaining)}</strong></div>
           <div><span>账户余额</span><strong>{formatMoney(billingState.data.balanceCents || auth.user?.balanceCents || 0, billingState.data.currency || auth.user?.currency)}</strong></div>
         </div>
@@ -1380,6 +1713,65 @@ export function SidePanelApp() {
             </button>
           ))}
         </div>
+      </section>
+
+      <section className="panel brand-overlay-panel">
+        <div className="toggle-row">
+          <div>
+            <h2>品牌叠加</h2>
+            <p>开启后，所有生成图会在结果预览和下载时统一附加 Logo 或品牌文字。</p>
+          </div>
+          <label className="switch-control">
+            <input
+              checked={form.brandOverlay.enabled}
+              type="checkbox"
+              onChange={(event) => updateBrandOverlay({ enabled: event.target.checked })}
+            />
+            <span />
+          </label>
+        </div>
+        {form.brandOverlay.enabled ? (
+          <>
+            <div className="two-col">
+              <label>
+                <span>上传 Logo</span>
+                <input accept="image/*" type="file" onChange={(event) => void handleLogoUpload(event)} />
+              </label>
+              <label>
+                <span>叠加位置</span>
+                <select
+                  value={form.brandOverlay.placement}
+                  onChange={(event) => updateBrandOverlay({ placement: event.target.value as BatchFormState["brandOverlay"]["placement"] })}
+                >
+                  <option value="top-left">左上角</option>
+                  <option value="top-right">右上角</option>
+                  <option value="bottom-left">左下角</option>
+                  <option value="bottom-right">右下角</option>
+                </select>
+              </label>
+            </div>
+            <label>
+              <span>品牌文字（未上传 Logo 时使用）</span>
+              <input
+                placeholder="例如 Brand name"
+                value={form.brandOverlay.text}
+                onChange={(event) => updateBrandOverlay({ text: event.target.value })}
+              />
+            </label>
+            {form.brandOverlay.logoDataUrl || form.brandOverlay.text.trim() ? (
+              <div className="brand-overlay-preview">
+                {form.brandOverlay.logoDataUrl ? (
+                  <img alt="Logo 预览" src={form.brandOverlay.logoDataUrl} />
+                ) : (
+                  <strong>{form.brandOverlay.text.trim()}</strong>
+                )}
+                <span>{form.brandOverlay.logoFileName || "品牌文字"}</span>
+              </div>
+            ) : (
+              <p className="brand-overlay-hint">开启后请上传 Logo，或填写品牌文字。</p>
+            )}
+          </>
+        ) : null}
       </section>
 
       <section className="panel">
@@ -1475,6 +1867,11 @@ export function SidePanelApp() {
               <article className="result-image-card" key={item.key}>
                 <button className="result-image-preview" type="button" onClick={() => void openGalleryPreview(item.asset)}>
                   <img alt={item.record.prompt} height={item.asset.height} src={assetPreviewUrl(item.asset)} width={item.asset.width} />
+                  {brandOverlayReady ? (
+                    <span className={`brand-result-overlay brand-result-overlay-${form.brandOverlay.placement}`}>
+                      {form.brandOverlay.logoDataUrl ? <img alt="" src={form.brandOverlay.logoDataUrl} /> : <strong>{form.brandOverlay.text.trim()}</strong>}
+                    </span>
+                  ) : null}
                 </button>
                 <div className="result-image-meta">
                   <span>{item.asset.width} x {item.asset.height} · {item.record.outputFormat}</span>
@@ -1482,9 +1879,14 @@ export function SidePanelApp() {
                     <button className="mini-button icon-mini" type="button" title="预览" onClick={() => void openGalleryPreview(item.asset)}>
                       <ImageIcon size={13} />
                     </button>
-                    <a className="mini-button icon-mini" href={assetDownloadUrl(item.asset)} target="_blank" rel="noreferrer" title="下载">
+                    <button
+                      className="mini-button icon-mini"
+                      type="button"
+                      title={brandOverlayReady ? "下载带品牌图" : "下载"}
+                      onClick={() => void downloadResultImage(item)}
+                    >
                       <Download size={13} />
-                    </a>
+                    </button>
                     <button className="mini-button icon-mini" type="button" title="修改重新生成" onClick={() => openEditImageDialog(item)}>
                       <Edit3 size={13} />
                     </button>
@@ -1597,7 +1999,7 @@ export function SidePanelApp() {
                     <div className="account-meta">
                       <div><span>当前套餐</span><strong>{auth.user?.planName || auth.user?.planId || billingState.data.currentPlan?.name || "未设置"}</strong></div>
                       <div><span>账户余额</span><strong>{formatMoney(billingState.data.balanceCents || auth.user?.balanceCents || 0, billingState.data.currency || auth.user?.currency)}</strong></div>
-                      <div><span>已用次数</span><strong>{formatCount(accountQuota.quotaUsed)}/{formatCount(accountQuota.quotaTotal)}</strong></div>
+                      <div><span>已用张数</span><strong>{formatCount(accountQuota.quotaUsed)}/{formatCount(accountQuota.quotaTotal)}</strong></div>
                       <div><span>套餐余量</span><strong>{formatCount(accountQuota.remaining)}</strong></div>
                     </div>
                     <div className="button-row">
@@ -1658,6 +2060,10 @@ export function SidePanelApp() {
                     <span>账户余额</span>
                     <strong>{formatMoney(billingState.data.balanceCents, billingState.data.currency)}</strong>
                   </div>
+                  <div>
+                    <span>单张费用</span>
+                    <strong>{formatMoney(billingState.data.imageUnitPriceCents, billingState.data.currency)}</strong>
+                  </div>
                   <Coins size={22} />
                 </div>
                 <div className="recharge-row">
@@ -1673,8 +2079,8 @@ export function SidePanelApp() {
                 <div className="billing-usage-card">
                   <div className="quota-title-row">
                     <div>
-                      <strong>图片生成次数</strong>
-                      <span>{formatCount(accountQuota.remaining)} 次可用</span>
+                      <strong>图片生成张数</strong>
+                      <span>{formatCount(accountQuota.remaining)} 张可用</span>
                     </div>
                     <span>{accountQuota.percent}% 已用</span>
                   </div>
@@ -1702,12 +2108,42 @@ export function SidePanelApp() {
                           <span key={benefit}>{benefit}</span>
                         ))}
                       </div>
-                      <button className="mini-button plan-buy" disabled={billingActionLoading || !plan.enabled} type="button" onClick={() => void purchasePlan(plan)}>
-                        {plan.purchaseUrl ? <ExternalLink size={13} /> : <CreditCard size={13} />}
-                        {billingState.data.balanceCents >= plan.priceCents && plan.priceCents > 0 ? "余额购买" : "购买套餐"}
-                      </button>
+                      <div className="plan-buy-row">
+                        <button className="mini-button plan-buy" disabled={billingActionLoading || !plan.enabled} type="button" onClick={() => void purchasePlan(plan, "balance")}>
+                          <Wallet size={13} />
+                          余额
+                        </button>
+                        <button className="mini-button plan-buy" disabled={billingActionLoading || !plan.enabled} type="button" onClick={() => void purchasePlan(plan, "alipay")}>
+                          <ExternalLink size={13} />
+                          支付宝
+                        </button>
+                      </div>
                     </article>
                   ))}
+                </div>
+                <div className="billing-usage-card">
+                  <div className="tool-actions compact">
+                    <span>订单</span>
+                    <CreditCard size={13} />
+                  </div>
+                  {billingState.data.orders.length === 0 ? (
+                    <p className="tool-empty">暂无订单。</p>
+                  ) : (
+                    <div className="billing-ledger-list">
+                      {billingState.data.orders.slice(0, 6).map((order) => (
+                        <article className="billing-ledger-item" key={order.id}>
+                          <div>
+                            <strong>{order.title || billingTransactionLabel(order.type)}</strong>
+                            <span>{billingOrderStatusLabel(order.status)} · {formatDateTime(order.createdAt)}</span>
+                          </div>
+                          <div>
+                            <strong>{formatMoney(order.amountCents, order.currency)}</strong>
+                            <span>{order.paymentProvider}</span>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <div className="billing-usage-card">
                   <div className="tool-actions compact">

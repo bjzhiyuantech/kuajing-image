@@ -1,22 +1,30 @@
-import { randomUUID } from "node:crypto";
-import { desc, eq } from "drizzle-orm";
+import { createSign, createVerify, randomUUID } from "node:crypto";
+import { and, desc, eq } from "drizzle-orm";
 import type { RequestTenant } from "./auth-context.js";
 import type {
   AdminAlipayConfigResponse,
   AdminBillingSettingsResponse,
+  BillingOrder,
+  BillingOrdersResponse,
+  BillingPlan,
+  BillingSummaryResponse,
   BillingSettings,
   BillingTransaction,
   BillingTransactionsResponse,
+  CreateAlipayRechargeRequest,
+  CreatePaymentResponse,
+  PurchasePlanRequest,
   SaveAlipayConfigRequest,
   SaveBillingSettingsRequest
 } from "./contracts.js";
 import { db } from "./database.js";
-import { billingTransactions, systemSettings, users } from "./schema.js";
+import { billingOrders, billingTransactions, subscriptionPlans, systemSettings, users } from "./schema.js";
 
 const BILLING_SETTINGS_KEY = "billing.imageUnitPrice";
 const ALIPAY_SETTINGS_KEY = "payment.alipay";
 const DEFAULT_CURRENCY = "CNY";
 const DEFAULT_ALIPAY_GATEWAY = "https://openapi.alipay.com/gateway.do";
+const ALIPAY_NOTIFY_SUCCESS = "success";
 
 export class BillingError extends Error {
   constructor(
@@ -76,12 +84,191 @@ export async function saveAlipayConfig(input: SaveAlipayConfigRequest): Promise<
     signType: limitedString(input.signType, 16) ?? "RSA2"
   };
 
-  if (value.enabled && (!value.appId || !value.privateKey || !value.publicKey)) {
-    throw new BillingError("invalid_alipay_config", "启用支付宝时需要配置 appId、privateKey 和 publicKey。");
+  if (value.enabled && (!value.appId || !value.privateKey || !value.publicKey || !value.notifyUrl)) {
+    throw new BillingError("invalid_alipay_config", "启用支付宝时需要配置 appId、privateKey、publicKey 和 notifyUrl。");
   }
 
   await saveSetting(ALIPAY_SETTINGS_KEY, value);
   return getAlipayConfig();
+}
+
+export async function getBillingSummary(tenant: RequestTenant): Promise<BillingSummaryResponse> {
+  const [user] = await db.select().from(users).where(eq(users.id, tenant.userId)).limit(1);
+  if (!user) {
+    throw new BillingError("user_not_found", "用户不存在。", 404);
+  }
+
+  const [planRows, currentPlanRow, transactions, orders, settingsResponse] = await Promise.all([
+    db.select().from(subscriptionPlans).where(eq(subscriptionPlans.enabled, 1)).orderBy(subscriptionPlans.sortOrder),
+    user.planId ? db.select().from(subscriptionPlans).where(eq(subscriptionPlans.id, user.planId)).limit(1) : Promise.resolve([]),
+    listUserBillingTransactions(tenant, 30),
+    listUserBillingOrders(tenant, 30),
+    getBillingSettings()
+  ]);
+
+  return {
+    balance: {
+      balanceCents: Number(user.balanceCents ?? 0),
+      currency: user.currency || settingsResponse.settings.currency
+    },
+    currentPlan: currentPlanRow[0] ? toBillingPlan(currentPlanRow[0]) : undefined,
+    plans: planRows.map(toBillingPlan),
+    usage: {
+      quotaTotal: Number(user.quotaTotal ?? 0),
+      quotaUsed: Number(user.quotaUsed ?? 0),
+      packageRemaining: Math.max(0, Number(user.quotaTotal ?? 0) - Number(user.quotaUsed ?? 0))
+    },
+    storage: {
+      quotaBytes: Number(user.storageQuotaBytes ?? 0),
+      usedBytes: Number(user.storageUsedBytes ?? 0)
+    },
+    transactions: transactions.transactions,
+    orders: orders.orders,
+    settings: settingsResponse.settings
+  };
+}
+
+export async function createRechargeOrder(
+  tenant: RequestTenant,
+  input: CreateAlipayRechargeRequest
+): Promise<CreatePaymentResponse> {
+  const amountCents = nonNegativeInteger(input.amountCents);
+  if (!amountCents || amountCents < 100) {
+    throw new BillingError("invalid_recharge_amount", "充值金额至少 1 元。");
+  }
+
+  const alipay = await getRawAlipayConfig();
+  ensureAlipayEnabled(alipay);
+  const { settings } = await getBillingSettings();
+  const currency = input.currency?.trim().toUpperCase() || settings.currency;
+  if (currency !== "CNY") {
+    throw new BillingError("unsupported_currency", "支付宝充值目前仅支持 CNY。");
+  }
+
+  const order = await insertPendingOrder({
+    tenant,
+    type: "recharge",
+    title: "账户余额充值",
+    amountCents,
+    currency,
+    paymentProvider: "alipay",
+    returnUrl: input.returnUrl,
+    metadata: { channel: input.channel ?? "alipay" }
+  });
+  const paymentUrl = buildAlipayPagePayUrl(alipay, order, input.returnUrl);
+  await db.update(billingOrders).set({ paymentUrl, updatedAt: new Date().toISOString() }).where(eq(billingOrders.id, order.id));
+  const savedOrder = await getBillingOrderById(order.id);
+
+  return {
+    order: savedOrder,
+    orderId: order.id,
+    outTradeNo: order.outTradeNo,
+    status: "pending",
+    paymentUrl,
+    checkoutUrl: paymentUrl
+  };
+}
+
+export async function purchasePlan(
+  tenant: RequestTenant,
+  planId: string,
+  input: PurchasePlanRequest
+): Promise<CreatePaymentResponse> {
+  const [plan] = await db.select().from(subscriptionPlans).where(eq(subscriptionPlans.id, planId)).limit(1);
+  if (!plan || Number(plan.enabled ?? 0) !== 1) {
+    throw new BillingError("plan_not_found", "套餐不存在或已停用。", 404);
+  }
+
+  const amountCents = Number(plan.priceCents ?? 0);
+  const currency = plan.currency || DEFAULT_CURRENCY;
+  if (input.paymentMethod === "balance") {
+    await applyPlanPurchaseByBalance(tenant, plan);
+    return {
+      status: "paid",
+      order: undefined,
+      message: "套餐已通过余额购买并生效。"
+    };
+  }
+
+  const alipay = await getRawAlipayConfig();
+  ensureAlipayEnabled(alipay);
+  const order = await insertPendingOrder({
+    tenant,
+    type: "plan_purchase",
+    title: `${plan.name} 套餐购买`,
+    amountCents,
+    currency,
+    paymentProvider: "alipay",
+    planId: plan.id,
+    imageQuota: Number(plan.imageQuota ?? 0),
+    storageQuotaBytes: Number(plan.storageQuotaBytes ?? 0),
+    returnUrl: input.returnUrl,
+    metadata: { planName: plan.name }
+  });
+  const paymentUrl = buildAlipayPagePayUrl(alipay, order, input.returnUrl);
+  await db.update(billingOrders).set({ paymentUrl, updatedAt: new Date().toISOString() }).where(eq(billingOrders.id, order.id));
+  const savedOrder = await getBillingOrderById(order.id);
+
+  return {
+    order: savedOrder,
+    orderId: order.id,
+    outTradeNo: order.outTradeNo,
+    status: "pending",
+    paymentUrl,
+    checkoutUrl: paymentUrl
+  };
+}
+
+export async function listUserBillingOrders(tenant: RequestTenant, limit: number): Promise<BillingOrdersResponse> {
+  const rows = await db
+    .select()
+    .from(billingOrders)
+    .where(eq(billingOrders.userId, tenant.userId))
+    .orderBy(desc(billingOrders.createdAt))
+    .limit(limit);
+  return { orders: rows.map((row) => toBillingOrder(row)) };
+}
+
+export async function listAdminBillingOrders(limit: number): Promise<BillingOrdersResponse> {
+  const rows = await db
+    .select({
+      order: billingOrders,
+      user: users
+    })
+    .from(billingOrders)
+    .leftJoin(users, eq(users.id, billingOrders.userId))
+    .orderBy(desc(billingOrders.createdAt))
+    .limit(limit);
+  return {
+    orders: rows.map(({ order, user }) => toBillingOrder(order, typeof user?.email === "string" ? user.email : undefined))
+  };
+}
+
+export async function handleAlipayNotify(input: Record<string, string>): Promise<string> {
+  const alipay = await getRawAlipayConfig();
+  ensureAlipayEnabled(alipay);
+  const publicKey = stringValue(alipay.publicKey) || "";
+  if (!verifyAlipaySignature(input, publicKey)) {
+    throw new BillingError("invalid_alipay_signature", "支付宝回调验签失败。", 400);
+  }
+
+  const outTradeNo = input.out_trade_no;
+  if (!outTradeNo) {
+    throw new BillingError("invalid_alipay_notify", "支付宝回调缺少商户订单号。");
+  }
+
+  const tradeStatus = input.trade_status;
+  if (tradeStatus !== "TRADE_SUCCESS" && tradeStatus !== "TRADE_FINISHED") {
+    await markOrderNotify(outTradeNo, input, tradeStatus || "unknown");
+    return ALIPAY_NOTIFY_SUCCESS;
+  }
+
+  await applyPaidOrder(outTradeNo, {
+    providerTradeNo: input.trade_no,
+    paidAmountCents: alipayAmountToCents(input.total_amount),
+    notifyPayload: input
+  });
+  return ALIPAY_NOTIFY_SUCCESS;
 }
 
 export async function reserveGenerationCharge(input: {
@@ -244,6 +431,211 @@ export async function listAdminBillingTransactions(limit: number): Promise<Billi
   };
 }
 
+async function applyPlanPurchaseByBalance(tenant: RequestTenant, plan: typeof subscriptionPlans.$inferSelect): Promise<void> {
+  await db.transaction(async (tx) => {
+    const [user] = await tx.select().from(users).where(eq(users.id, tenant.userId)).limit(1).for("update");
+    if (!user) {
+      throw new BillingError("user_not_found", "用户不存在。", 404);
+    }
+
+    const amountCents = Number(plan.priceCents ?? 0);
+    const balanceBefore = Number(user.balanceCents ?? 0);
+    if (amountCents > balanceBefore) {
+      throw new BillingError("insufficient_balance", `余额不足，还需 ${formatMoney(amountCents - balanceBefore, plan.currency)}。`, 402);
+    }
+
+    const balanceAfter = balanceBefore - amountCents;
+    const quotaBefore = Number(user.quotaUsed ?? 0);
+    await tx
+      .update(users)
+      .set({
+        planId: plan.id,
+        quotaTotal: Number(plan.imageQuota ?? 0),
+        quotaUsed: 0,
+        storageQuotaBytes: Number(plan.storageQuotaBytes ?? 0),
+        balanceCents: balanceAfter,
+        currency: plan.currency || DEFAULT_CURRENCY,
+        updatedAt: new Date().toISOString()
+      })
+      .where(eq(users.id, user.id));
+
+    await tx.insert(billingTransactions).values({
+      id: randomUUID(),
+      userId: user.id,
+      workspaceId: tenant.workspaceId,
+      type: "plan_purchase",
+      title: `${plan.name} 套餐购买`,
+      status: "succeeded",
+      currency: plan.currency,
+      amountCents: -amountCents,
+      balanceBeforeCents: balanceBefore,
+      balanceAfterCents: balanceAfter,
+      quotaBefore,
+      quotaAfter: 0,
+      quotaConsumed: 0,
+      imageCount: Number(plan.imageQuota ?? 0),
+      quotaCount: Number(plan.imageQuota ?? 0),
+      unitPriceCents: 0,
+      relatedId: null,
+      note: "余额购买套餐",
+      createdByUserId: user.id,
+      metadataJson: JSON.stringify({ planId: plan.id, storageQuotaBytes: Number(plan.storageQuotaBytes ?? 0) }),
+      createdAt: new Date().toISOString()
+    });
+  });
+}
+
+async function applyPaidOrder(
+  outTradeNo: string,
+  input: { providerTradeNo?: string; paidAmountCents?: number; notifyPayload: Record<string, string> }
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    const [order] = await tx.select().from(billingOrders).where(eq(billingOrders.outTradeNo, outTradeNo)).limit(1).for("update");
+    if (!order) {
+      throw new BillingError("order_not_found", "订单不存在。", 404);
+    }
+    if (order.status === "paid") {
+      return;
+    }
+    if (typeof input.paidAmountCents === "number" && input.paidAmountCents !== Number(order.amountCents ?? 0)) {
+      throw new BillingError("invalid_alipay_amount", "支付宝回调金额与订单金额不一致。", 400);
+    }
+
+    const [user] = await tx.select().from(users).where(eq(users.id, order.userId)).limit(1).for("update");
+    if (!user) {
+      throw new BillingError("user_not_found", "用户不存在。", 404);
+    }
+
+    const balanceBefore = Number(user.balanceCents ?? 0);
+    const quotaBefore = Number(user.quotaUsed ?? 0);
+    let balanceAfter = balanceBefore;
+    let quotaAfter = quotaBefore;
+    const now = new Date().toISOString();
+
+    if (order.type === "recharge") {
+      balanceAfter = balanceBefore + Number(order.amountCents ?? 0);
+      await tx
+        .update(users)
+        .set({ balanceCents: balanceAfter, currency: order.currency, updatedAt: now })
+        .where(eq(users.id, user.id));
+    } else if (order.type === "plan_purchase") {
+      quotaAfter = 0;
+      await tx
+        .update(users)
+        .set({
+          planId: order.planId,
+          quotaTotal: Number(order.imageQuota ?? 0),
+          quotaUsed: 0,
+          storageQuotaBytes: Number(order.storageQuotaBytes ?? 0),
+          currency: order.currency,
+          updatedAt: now
+        })
+        .where(eq(users.id, user.id));
+    }
+
+    await tx
+      .update(billingOrders)
+      .set({
+        status: "paid",
+        providerTradeNo: input.providerTradeNo ?? null,
+        paidAt: now,
+        notifyJson: JSON.stringify(input.notifyPayload),
+        updatedAt: now
+      })
+      .where(eq(billingOrders.id, order.id));
+
+    await tx.insert(billingTransactions).values({
+      id: randomUUID(),
+      userId: user.id,
+      workspaceId: order.workspaceId,
+      type: order.type,
+      title: order.title,
+      status: "succeeded",
+      currency: order.currency,
+      amountCents: order.type === "plan_purchase" ? Number(order.amountCents ?? 0) : Number(order.amountCents ?? 0),
+      balanceBeforeCents: balanceBefore,
+      balanceAfterCents: balanceAfter,
+      quotaBefore,
+      quotaAfter,
+      quotaConsumed: 0,
+      imageCount: Number(order.imageQuota ?? 0),
+      quotaCount: Number(order.imageQuota ?? 0),
+      unitPriceCents: 0,
+      relatedId: null,
+      note: order.type === "recharge" ? "支付宝充值到账" : "支付宝购买套餐生效",
+      createdByUserId: user.id,
+      metadataJson: JSON.stringify({ orderId: order.id, outTradeNo: order.outTradeNo, planId: order.planId }),
+      createdAt: now
+    });
+  });
+}
+
+async function markOrderNotify(outTradeNo: string, payload: Record<string, string>, tradeStatus: string): Promise<void> {
+  const [order] = await db.select().from(billingOrders).where(eq(billingOrders.outTradeNo, outTradeNo)).limit(1);
+  if (!order || order.status === "paid") {
+    return;
+  }
+  await db
+    .update(billingOrders)
+    .set({
+      status: tradeStatus === "TRADE_CLOSED" ? "cancelled" : order.status,
+      notifyJson: JSON.stringify(payload),
+      closedAt: tradeStatus === "TRADE_CLOSED" ? new Date().toISOString() : order.closedAt,
+      updatedAt: new Date().toISOString()
+    })
+    .where(eq(billingOrders.id, order.id));
+}
+
+async function insertPendingOrder(input: {
+  tenant: RequestTenant;
+  type: "recharge" | "plan_purchase";
+  title: string;
+  amountCents: number;
+  currency: string;
+  paymentProvider: "alipay";
+  planId?: string;
+  imageQuota?: number;
+  storageQuotaBytes?: number;
+  returnUrl?: string;
+  metadata?: Record<string, unknown>;
+}): Promise<BillingOrder> {
+  const now = new Date().toISOString();
+  const id = randomUUID();
+  const outTradeNo = createOutTradeNo(input.type);
+  await db.insert(billingOrders).values({
+    id,
+    outTradeNo,
+    userId: input.tenant.userId,
+    workspaceId: input.tenant.workspaceId,
+    type: input.type,
+    status: "pending",
+    title: input.title,
+    amountCents: input.amountCents,
+    currency: input.currency,
+    planId: input.planId ?? null,
+    imageQuota: input.imageQuota ?? 0,
+    storageQuotaBytes: input.storageQuotaBytes ?? 0,
+    paymentProvider: input.paymentProvider,
+    paymentUrl: null,
+    providerTradeNo: null,
+    paidAt: null,
+    closedAt: null,
+    metadataJson: JSON.stringify({ ...input.metadata, returnUrl: input.returnUrl }),
+    notifyJson: null,
+    createdAt: now,
+    updatedAt: now
+  });
+  return getBillingOrderById(id);
+}
+
+async function getBillingOrderById(orderId: string): Promise<BillingOrder> {
+  const [row] = await db.select().from(billingOrders).where(eq(billingOrders.id, orderId)).limit(1);
+  if (!row) {
+    throw new BillingError("order_not_found", "订单不存在。", 404);
+  }
+  return toBillingOrder(row);
+}
+
 function toBillingTransaction(row: typeof billingTransactions.$inferSelect, userEmail?: string): BillingTransaction {
   return {
     id: row.id,
@@ -266,6 +658,48 @@ function toBillingTransaction(row: typeof billingTransactions.$inferSelect, user
     status: row.status,
     createdByUserId: row.createdByUserId ?? undefined,
     createdAt: row.createdAt
+  };
+}
+
+function toBillingOrder(row: typeof billingOrders.$inferSelect, userEmail?: string): BillingOrder {
+  return {
+    id: row.id,
+    outTradeNo: row.outTradeNo,
+    userId: row.userId,
+    userEmail,
+    workspaceId: row.workspaceId ?? undefined,
+    type: row.type,
+    status: row.status,
+    title: row.title,
+    amountCents: Number(row.amountCents ?? 0),
+    currency: row.currency,
+    planId: row.planId ?? undefined,
+    imageQuota: Number(row.imageQuota ?? 0),
+    storageQuotaBytes: Number(row.storageQuotaBytes ?? 0),
+    paymentProvider: row.paymentProvider,
+    paymentUrl: row.paymentUrl ?? undefined,
+    providerTradeNo: row.providerTradeNo ?? undefined,
+    paidAt: row.paidAt ?? undefined,
+    closedAt: row.closedAt ?? undefined,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt
+  };
+}
+
+function toBillingPlan(plan: typeof subscriptionPlans.$inferSelect): BillingPlan {
+  return {
+    id: plan.id,
+    name: plan.name,
+    description: plan.description ?? undefined,
+    imageQuota: Number(plan.imageQuota ?? 0),
+    storageQuotaBytes: Number(plan.storageQuotaBytes ?? 0),
+    priceCents: Number(plan.priceCents ?? 0),
+    currency: plan.currency,
+    enabled: Number(plan.enabled ?? 0) === 1,
+    sortOrder: Number(plan.sortOrder ?? 0),
+    benefits: parseJsonValue(plan.benefitsJson),
+    createdAt: plan.createdAt,
+    updatedAt: plan.updatedAt
   };
 }
 
@@ -306,6 +740,116 @@ function toAlipayConfigView(value: Record<string, unknown>, updatedAt?: string):
   };
 }
 
+function getRawAlipayConfig(): Promise<Record<string, unknown>> {
+  return getSetting(ALIPAY_SETTINGS_KEY).then((row) => parseRecord(row?.valueJson));
+}
+
+function ensureAlipayEnabled(config: Record<string, unknown>): void {
+  if (config.enabled !== true) {
+    throw new BillingError("alipay_disabled", "支付宝支付未启用。");
+  }
+  if (!stringValue(config.appId) || !stringValue(config.privateKey) || !stringValue(config.publicKey)) {
+    throw new BillingError("alipay_not_configured", "支付宝支付配置不完整。");
+  }
+}
+
+function buildAlipayPagePayUrl(
+  config: Record<string, unknown>,
+  order: BillingOrder,
+  returnUrl?: string
+): string {
+  const baseUrl = stringValue(config.gateway) || DEFAULT_ALIPAY_GATEWAY;
+  const params: Record<string, string> = {
+    app_id: stringValue(config.appId) || "",
+    method: "alipay.trade.page.pay",
+    format: "JSON",
+    charset: "utf-8",
+    sign_type: stringValue(config.signType) || "RSA2",
+    timestamp: formatTimestamp(new Date()),
+    version: "1.0",
+    notify_url: stringValue(config.notifyUrl) || "",
+    return_url: returnUrl || stringValue(config.returnUrl) || "",
+    biz_content: JSON.stringify({
+      out_trade_no: order.outTradeNo,
+      product_code: "FAST_INSTANT_TRADE_PAY",
+      total_amount: (order.amountCents / 100).toFixed(2),
+      subject: order.title,
+      body: order.type
+    })
+  };
+  const sign = signAlipayParams(params, stringValue(config.privateKey) || "", stringValue(config.signType) || "RSA2");
+  const query = new URLSearchParams({ ...params, sign });
+  return `${baseUrl}?${query.toString()}`;
+}
+
+function signAlipayParams(params: Record<string, string>, privateKey: string, signType: string): string {
+  const content = canonicalQuery(params);
+  const signer = createSign(signType === "RSA" ? "RSA-SHA1" : "RSA-SHA256");
+  signer.update(content, "utf8");
+  signer.end();
+  return signer.sign(normalizePrivateKey(privateKey), "base64");
+}
+
+function verifyAlipaySignature(params: Record<string, string>, publicKey: string): boolean {
+  const sign = params.sign;
+  if (!sign) {
+    return false;
+  }
+  const { sign: _ignoredSign, sign_type: _ignoredSignType, ...rest } = params;
+  const content = canonicalQuery(rest);
+  const verify = createVerify(params.sign_type === "RSA" ? "RSA-SHA1" : "RSA-SHA256");
+  verify.update(content, "utf8");
+  verify.end();
+  return safeBooleanEqual(verify.verify(normalizePublicKey(publicKey), sign, "base64"), true);
+}
+
+function safeBooleanEqual(actual: boolean, expected: boolean): boolean {
+  return actual === expected;
+}
+
+function normalizePrivateKey(value: string): string {
+  return normalizePem(value, "PRIVATE KEY");
+}
+
+function normalizePublicKey(value: string): string {
+  return normalizePem(value, "PUBLIC KEY");
+}
+
+function normalizePem(value: string, label: string): string {
+  const trimmed = value.trim().replace(/\\n/gu, "\n");
+  if (trimmed.includes(`-----BEGIN ${label}-----`)) {
+    return trimmed;
+  }
+  const cleaned = trimmed.replace(/\s+/gu, "");
+  const chunks = cleaned.match(/.{1,64}/gu) ?? [];
+  return `-----BEGIN ${label}-----\n${chunks.join("\n")}\n-----END ${label}-----`;
+}
+
+function canonicalQuery(params: Record<string, string>): string {
+  return Object.keys(params)
+    .filter((key) => params[key] !== "" && params[key] !== undefined && key !== "sign")
+    .sort()
+    .map((key) => `${key}=${params[key]}`)
+    .join("&");
+}
+
+function formatTimestamp(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function createOutTradeNo(type: string): string {
+  return `${type.slice(0, 3)}_${Date.now()}_${randomUUID().slice(0, 8)}`;
+}
+
+function alipayAmountToCents(value: string | undefined): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const amount = Number(value);
+  return Number.isFinite(amount) ? Math.round(amount * 100) : undefined;
+}
+
 function maskSecret(value: string | undefined): { hasSecret: boolean; value?: string } {
   if (!value) {
     return { hasSecret: false };
@@ -342,4 +886,15 @@ function limitedString(value: unknown, maxLength: number): string | undefined {
 
 function formatMoney(amountCents: number, currency: string): string {
   return `${(amountCents / 100).toFixed(2)} ${currency}`;
+}
+
+function parseJsonValue(value: string | null): unknown {
+  if (!value) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(value);
+  } catch {
+    return undefined;
+  }
 }

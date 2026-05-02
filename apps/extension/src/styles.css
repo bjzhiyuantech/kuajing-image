@@ -27,6 +27,8 @@ textarea {
 .status,
 .asset-link,
 .result-actions,
+.toggle-row,
+.brand-overlay-preview,
 .tool-tabs,
 .tool-tab,
 .tool-panel-header,
@@ -282,6 +284,93 @@ textarea:focus {
   font-weight: 700;
 }
 
+.brand-overlay-panel h2 {
+  margin-bottom: 4px;
+}
+
+.brand-overlay-panel p,
+.brand-overlay-hint {
+  color: #66766d;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.toggle-row {
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.switch-control {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.switch-control input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.switch-control span {
+  background: #dfe6e2;
+  border-radius: 999px;
+  display: block;
+  height: 24px;
+  margin: 0;
+  position: relative;
+  width: 44px;
+}
+
+.switch-control span::after {
+  background: #ffffff;
+  border-radius: 999px;
+  box-shadow: 0 1px 3px rgb(28 37 32 / 20%);
+  content: "";
+  height: 18px;
+  left: 3px;
+  position: absolute;
+  top: 3px;
+  transition: transform 160ms ease;
+  width: 18px;
+}
+
+.switch-control input:checked + span {
+  background: #18a678;
+}
+
+.switch-control input:checked + span::after {
+  transform: translateX(20px);
+}
+
+.brand-overlay-preview {
+  background: #f7faf8;
+  border: 1px solid #e4ebe7;
+  border-radius: 7px;
+  gap: 9px;
+  margin-top: 10px;
+  min-height: 42px;
+  padding: 8px;
+}
+
+.brand-overlay-preview img {
+  max-height: 28px;
+  max-width: 86px;
+  object-fit: contain;
+}
+
+.brand-overlay-preview strong {
+  color: #17201c;
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.brand-overlay-preview span {
+  color: #66766d;
+  flex: 1;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
 .icon-button,
 .secondary-button {
   background: #ffffff;
@@ -428,6 +517,60 @@ textarea:focus {
   object-fit: cover;
   position: absolute;
   width: 100%;
+}
+
+.brand-result-overlay {
+  align-items: center;
+  background: rgb(255 255 255 / 88%);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgb(28 37 32 / 16%);
+  display: inline-flex;
+  max-width: 42%;
+  min-height: 22px;
+  padding: 5px 7px;
+  position: absolute;
+  z-index: 1;
+}
+
+.brand-result-overlay-top-left {
+  left: 8px;
+  top: 8px;
+}
+
+.brand-result-overlay-top-right {
+  right: 8px;
+  top: 8px;
+}
+
+.brand-result-overlay-bottom-left {
+  bottom: 8px;
+  left: 8px;
+}
+
+.brand-result-overlay-bottom-right {
+  bottom: 8px;
+  right: 8px;
+}
+
+.brand-result-overlay img {
+  display: block;
+  height: auto;
+  inset: auto;
+  max-height: 26px;
+  max-width: 72px;
+  object-fit: contain;
+  position: static;
+  width: auto;
+}
+
+.brand-result-overlay strong {
+  color: #10251d;
+  display: block;
+  font-size: 12px;
+  line-height: 1.1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .result-image-meta {
@@ -689,9 +832,10 @@ textarea:focus {
 }
 
 .billing-balance-card {
-  align-items: center;
-  display: flex;
-  justify-content: space-between;
+  align-items: start;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
   margin-bottom: 10px;
   padding: 11px;
 }
@@ -714,6 +858,13 @@ textarea:focus {
 
 .recharge-button {
   min-height: 36px;
+}
+
+.plan-buy-row {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 10px;
 }
 
 .billing-usage-card {
@@ -827,8 +978,11 @@ textarea:focus {
 
 .plan-buy {
   justify-content: center;
-  margin-top: 10px;
   width: 100%;
+}
+
+.plan-buy-row .plan-buy {
+  margin-top: 0;
 }
 
 .history-card {
@@ -1023,6 +1177,16 @@ textarea:focus {
 
 .spin {
   animation: spin 1s linear infinite;
+}
+
+@media (max-width: 520px) {
+  .billing-balance-card,
+  .plan-buy-row,
+  .recharge-row,
+  .stats-grid,
+  .quota-summary-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @keyframes spin {

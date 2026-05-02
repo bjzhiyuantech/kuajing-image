@@ -57,11 +57,17 @@ import { closeDatabase, ensureTenant, initializeDatabase } from "./database.js";
 import { db } from "./database.js";
 import {
   BillingError,
+  createRechargeOrder,
   adjustUserBalance,
+  getBillingSummary,
   getAlipayConfig,
   getBillingSettings,
+  handleAlipayNotify,
+  listAdminBillingOrders,
   listAdminBillingTransactions,
+  listUserBillingOrders,
   listUserBillingTransactions,
+  purchasePlan,
   saveAlipayConfig,
   saveBillingSettings
 } from "./billing.js";
@@ -211,6 +217,11 @@ app.get("/api/auth/me", async (c) => {
 });
 
 app.use("/api/*", async (c, next) => {
+  if (new URL(c.req.url).pathname === "/api/billing/alipay/notify") {
+    await next();
+    return;
+  }
+
   const session = (await getAuthSession(c.req.raw.headers)) ?? (await getAssetQueryTokenSession(c));
   if (session) {
     authSessions.set(c, session);
@@ -488,6 +499,51 @@ app.get("/api/billing/transactions", async (c) => {
   return c.json(await listUserBillingTransactions(await requestTenant(c), parseListLimit(c.req.query("limit"))));
 });
 
+app.get("/api/billing/orders", async (c) => {
+  return c.json(await listUserBillingOrders(await requestTenant(c), parseListLimit(c.req.query("limit"))));
+});
+
+app.get("/api/billing/summary", async (c) => {
+  return c.json(await getBillingSummary(await requestTenant(c)));
+});
+
+app.post("/api/billing/recharge", async (c) => {
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+  const parsed = parseRechargePayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+  return c.json(await createRechargeOrder(await requestTenant(c), parsed.value), 201);
+});
+
+app.post("/api/billing/plans/:planId/purchase", async (c) => {
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+  const parsed = parsePurchasePlanPayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+  const planId = c.req.param("planId");
+  return c.json(await purchasePlan(await requestTenant(c), planId, { ...parsed.value, planId }), 201);
+});
+
+app.post("/api/billing/alipay/notify", async (c) => {
+  const form = await c.req.parseBody();
+  const payload: Record<string, string> = {};
+  for (const [key, value] of Object.entries(form)) {
+    if (typeof value === "string") {
+      payload[key] = value;
+    }
+  }
+  const result = await handleAlipayNotify(payload);
+  return c.text(result);
+});
+
 app.get("/api/admin/stats", async (c) => {
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
@@ -578,6 +634,15 @@ app.get("/api/admin/billing/transactions", async (c) => {
   }
 
   return c.json(await listAdminBillingTransactions(parseListLimit(c.req.query("limit"))));
+});
+
+app.get("/api/admin/billing/orders", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return c.json(await listAdminBillingOrders(parseListLimit(c.req.query("limit"))));
 });
 
 app.post("/api/admin/plans", async (c) => {
@@ -1602,6 +1667,60 @@ function parseAlipayConfigPayload(input: unknown): ParseResult<SaveAlipayConfigR
       returnUrl: stringValue(input.returnUrl),
       gateway: stringValue(input.gateway),
       signType: stringValue(input.signType)
+    }
+  };
+}
+
+function parseRechargePayload(input: unknown): ParseResult<{ amountCents: number; currency?: string; returnUrl?: string }> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_recharge", "充值内容必须是 JSON 对象。")
+    };
+  }
+
+  const amountCents = parseNonNegativeInteger(input.amountCents);
+  if (amountCents === undefined || amountCents < 100) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_recharge", "充值金额至少 1 元。")
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      amountCents,
+      currency: stringValue(input.currency)?.toUpperCase(),
+      returnUrl: stringValue(input.returnUrl)
+    }
+  };
+}
+
+function parsePurchasePlanPayload(input: unknown): ParseResult<{
+  paymentMethod: "balance" | "alipay";
+  returnUrl?: string;
+}> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_purchase", "套餐购买内容必须是 JSON 对象。")
+    };
+  }
+
+  const paymentMethod = input.paymentMethod === "balance" || input.paymentMethod === "alipay" ? input.paymentMethod : undefined;
+  if (!paymentMethod) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_purchase", "paymentMethod 必须是 balance 或 alipay。")
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      paymentMethod,
+      returnUrl: stringValue(input.returnUrl)
     }
   };
 }

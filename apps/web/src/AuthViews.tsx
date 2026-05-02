@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   CreditCard,
   Database,
+  ExternalLink,
   HardDrive,
   ImageIcon,
   Loader2,
@@ -13,6 +14,7 @@ import {
   Pencil,
   Plus,
   Receipt,
+  RefreshCw,
   Save,
   ShieldCheck,
   Sparkles,
@@ -186,13 +188,142 @@ export function AuthScreen({
 }
 
 export function AccountPage({ user }: { user: AuthUser }) {
+  const [billing, setBilling] = useState<AccountBillingState>(() => createAccountBillingState(user));
+  const [rechargeAmount, setRechargeAmount] = useState("50");
+  const [billingLoading, setBillingLoading] = useState(true);
+  const [billingAction, setBillingAction] = useState("");
+  const [billingActionLoading, setBillingActionLoading] = useState("");
+  const [billingError, setBillingError] = useState("");
   const quotaTotal = user.quotaTotal ?? 0;
   const quotaUsed = user.quotaUsed ?? 0;
-  const quotaRemaining = Math.max(0, quotaTotal - quotaUsed);
+  const quotaRemaining = billing.summary.packageRemaining ?? Math.max(0, quotaTotal - quotaUsed);
   const quotaPercent = quotaTotal > 0 ? Math.min(100, Math.round((quotaUsed / quotaTotal) * 100)) : 0;
   const storageQuota = user.storageQuotaBytes ?? 0;
   const storageUsed = user.storageUsedBytes ?? 0;
   const storagePercent = storageQuota > 0 ? Math.min(100, Math.round((storageUsed / storageQuota) * 100)) : 0;
+  const currentPlanName = billing.currentPlan?.name || user.planName || user.planId || "未设置";
+  const plans = billing.plans.length > 0 ? billing.plans : fallbackBillingPlans;
+
+  async function loadBilling({ preserveNotice = false, signal }: { preserveNotice?: boolean; signal?: AbortSignal } = {}): Promise<void> {
+    setBillingLoading(true);
+    setBillingError("");
+    if (!preserveNotice) {
+      setBillingAction("");
+    }
+    try {
+      const [summaryResult, ordersResult] = await Promise.allSettled([
+        authFetch("/api/billing/summary"),
+        authFetch("/api/billing/orders")
+      ]);
+      if (summaryResult.status !== "fulfilled") {
+        throw summaryResult.reason instanceof Error ? summaryResult.reason : new Error("计费数据加载失败。");
+      }
+      const summaryResponse = summaryResult.value;
+      if (!summaryResponse.ok) {
+        throw new Error(await readApiError(summaryResponse, "计费数据加载失败。"));
+      }
+      const summaryBody = await summaryResponse.json();
+      let ordersBody: unknown = {};
+      if (ordersResult.status === "fulfilled" && ordersResult.value.ok) {
+        ordersBody = await ordersResult.value.json();
+      }
+      if (signal?.aborted) {
+        return;
+      }
+      const parsed = parseAccountBilling(summaryBody, user);
+      const parsedOrders = parseBillingOrders(ordersBody);
+      setBilling({
+        ...parsed,
+        orders: parsedOrders.length > 0 ? parsedOrders : parsed.orders
+      });
+    } catch (loadError) {
+      if (!signal?.aborted) {
+        setBilling(createAccountBillingState(user));
+        setBillingError(loadError instanceof Error ? loadError.message : "计费数据加载失败。");
+      }
+    } finally {
+      if (!signal?.aborted) {
+        setBillingLoading(false);
+      }
+    }
+  }
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const returnedFromPayment = new URLSearchParams(window.location.search).has("billingReturn");
+    if (returnedFromPayment) {
+      setBillingAction("已从支付页面返回，正在刷新余额和订单状态。若订单仍显示待支付，请稍后再刷新。");
+    }
+    void loadBilling({ preserveNotice: returnedFromPayment, signal: controller.signal });
+    return () => controller.abort();
+  }, [user.id]);
+
+  async function submitRecharge(): Promise<void> {
+    const amountCents = moneyToCents(rechargeAmount);
+    if (!amountCents || amountCents <= 0) {
+      setBillingAction("请输入有效充值金额。");
+      return;
+    }
+    setBillingActionLoading("recharge");
+    setBillingError("");
+    setBillingAction("");
+    try {
+      const response = await authFetch("/api/billing/recharge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amountCents, returnUrl: accountReturnUrl() })
+      });
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "充值下单失败。"));
+      }
+      const body = await response.json();
+      const paymentUrl = paymentUrlFrom(body);
+      if (paymentUrl) {
+        setBillingAction("充值订单已创建，正在打开支付宝支付。支付完成返回后会自动刷新。");
+        window.location.assign(paymentUrl);
+        return;
+      }
+      setBillingAction("充值订单已创建，请在订单列表查看状态。");
+      await loadBilling({ preserveNotice: true });
+    } catch (error) {
+      setBillingError(error instanceof Error ? error.message : "充值下单失败。");
+    } finally {
+      setBillingActionLoading("");
+    }
+  }
+
+  async function purchasePlan(plan: BillingPlan, paymentMethod: "balance" | "alipay"): Promise<void> {
+    if (paymentMethod === "balance" && billing.summary.balanceCents < plan.priceCents) {
+      setBillingAction(`余额不足，还差 ${formatMoney(plan.priceCents - billing.summary.balanceCents, plan.currency)}，可先充值或选择支付宝购买。`);
+      return;
+    }
+    setBillingActionLoading(`${plan.id}:${paymentMethod}`);
+    setBillingError("");
+    setBillingAction("");
+    try {
+      const response = await authFetch(`/api/billing/plans/${encodeURIComponent(plan.id)}/purchase`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paymentMethod, returnUrl: accountReturnUrl() })
+      });
+      if (!response.ok) {
+        throw new Error(await readApiError(response, paymentMethod === "balance" ? "余额购买失败。" : "支付宝购买下单失败。"));
+      }
+      const body = await response.json();
+      const paymentUrl = paymentUrlFrom(body);
+      if (paymentMethod === "alipay" && paymentUrl) {
+        setBillingAction("套餐订单已创建，正在打开支付宝支付。支付完成返回后会自动刷新。");
+        window.location.assign(paymentUrl);
+        return;
+      }
+      setBillingAction(paymentMethod === "balance" ? "套餐已使用余额购买成功，正在刷新权益。" : "套餐订单已创建，请完成支付后刷新。");
+      await loadBilling({ preserveNotice: true });
+    } catch (error) {
+      setBillingError(error instanceof Error ? error.message : "套餐购买失败。");
+    } finally {
+      setBillingActionLoading("");
+    }
+  }
 
   return (
     <main className="account-page app-view">
@@ -209,36 +340,52 @@ export function AccountPage({ user }: { user: AuthUser }) {
           <InfoTile label="邮箱" value={user.email} icon={<Mail className="size-4" aria-hidden="true" />} />
           <InfoTile label="显示名" value={user.displayName} icon={<User className="size-4" aria-hidden="true" />} />
           <InfoTile label="角色" value={roleLabel(user.role)} icon={<ShieldCheck className="size-4" aria-hidden="true" />} />
-          <InfoTile label="当前套餐" value={user.planName || user.planId || "未设置"} icon={<Package className="size-4" aria-hidden="true" />} />
+          <InfoTile label="当前套餐" value={currentPlanName} icon={<Package className="size-4" aria-hidden="true" />} />
         </div>
 
-        <section className="quota-panel" aria-labelledby="quota-title">
-          <div>
-            <p className="settings-eyebrow">Quota</p>
-            <h2 id="quota-title">图片额度</h2>
-          </div>
-          <div className="quota-meter" aria-label={`已使用 ${quotaUsed}，总额度 ${quotaTotal}`}>
-            <span style={{ width: `${quotaPercent}%` }} />
-          </div>
-          <div className="quota-row">
-            <span>{quotaUsed.toLocaleString("zh-CN")} 已用</span>
-            <span>{quotaRemaining.toLocaleString("zh-CN")} 剩余</span>
-          </div>
-        </section>
-
-        <section className="billing-panel" aria-labelledby="billing-title">
+        <section className="billing-panel billing-panel--account" aria-labelledby="billing-title">
           <div className="billing-panel__header">
             <div>
-              <p className="settings-eyebrow">Plans</p>
-              <h2 id="billing-title">套餐权益</h2>
+              <p className="settings-eyebrow">Billing</p>
+              <h2 id="billing-title">套餐与余额</h2>
             </div>
-            <span className="role-badge">即将开放</span>
+            <button className="secondary-action h-10" disabled={billingLoading} type="button" onClick={() => void loadBilling()}>
+              {billingLoading ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <RefreshCw className="size-4" aria-hidden="true" />}
+              刷新
+            </button>
           </div>
-          <p className="billing-alert billing-alert--success" role="status">
-            后台已支持套餐和额度配置；线上购买、充值和更多权益会在支付接口接入后开放。
-          </p>
+
+          {billingError ? <p className="billing-alert billing-alert--warning" role="alert">{billingError}</p> : null}
+          {billingAction ? <p className="billing-alert billing-alert--success" role="status">{billingAction}</p> : null}
+
+          <div className="account-billing-overview">
+            <div className="billing-stat-card billing-stat-card--balance">
+              <span>账户余额</span>
+              <strong>{formatMoney(billing.summary.balanceCents, billing.summary.currency)}</strong>
+            </div>
+            <div className="billing-stat-card">
+              <span>单张费用</span>
+              <strong>{formatMoney(billing.settings.imageUnitPriceCents, billing.summary.currency)}</strong>
+            </div>
+            <div className="billing-stat-card">
+              <span>套餐余量</span>
+              <strong>{quotaRemaining.toLocaleString("zh-CN")} 次</strong>
+            </div>
+          </div>
+
+          <div className="recharge-form">
+            <label>
+              <span>充值金额</span>
+              <input inputMode="decimal" value={rechargeAmount} onChange={(event) => setRechargeAmount(event.target.value)} />
+            </label>
+            <button className="primary-action h-10" disabled={Boolean(billingActionLoading)} type="button" onClick={() => void submitRecharge()}>
+              {billingActionLoading === "recharge" ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Wallet className="size-4" aria-hidden="true" />}
+              支付宝充值
+            </button>
+          </div>
+
           <div className="plan-grid">
-            {fallbackBillingPlans.map((plan) => (
+            {plans.map((plan) => (
               <article className="plan-card" data-current={plan.id === user.planId} key={plan.id}>
                 <div>
                   <p className="plan-card__name">{plan.name}</p>
@@ -254,12 +401,42 @@ export function AccountPage({ user }: { user: AuthUser }) {
                     {plan.benefits.slice(0, 3).map((benefit) => <li key={benefit}>{benefit}</li>)}
                   </ul>
                 ) : null}
-                <button className="primary-action h-10" disabled type="button">
-                  <Package className="size-4" aria-hidden="true" />
-                  {plan.id === user.planId ? "当前套餐" : "暂未开放"}
-                </button>
+                <div className="plan-card__actions">
+                  <button
+                    className="secondary-action h-10"
+                    disabled={Boolean(billingActionLoading) || plan.id === user.planId || !plan.enabled}
+                    type="button"
+                    onClick={() => void purchasePlan(plan, "balance")}
+                  >
+                    {billingActionLoading === `${plan.id}:balance` ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Wallet className="size-4" aria-hidden="true" />}
+                    余额购买
+                  </button>
+                  <button
+                    className="primary-action h-10"
+                    disabled={Boolean(billingActionLoading) || plan.id === user.planId || !plan.enabled}
+                    type="button"
+                    onClick={() => void purchasePlan(plan, "alipay")}
+                  >
+                    {billingActionLoading === `${plan.id}:alipay` ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <ExternalLink className="size-4" aria-hidden="true" />}
+                    支付宝
+                  </button>
+                </div>
               </article>
             ))}
+          </div>
+        </section>
+
+        <section className="quota-panel" aria-labelledby="quota-title">
+          <div>
+            <p className="settings-eyebrow">Quota</p>
+            <h2 id="quota-title">图片额度</h2>
+          </div>
+          <div className="quota-meter" aria-label={`已使用 ${quotaUsed}，总额度 ${quotaTotal}`}>
+            <span style={{ width: `${quotaPercent}%` }} />
+          </div>
+          <div className="quota-row">
+            <span>{quotaUsed.toLocaleString("zh-CN")} 已用</span>
+            <span>{quotaRemaining.toLocaleString("zh-CN")} 剩余</span>
           </div>
         </section>
 
@@ -274,6 +451,37 @@ export function AccountPage({ user }: { user: AuthUser }) {
           <div className="quota-row">
             <span>{storageUsed > 0 ? formatBytes(storageUsed) : "未设置"} 已用</span>
             <span>{storageQuota > 0 ? formatBytes(storageQuota) : "未设置"} 总空间</span>
+          </div>
+        </section>
+
+        <section className="billing-panel" aria-labelledby="account-ledger-title">
+          <div className="billing-panel__header">
+            <div>
+              <p className="settings-eyebrow">Ledger</p>
+              <h2 id="account-ledger-title">订单与扣费明细</h2>
+            </div>
+          </div>
+          <div className="account-ledger-grid">
+            <CompactLedger
+              emptyLabel="暂无订单"
+              items={billing.orders.slice(0, 8).map((order) => ({
+                id: order.id,
+                title: order.title || billingTypeLabel(order.type),
+                meta: `${orderStatusLabel(order.status)} · ${formatDateTime(order.createdAt)}`,
+                amount: formatMoney(order.amountCents, order.currency)
+              }))}
+              title="订单"
+            />
+            <CompactLedger
+              emptyLabel="暂无扣费明细"
+              items={billing.transactions.slice(0, 8).map((item) => ({
+                id: item.id,
+                title: billingTypeLabel(item.type),
+                meta: `${item.note || item.title} · ${formatDateTime(item.createdAt)}`,
+                amount: formatMoney(item.amountCents, item.currency)
+              }))}
+              title="扣费明细"
+            />
           </div>
         </section>
       </section>
@@ -954,6 +1162,37 @@ function InfoTile({ icon, label, value }: { icon: React.ReactNode; label: string
   );
 }
 
+function CompactLedger({
+  emptyLabel,
+  items,
+  title
+}: {
+  emptyLabel: string;
+  items: Array<{ id: string; title: string; meta: string; amount: string }>;
+  title: string;
+}) {
+  return (
+    <div className="compact-ledger">
+      <h3>{title}</h3>
+      {items.length > 0 ? (
+        <div className="compact-ledger__list">
+          {items.map((item) => (
+            <article className="compact-ledger__item" key={item.id}>
+              <div>
+                <strong>{item.title}</strong>
+                <span>{item.meta}</span>
+              </div>
+              <em>{item.amount}</em>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <p>{emptyLabel}</p>
+      )}
+    </div>
+  );
+}
+
 function DataTable({
   columns,
   emptyLabel,
@@ -1017,6 +1256,15 @@ interface BillingSummary {
   packageRemaining: number;
 }
 
+interface AccountBillingState {
+  summary: BillingSummary;
+  settings: BillingSettingsView;
+  currentPlan?: BillingPlan;
+  plans: BillingPlan[];
+  transactions: BillingTransactionRow[];
+  orders: BillingOrderRow[];
+}
+
 interface BillingPlan {
   id: string;
   name: string;
@@ -1027,6 +1275,11 @@ interface BillingPlan {
   currency: string;
   enabled: boolean;
   benefits: string[];
+}
+
+interface BillingSettingsView {
+  imageUnitPriceCents: number;
+  currency: string;
 }
 
 interface AdminUserRow {
@@ -1108,6 +1361,21 @@ interface BillingTransactionRow {
   createdAt: string;
 }
 
+interface BillingOrderRow {
+  id: string;
+  outTradeNo?: string;
+  type: string;
+  status: string;
+  title: string;
+  amountCents: number;
+  currency: string;
+  planId?: string;
+  paymentProvider?: string;
+  paymentUrl?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface AdminJobRow {
   id: string;
   status: string;
@@ -1137,7 +1405,8 @@ function parseAdminStats(value: unknown): AdminStats {
 }
 
 function parseBillingSummary(value: unknown, fallback: BillingSummary): BillingSummary {
-  const body = firstRecord(value, "summary") ?? firstRecord(value, "billing") ?? firstRecord(value, "data") ?? {};
+  const root = isRecord(value) ? value : {};
+  const body = isRecord(root.summary) ? root.summary : isRecord(root.billing) ? root.billing : isRecord(root.data) ? root.data : root;
   const quota = isRecord(body.quota) ? body.quota : {};
   const balance = isRecord(body.balance) ? body.balance : {};
   const usage = isRecord(body.usage) ? body.usage : {};
@@ -1194,9 +1463,86 @@ function parseBillingPlans(value: unknown): BillingPlan[] {
     }));
 }
 
+function parseAccountBilling(value: unknown, user: AuthUser): AccountBillingState {
+  const root = isRecord(value) ? value : {};
+  const body = isRecord(root.summary) ? root.summary : isRecord(root.billing) ? root.billing : isRecord(root.data) ? root.data : root;
+  const settings = isRecord(body.settings) ? body.settings : isRecord(root.settings) ? root.settings : {};
+  const plans = parseBillingPlans(body);
+  const currentPlan =
+    parsePlanLike(body.currentPlan ?? body.current_plan ?? body.plan) ??
+    plans.find((plan) => plan.id === user.planId);
+  return {
+    summary: parseBillingSummary(value, {
+      balanceCents: user.balanceCents ?? 0,
+      currency: "CNY",
+      recordCount: user.recordCount ?? user.quotaUsed ?? 0,
+      packageRemaining: user.packageRemaining ?? Math.max((user.quotaTotal ?? 0) - (user.quotaUsed ?? 0), 0)
+    }),
+    settings: {
+      imageUnitPriceCents: numberFrom(settings.imageUnitPriceCents ?? settings.image_unit_price_cents ?? settings.singleImagePriceCents) ?? 0,
+      currency: stringFrom(settings.currency) || "CNY"
+    },
+    currentPlan,
+    plans,
+    transactions: parseBillingTransactions(body),
+    orders: parseBillingOrders(body)
+  };
+}
+
+function createAccountBillingState(user: AuthUser): AccountBillingState {
+  return {
+    summary: {
+      balanceCents: user.balanceCents ?? 0,
+      currency: "CNY",
+      recordCount: user.recordCount ?? user.quotaUsed ?? 0,
+      packageRemaining: user.packageRemaining ?? Math.max((user.quotaTotal ?? 0) - (user.quotaUsed ?? 0), 0)
+    },
+    settings: {
+      imageUnitPriceCents: 0,
+      currency: "CNY"
+    },
+    plans: fallbackBillingPlans,
+    transactions: [],
+    orders: []
+  };
+}
+
+function parsePlanLike(value: unknown): BillingPlan | undefined {
+  const source = isRecord(value) ? value : undefined;
+  if (!source) {
+    return undefined;
+  }
+  const plan = parseBillingPlans([source])[0];
+  return plan;
+}
+
 function paymentUrlFrom(value: unknown): string {
-  const body = firstRecord(value, "order") ?? firstRecord(value, "payment") ?? firstRecord(value, "data") ?? (isRecord(value) ? value : {});
-  return stringFrom(body.paymentUrl ?? body.payment_url ?? body.checkoutUrl ?? body.checkout_url ?? body.payUrl ?? body.pay_url);
+  const root = isRecord(value) ? value : {};
+  const data = firstRecord(root, "data") ?? {};
+  const order = firstRecord(root, "order") ?? firstRecord(data, "order") ?? {};
+  const payment = firstRecord(root, "payment") ?? firstRecord(data, "payment") ?? {};
+  return stringFrom(
+    root.paymentUrl ??
+      root.payment_url ??
+      root.checkoutUrl ??
+      root.checkout_url ??
+      data.paymentUrl ??
+      data.payment_url ??
+      data.checkoutUrl ??
+      data.checkout_url ??
+      order.paymentUrl ??
+      order.payment_url ??
+      order.checkoutUrl ??
+      order.checkout_url ??
+      payment.paymentUrl ??
+      payment.payment_url ??
+      payment.checkoutUrl ??
+      payment.checkout_url ??
+      root.payUrl ??
+      root.pay_url ??
+      data.payUrl ??
+      data.pay_url
+  );
 }
 
 function parseUsers(value: unknown): AdminUserRow[] {
@@ -1294,6 +1640,23 @@ function parseBillingTransactions(value: unknown): BillingTransactionRow[] {
     imageCount: numberFrom(item.imageCount ?? item.image_count),
     note: stringFrom(item.note),
     createdAt: stringFrom(item.createdAt) || stringFrom(item.created_at)
+  }));
+}
+
+function parseBillingOrders(value: unknown): BillingOrderRow[] {
+  return arrayFrom(value, ["orders", "items"]).map((item, index) => ({
+    id: stringFrom(item.id) || stringFrom(item.orderId ?? item.order_id) || `order-${index}`,
+    outTradeNo: stringFrom(item.outTradeNo ?? item.out_trade_no),
+    type: stringFrom(item.type) || "-",
+    status: stringFrom(item.status) || "-",
+    title: stringFrom(item.title) || "-",
+    amountCents: numberFrom(item.amountCents ?? item.amount_cents ?? item.priceCents) ?? 0,
+    currency: stringFrom(item.currency) || "CNY",
+    planId: stringFrom(item.planId ?? item.plan_id),
+    paymentProvider: stringFrom(item.paymentProvider ?? item.payment_provider ?? item.provider),
+    paymentUrl: stringFrom(item.paymentUrl ?? item.payment_url),
+    createdAt: stringFrom(item.createdAt) || stringFrom(item.created_at),
+    updatedAt: stringFrom(item.updatedAt) || stringFrom(item.updated_at)
   }));
 }
 
@@ -1458,6 +1821,20 @@ function billingTypeLabel(type: string): string {
   if (type === "recharge") return "充值";
   if (type === "plan_purchase") return "套餐购买";
   return type || "-";
+}
+
+function orderStatusLabel(status: string): string {
+  if (status === "pending") return "等待支付";
+  if (status === "paid" || status === "succeeded") return "支付成功";
+  if (status === "failed") return "支付失败";
+  if (status === "cancelled" || status === "canceled") return "已取消";
+  return status || "-";
+}
+
+function accountReturnUrl(): string {
+  const url = new URL("/account", window.location.origin);
+  url.searchParams.set("billingReturn", "1");
+  return url.toString();
 }
 
 function formatDateTime(value: string): string {

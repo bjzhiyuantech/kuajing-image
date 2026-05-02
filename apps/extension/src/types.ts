@@ -58,6 +58,13 @@ export interface BatchFormState {
   countPerScene: 1 | 2 | 4;
   referenceImageUrl: string;
   extraDirection: string;
+  brandOverlay: {
+    enabled: boolean;
+    logoDataUrl: string;
+    logoFileName: string;
+    text: string;
+    placement: "top-left" | "top-right" | "bottom-left" | "bottom-right";
+  };
 }
 
 export interface BatchTask {

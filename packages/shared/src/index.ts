@@ -109,10 +109,10 @@ export const ECOMMERCE_SCENE_TEMPLATES = [
   {
     id: "logo-benefit",
     mode: "enhance",
-    label: "Logo + 卖点图",
+    label: "卖点图",
     defaultSizePresetId: "poster-landscape",
     prompt:
-      "Create an e-commerce benefit image based on the source product image. Keep the product unchanged and add a clean brand-logo area plus concise selling-point text layout. Do not invent product features. Text must be large, readable, and placed outside the product. Leave logo text as an editable placeholder if no brand is provided."
+      "Create an e-commerce benefit image based on the source product image. Keep the product unchanged and build a clean concise selling-point text layout. Do not invent product features. Text must be large, readable, and placed outside the product. Leave clear empty space for a brand mark to be added later, but do not generate any logo, brand wordmark, fake trademark, or placeholder logo."
   },
   {
     id: "feature-benefit",
@@ -582,6 +582,33 @@ export interface BillingTransactionsResponse {
   transactions: BillingTransaction[];
 }
 
+export interface BillingOrder {
+  id: string;
+  outTradeNo: string;
+  userId?: string;
+  userEmail?: string;
+  workspaceId?: string;
+  type: "recharge" | "plan_purchase" | string;
+  status: "pending" | "paid" | "failed" | "cancelled" | string;
+  title: string;
+  amountCents: number;
+  currency: string;
+  planId?: string;
+  imageQuota?: number;
+  storageQuotaBytes?: number;
+  paymentProvider: "alipay" | "balance" | string;
+  paymentUrl?: string;
+  providerTradeNo?: string;
+  paidAt?: string;
+  closedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BillingOrdersResponse {
+  orders: BillingOrder[];
+}
+
 export interface BillingSummaryResponse {
   balance: BillingBalance;
   currentPlan?: BillingPlan;
@@ -589,6 +616,8 @@ export interface BillingSummaryResponse {
   usage?: BillingUsage;
   storage?: BillingStorageUsage;
   transactions?: BillingTransaction[];
+  orders?: BillingOrder[];
+  settings?: BillingSettings;
 }
 
 export type PaymentChannel = "alipay";
@@ -601,7 +630,9 @@ export interface CreateAlipayRechargeRequest {
 }
 
 export interface CreatePaymentResponse {
+  order?: BillingOrder;
   orderId?: string;
+  outTradeNo?: string;
   status?: "pending" | "paid" | "failed";
   paymentUrl?: string;
   checkoutUrl?: string;
@@ -785,7 +816,7 @@ export function composeEcommercePrompt(context: EcommercePromptContext): string 
 
   const modeGuard =
     template?.mode === "enhance"
-      ? "Reference image rule: treat the source product image as the single source of truth. Preserve the original product exactly. Only improve lighting, background, layout, logo area, selling-point text, callouts, and marketplace composition. Do not redesign the product."
+      ? "Reference image rule: treat the source product image as the single source of truth. Preserve the original product exactly. Only improve lighting, background, layout, selling-point text, callouts, and marketplace composition. Do not generate logos or fake brand marks; brand marks are added later as a separate overlay. Do not redesign the product."
       : "Reference image rule: use the source product image to preserve the product's key identity, shape, color, material, and recognizable details while creating a new commercial scene.";
 
   return [
