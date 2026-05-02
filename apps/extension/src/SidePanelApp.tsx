@@ -1,4 +1,5 @@
 import {
+  ArrowLeft,
   BarChart3,
   CheckCircle2,
   Coins,
@@ -9,6 +10,7 @@ import {
   ExternalLink,
   ImageIcon,
   KeyRound,
+  Languages,
   Loader2,
   LogOut,
   Package,
@@ -53,6 +55,7 @@ import type { AuthUser, BatchFormState, BatchTask, ExtensionAuthState, PageConte
 const ACTIVE_BATCH_JOB_STORAGE_KEY = "activeBatchJob";
 const AUTH_STORAGE_KEY = "auth";
 const DEFAULT_API_BASE_URL = "https://imagen.neimou.com";
+const TEXT_TRANSLATION_SCENE_ID = "text-translation" as const;
 const MOCK_BILLING_PLANS: BillingPlan[] = [
   {
     id: "starter",
@@ -252,7 +255,8 @@ const defaultForm: BatchFormState = {
 const defaultSceneIdsByMode: Record<EcommerceGenerationMode, EcommerceSceneTemplateId[]> = {
   enhance: ["marketplace-main", "logo-benefit", "feature-benefit"],
   creative: ["lifestyle", "model-wear", "accessory-match"],
-  "category-kit": [...allegroScarfConversionScenes]
+  "category-kit": [...allegroScarfConversionScenes],
+  "text-translation": [TEXT_TRANSLATION_SCENE_ID]
 };
 
 const generationModes: Array<{ id: EcommerceGenerationMode; label: string; hint: string }> = [
@@ -260,6 +264,11 @@ const generationModes: Array<{ id: EcommerceGenerationMode; label: string; hint:
   { id: "creative", label: "场景创作", hint: "依据主图生成生活方式、模特穿戴和搭配场景。" },
   { id: "category-kit", label: "品类套图", hint: "按平台和类目生成整套 Listing Image Kit。" }
 ];
+
+const textTranslationMode = {
+  label: "文字翻译",
+  hint: "逐张翻译图片文字，可选择目标语言和是否二创。"
+};
 
 const qualityOptions: Array<{ id: ImageQuality; label: string }> = [
   { id: "auto", label: "自动" },
@@ -350,6 +359,94 @@ function downloadUrl(url: string, fileName: string): void {
   anchor.target = "_blank";
   anchor.rel = "noreferrer";
   anchor.click();
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function crc32(bytes: Uint8Array): number {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function dosDateParts(date = new Date()): { date: number; time: number } {
+  const year = Math.max(date.getFullYear(), 1980);
+  return {
+    date: ((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate(),
+    time: (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2)
+  };
+}
+
+async function createZipBlob(files: Array<{ name: string; blob: Blob }>): Promise<Blob> {
+  const encoder = new TextEncoder();
+  const localParts: BlobPart[] = [];
+  const centralParts: BlobPart[] = [];
+  const { date, time } = dosDateParts();
+  let offset = 0;
+
+  for (const file of files) {
+    const nameBytes = encoder.encode(file.name);
+    const bytes = new Uint8Array(await file.blob.arrayBuffer());
+    const crc = crc32(bytes);
+    const localOffset = offset;
+    const localHeader = new ArrayBuffer(30);
+    const localView = new DataView(localHeader);
+    localView.setUint32(0, 0x04034b50, true);
+    localView.setUint16(4, 20, true);
+    localView.setUint16(6, 0x0800, true);
+    localView.setUint16(8, 0, true);
+    localView.setUint16(10, time, true);
+    localView.setUint16(12, date, true);
+    localView.setUint32(14, crc, true);
+    localView.setUint32(18, bytes.byteLength, true);
+    localView.setUint32(22, bytes.byteLength, true);
+    localView.setUint16(26, nameBytes.byteLength, true);
+    localView.setUint16(28, 0, true);
+    localParts.push(localHeader, nameBytes, bytes);
+    offset += 30 + nameBytes.byteLength + bytes.byteLength;
+
+    const centralHeader = new ArrayBuffer(46);
+    const centralView = new DataView(centralHeader);
+    centralView.setUint32(0, 0x02014b50, true);
+    centralView.setUint16(4, 20, true);
+    centralView.setUint16(6, 20, true);
+    centralView.setUint16(8, 0x0800, true);
+    centralView.setUint16(10, 0, true);
+    centralView.setUint16(12, time, true);
+    centralView.setUint16(14, date, true);
+    centralView.setUint32(16, crc, true);
+    centralView.setUint32(20, bytes.byteLength, true);
+    centralView.setUint32(24, bytes.byteLength, true);
+    centralView.setUint16(28, nameBytes.byteLength, true);
+    centralView.setUint16(30, 0, true);
+    centralView.setUint16(32, 0, true);
+    centralView.setUint16(34, 0, true);
+    centralView.setUint16(36, 0, true);
+    centralView.setUint32(38, 0, true);
+    centralView.setUint32(42, localOffset, true);
+    centralParts.push(centralHeader, nameBytes);
+  }
+
+  const centralDirectoryOffset = offset;
+  const centralDirectorySize = centralParts.reduce((total, part) => total + (part instanceof Uint8Array ? part.byteLength : part instanceof ArrayBuffer ? part.byteLength : 0), 0);
+  const endRecord = new ArrayBuffer(22);
+  const endView = new DataView(endRecord);
+  endView.setUint32(0, 0x06054b50, true);
+  endView.setUint16(4, 0, true);
+  endView.setUint16(6, 0, true);
+  endView.setUint16(8, files.length, true);
+  endView.setUint16(10, files.length, true);
+  endView.setUint32(12, centralDirectorySize, true);
+  endView.setUint32(16, centralDirectoryOffset, true);
+  endView.setUint16(20, 0, true);
+  return new Blob([...localParts, ...centralParts, endRecord], { type: "application/zip" });
 }
 
 function imageFromUrl(url: string): Promise<HTMLImageElement> {
@@ -851,6 +948,10 @@ export function SidePanelApp() {
   const [editDialog, setEditDialog] = useState<EditImageDialogState | null>(null);
   const [uploadedReferenceImages, setUploadedReferenceImages] = useState<UploadedReferenceImage[]>([]);
   const [worksViewOpen, setWorksViewOpen] = useState(false);
+  const [textTranslationViewOpen, setTextTranslationViewOpen] = useState(false);
+  const [translationReturnMode, setTranslationReturnMode] = useState<EcommerceGenerationMode>("enhance");
+  const [translationImageUrls, setTranslationImageUrls] = useState<string[]>([]);
+  const [zipDownloadLoading, setZipDownloadLoading] = useState(false);
 
   const availableScenes = useMemo(
     () => ECOMMERCE_SCENE_TEMPLATES.filter((template) => template.mode === form.generationMode),
@@ -877,6 +978,7 @@ export function SidePanelApp() {
     ],
     [pageImageUrls, uploadedReferenceImages]
   );
+  const selectedTranslationImageUrls = translationImageUrls.map((url) => url.trim()).filter(Boolean);
 
   const resultImages = useMemo(() => {
     const records = [...task.records, ...localResultRecords];
@@ -1228,12 +1330,24 @@ export function SidePanelApp() {
     if (!token.trim() && !requireAuth("job")) {
       return;
     }
+    const body = await fetchBatchJob(jobId, token);
+    applyBatchJob(body, token);
+  }
+
+  async function fetchBatchJob(jobId: string, token = auth.token): Promise<EcommerceBatchGenerateResponse> {
     const response = await fetch(`${apiBaseUrl()}/api/ecommerce/images/batch-generate/${jobId}`, {
       headers: apiHeaders(false, token)
     });
+    return (await parseResponseOrThrow(response)) as EcommerceBatchGenerateResponse;
+  }
 
-    const body = (await parseResponseOrThrow(response)) as EcommerceBatchGenerateResponse;
-    applyBatchJob(body, token);
+  async function waitForBatchJob(jobId: string, token = auth.token): Promise<EcommerceBatchGenerateResponse> {
+    let body = await fetchBatchJob(jobId, token);
+    while (body.status === "pending" || body.status === "running") {
+      await delay(2200);
+      body = await fetchBatchJob(jobId, token);
+    }
+    return body;
   }
 
   async function refreshHistory(authAlreadyChecked = false, token = auth.token): Promise<void> {
@@ -1702,6 +1816,11 @@ export function SidePanelApp() {
     }
   }
 
+  async function sizeFromSourceUrl(url: string): Promise<{ width: number; height: number }> {
+    const image = await imageFromUrl(url);
+    return sizeFromImageAspect(image.naturalWidth, image.naturalHeight);
+  }
+
   function toggleReferenceImage(url: string): void {
     setForm((current) => {
       const exists = current.referenceImageUrls.includes(url);
@@ -1812,6 +1931,105 @@ export function SidePanelApp() {
     }
   }
 
+  async function uploadTranslationImages(event: ChangeEvent<HTMLInputElement>): Promise<void> {
+    try {
+      const files = Array.from(event.currentTarget.files ?? []).filter((file) => file.type.startsWith("image/")).slice(0, 12);
+      event.currentTarget.value = "";
+      if (files.length === 0) {
+        return;
+      }
+
+      const uploadedImages = await Promise.all(
+        files.map(async (file) => {
+          if (file.size > 50 * 1024 * 1024) {
+            throw new Error("上传图片超过 50MB，请换一张较小的图片。");
+          }
+          return {
+            id: createClientId(),
+            dataUrl: await blobToDataUrl(file, "上传图片转换失败。"),
+            fileName: file.name || "uploaded-image.png"
+          } satisfies UploadedReferenceImage;
+        })
+      );
+      setUploadedReferenceImages((current) => [...uploadedImages, ...current].slice(0, 24));
+      setTranslationImageUrls((current) => [...uploadedImages.map((image) => image.dataUrl), ...current].filter(Boolean).slice(0, 24));
+      setTask((current) => ({
+        ...current,
+        message: `已上传 ${uploadedImages.length} 张图片，可直接逐张翻译。`
+      }));
+    } catch (error) {
+      setTask((current) => ({
+        ...current,
+        message: error instanceof Error ? error.message : "上传翻译图片失败。"
+      }));
+    }
+  }
+
+  function toggleTranslationImage(url: string): void {
+    setTranslationImageUrls((current) => {
+      const exists = current.includes(url);
+      return exists ? current.filter((item) => item !== url) : [...current, url];
+    });
+  }
+
+  function selectAllTranslationImages(): void {
+    const urls = [...uploadedReferenceImages.map((image) => image.dataUrl), ...pageImageUrls];
+    setTranslationImageUrls(Array.from(new Set(urls)).slice(0, 24));
+  }
+
+  function clearTranslationImages(): void {
+    setTranslationImageUrls([]);
+  }
+
+  function openTextTranslationPage(): void {
+    setTranslationReturnMode(form.generationMode === "text-translation" ? "enhance" : form.generationMode);
+    setForm((current) => ({
+      ...current,
+      generationMode: "text-translation",
+      sceneTemplateIds: defaultSceneIdsByMode["text-translation"],
+      textLanguage: current.textLanguage === "none" ? "ko" : current.textLanguage,
+      allowTextRecreation: true,
+      removeWatermarkAndLogo: true,
+      sizeMode: "source",
+      countPerScene: 1,
+      stylePresetId: "product"
+    }));
+    setTranslationImageUrls((current) => {
+      if (current.length > 0) {
+        return current;
+      }
+      if (selectedReferenceImageUrls.length > 0) {
+        return selectedReferenceImageUrls;
+      }
+      return pageImageUrls.slice(0, 1);
+    });
+    setTextTranslationViewOpen(true);
+    setWorksViewOpen(false);
+    setToolPanelOpen(false);
+    setHiddenResultKeys(new Set());
+    setLocalResultRecords([]);
+    setTask({
+      id: "text-translation",
+      status: "idle",
+      message: "选择多张图片后，会逐张翻译并分别返回结果。",
+      records: []
+    });
+  }
+
+  function closeTextTranslationPage(): void {
+    setTextTranslationViewOpen(false);
+    setForm((current) =>
+      current.generationMode === "text-translation"
+        ? {
+            ...current,
+            generationMode: translationReturnMode,
+            sceneTemplateIds: defaultSceneIdsByMode[translationReturnMode],
+            textLanguage: translationReturnMode === "category-kit" ? "pl" : "none"
+          }
+        : current
+    );
+  }
+
   function updateBrandOverlay(patch: Partial<BatchFormState["brandOverlay"]>): void {
     setForm((current) => ({
       ...current,
@@ -1899,6 +2117,52 @@ export function SidePanelApp() {
     }
   }
 
+  function uniqueArchiveFileName(fileName: string, usedNames: Set<string>): string {
+    const index = fileName.lastIndexOf(".");
+    const baseName = index > 0 ? fileName.slice(0, index) : fileName;
+    const extension = index > 0 ? fileName.slice(index) : "";
+    let attempt = fileName;
+    let counter = 2;
+    while (usedNames.has(attempt)) {
+      attempt = `${baseName}-${counter}${extension}`;
+      counter += 1;
+    }
+    usedNames.add(attempt);
+    return attempt;
+  }
+
+  async function downloadTranslationArchive(): Promise<void> {
+    if (resultImages.length === 0) {
+      setTask((current) => ({ ...current, message: "没有可打包的翻译结果。" }));
+      return;
+    }
+
+    setZipDownloadLoading(true);
+    try {
+      const usedNames = new Set<string>();
+      const files = await Promise.all(
+        resultImages.map(async (item, index) => {
+          const response = await fetch(assetDownloadUrl(item.asset));
+          if (!response.ok) {
+            throw new Error("打包下载时读取图片失败。");
+          }
+          const blob = await response.blob();
+          const fileName = uniqueArchiveFileName(item.asset.fileName || `translation-${index + 1}.png`, usedNames);
+          return { name: fileName, blob };
+        })
+      );
+      const zipBlob = await createZipBlob(files);
+      downloadBlob(zipBlob, `text-translation-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.zip`);
+    } catch (error) {
+      setTask((current) => ({
+        ...current,
+        message: error instanceof Error ? error.message : "一键打包下载失败。"
+      }));
+    } finally {
+      setZipDownloadLoading(false);
+    }
+  }
+
   async function drawBrandOverlay(ctx: CanvasRenderingContext2D, width: number, height: number): Promise<void> {
     const margin = Math.round(Math.min(width, height) * 0.045);
     const paddingX = Math.round(Math.min(width, height) * 0.026);
@@ -1968,9 +2232,18 @@ export function SidePanelApp() {
       sizeMode: generationMode === "category-kit" ? "preset" : current.sizeMode,
       size: generationMode === "category-kit" ? { width: 2048, height: 2048 } : current.size,
       countPerScene: generationMode === "category-kit" ? 1 : current.countPerScene,
-      stylePresetId: generationMode === "enhance" || generationMode === "category-kit" ? "product" : "photoreal",
-      textLanguage: generationMode === "enhance" ? current.textLanguage : generationMode === "category-kit" ? "pl" : "none",
-      allowTextRecreation: generationMode === "enhance" ? current.allowTextRecreation : true,
+      stylePresetId: generationMode === "enhance" || generationMode === "category-kit" || generationMode === "text-translation" ? "product" : "photoreal",
+      textLanguage:
+        generationMode === "enhance"
+          ? "none"
+          : generationMode === "category-kit"
+            ? "pl"
+            : generationMode === "text-translation"
+              ? current.textLanguage === "none"
+                ? "ko"
+                : current.textLanguage
+              : "none",
+      allowTextRecreation: true,
       removeWatermarkAndLogo: generationMode === "enhance" ? current.removeWatermarkAndLogo : true
     }));
     setTask((current) => ({
@@ -1980,6 +2253,8 @@ export function SidePanelApp() {
           ? "原图增强会优先保留商品原貌。"
           : generationMode === "category-kit"
             ? "品类套图会按 Allegro 丝巾类目生成整套上架图片。"
+            : generationMode === "text-translation"
+              ? "文字翻译会逐张输出，每张图都会单独翻译并返回。"
             : "场景创作会依据主图重建营销场景。"
     }));
   }
@@ -2076,6 +2351,104 @@ export function SidePanelApp() {
     }
   }
 
+  async function submitTextTranslationBatch(authAlreadyChecked = false, token = auth.token): Promise<void> {
+    if (batchGenerationLocked) {
+      return;
+    }
+    if (!token.trim() && !authAlreadyChecked && !requireAuth("generate")) {
+      return;
+    }
+    if (selectedTranslationImageUrls.length === 0) {
+      setTask({ id: "validation", status: "failed", message: "请先选择至少一张待翻译图片。", records: [] });
+      return;
+    }
+
+    const taskId = createClientId();
+    const targetLanguage = form.textLanguage === "none" ? "ko" : form.textLanguage;
+    const translatedRecords: GenerationRecord[] = [];
+    setBatchGenerationLocked(true);
+    setHiddenResultKeys(new Set());
+    setLocalResultRecords([]);
+    setTask({
+      id: taskId,
+      status: "running",
+      message: `正在逐张翻译 ${selectedTranslationImageUrls.length} 张图片。`,
+      records: [],
+      totalScenes: selectedTranslationImageUrls.length,
+      completedScenes: 0
+    });
+
+    try {
+      for (const [index, sourceUrl] of selectedTranslationImageUrls.entries()) {
+        const referenceImage = await referenceImageFromSources([sourceUrl]);
+        if (!referenceImage) {
+          throw new Error("翻译参考图读取失败。");
+        }
+        const size = form.sizeMode === "source" ? await sizeFromSourceUrl(sourceUrl) : form.size;
+        const response = await fetch(`${apiBaseUrl()}/api/ecommerce/images/batch-generate`, {
+          method: "POST",
+          headers: apiHeaders(true, token),
+          body: JSON.stringify({
+            product: {
+              ...form.product,
+              title: form.product.title.trim() || `文字翻译 ${index + 1}`
+            },
+            platform: form.platform,
+            market: form.market,
+            textLanguage: targetLanguage,
+            allowTextRecreation: form.allowTextRecreation,
+            removeWatermarkAndLogo: form.removeWatermarkAndLogo,
+            sceneTemplateIds: [TEXT_TRANSLATION_SCENE_ID],
+            size,
+            stylePresetId: "product",
+            quality: form.quality,
+            outputFormat: form.outputFormat,
+            countPerScene: 1,
+            referenceImage,
+            extraDirection: [form.extraDirection.trim(), `Source image ${index + 1}/${selectedTranslationImageUrls.length}`].filter(Boolean).join("\n\n")
+          })
+        });
+        const body = (await parseResponseOrThrow(response)) as EcommerceBatchGenerateResponse;
+        const finishedJob = await waitForBatchJob(body.jobId, token);
+        translatedRecords.push(...finishedJob.records);
+        setTask((current) => ({
+          ...current,
+          status: finishedJob.status,
+          message: `已完成 ${index + 1}/${selectedTranslationImageUrls.length} 张图片翻译。`,
+          records: translatedRecords,
+          completedScenes: index + 1,
+          totalScenes: selectedTranslationImageUrls.length
+        }));
+      }
+
+      const failedRecordCount = translatedRecords.filter((record) => record.status === "failed").length;
+      const finalStatus =
+        failedRecordCount === 0 ? "succeeded" : failedRecordCount === translatedRecords.length ? "failed" : "partial";
+      setTask({
+        id: taskId,
+        status: finalStatus,
+        message:
+          finalStatus === "succeeded"
+            ? `已完成 ${selectedTranslationImageUrls.length} 张图片翻译，可一键打包下载。`
+            : `已完成 ${selectedTranslationImageUrls.length} 张图片翻译，其中 ${failedRecordCount} 张失败。`,
+        records: translatedRecords,
+        totalScenes: selectedTranslationImageUrls.length,
+        completedScenes: selectedTranslationImageUrls.length
+      });
+    } catch (error) {
+      setTask({
+        id: taskId,
+        status: "failed",
+        message: error instanceof Error ? error.message : "文字翻译失败，请稍后重试。",
+        records: translatedRecords,
+        totalScenes: selectedTranslationImageUrls.length,
+        completedScenes: translatedRecords.length
+      });
+    } finally {
+      setBatchGenerationLocked(false);
+    }
+  }
+
   if (worksViewOpen) {
     return (
       <main className="app-shell works-shell">
@@ -2114,6 +2487,137 @@ export function SidePanelApp() {
             </strong>
           </div>
           {renderResultImages(task.status === "running" ? "图片生成中，完成后会显示在这里。" : "这个历史任务暂无可展示图片。")}
+        </section>
+
+        {renderEditDialog()}
+      </main>
+    );
+  }
+
+  if (textTranslationViewOpen) {
+    return (
+      <main className="app-shell">
+        <header className="topbar works-topbar">
+          <div>
+            <p className="eyebrow">Text translation</p>
+            <h1>文字翻译</h1>
+          </div>
+          <button className="secondary-button" type="button" onClick={() => closeTextTranslationPage()}>
+            <ArrowLeft size={15} />
+            返回
+          </button>
+        </header>
+
+        <section className="panel page-panel">
+          <div>
+            <h2>当前页面</h2>
+            <p>{pageContext?.url ?? "可从商品页自动读取图片，也可以手动上传多张图片。"}</p>
+            {pageContext ? <span>{pageImageUrls.length > 0 ? `${pageImageUrls.length} 张候选图可选` : "未发现候选图"}</span> : null}
+          </div>
+          <button className="secondary-button" type="button" onClick={() => void refreshPageContext()}>
+            <RefreshCw size={15} />
+            读取
+          </button>
+        </section>
+
+        <section className="panel">
+          <h2>翻译设置</h2>
+          <div className="two-col">
+            <label>
+              <span>目标语言</span>
+              <select
+                value={form.textLanguage === "none" ? "ko" : form.textLanguage}
+                onChange={(event) => setForm({ ...form, textLanguage: event.target.value as BatchFormState["textLanguage"] })}
+              >
+                {ECOMMERCE_TEXT_LANGUAGES.filter((item) => item.id !== "none").map((item) => (
+                  <option key={item.id} value={item.id}>{item.label}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>是否二创</span>
+              <select
+                value={form.allowTextRecreation ? "yes" : "no"}
+                onChange={(event) => setForm({ ...form, allowTextRecreation: event.target.value === "yes" })}
+              >
+                <option value="yes">是，允许润色重排</option>
+                <option value="no">否，尽量逐字保留</option>
+              </select>
+            </label>
+          </div>
+        </section>
+
+        <section className="panel reference-panel">
+          <div className="reference-upload-row translation-upload-row">
+            <label className="mini-button reference-upload-button">
+              <Upload size={13} />
+              上传图片
+              <input accept="image/*" multiple type="file" onChange={(event) => void uploadTranslationImages(event)} />
+            </label>
+            <span>支持多选，每张图会单独翻译并分别返回。</span>
+          </div>
+          {referenceImageOptions.length > 0 ? (
+            <div className="reference-image-picker" aria-label="待翻译图片候选">
+              <div className="reference-image-picker-header">
+                <strong>选择待翻译图片</strong>
+                <span>已选 {selectedTranslationImageUrls.length} 张</span>
+              </div>
+              <div className="translation-picker-actions">
+                <button className="mini-button" type="button" onClick={() => selectAllTranslationImages()}>全选</button>
+                <button className="mini-button" type="button" onClick={() => clearTranslationImages()}>清空</button>
+              </div>
+              <div className="reference-image-grid">
+                {referenceImageOptions.map((item, index) => (
+                  <button
+                    className={selectedTranslationImageUrls.includes(item.url) ? "reference-image-option active" : "reference-image-option"}
+                    key={item.key}
+                    title={item.label}
+                    type="button"
+                    onClick={() => toggleTranslationImage(item.url)}
+                  >
+                    <img alt={item.uploaded ? item.label : `候选商品图 ${index + 1}`} loading="lazy" src={item.url} />
+                    {selectedTranslationImageUrls.includes(item.url) ? <CheckCircle2 size={16} /> : null}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="reference-image-empty">
+              <ImageIcon size={15} />
+              <span>读取当前页或上传图片后，这里会显示待翻译图片。</span>
+            </div>
+          )}
+        </section>
+
+        <section className="sticky-actions">
+          <div>
+            <strong>{selectedTranslationImageUrls.length}</strong>
+            <span>
+              {task.status === "pending" || task.status === "running"
+                ? `${task.completedScenes ?? 0}/${task.totalScenes ?? selectedTranslationImageUrls.length} 张`
+                : "待翻译图片"}
+            </span>
+          </div>
+          <button className="primary-button" disabled={batchGenerationLocked} type="button" onClick={() => void submitTextTranslationBatch()}>
+            {batchGenerationLocked ? <Loader2 className="spin" size={17} /> : <Languages size={17} />}
+            开始翻译
+          </button>
+        </section>
+
+        <section className="panel results-panel">
+          <div className={`status status-${task.status}`}>
+            {task.status === "succeeded" ? <CheckCircle2 size={16} /> : task.status === "running" ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
+            {task.message}
+          </div>
+          {renderResultImages(task.status === "running" ? "翻译完成后会逐张显示在这里。" : "翻译结果会显示在这里。")}
+          {resultImages.length > 0 ? (
+            <div className="translation-download-row">
+              <button className="primary-button archive-download-button" disabled={zipDownloadLoading} type="button" onClick={() => void downloadTranslationArchive()}>
+                {zipDownloadLoading ? <Loader2 className="spin" size={15} /> : <Download size={15} />}
+                一键打包下载
+              </button>
+            </div>
+          ) : null}
         </section>
 
         {renderEditDialog()}
@@ -2264,6 +2768,13 @@ export function SidePanelApp() {
             </button>
           ))}
         </div>
+        <button className="translation-entry" type="button" onClick={() => openTextTranslationPage()}>
+          <Languages size={18} />
+          <div>
+            <strong>{textTranslationMode.label}</strong>
+            <span>{textTranslationMode.hint}</span>
+          </div>
+        </button>
       </section>
 
       {form.generationMode === "category-kit" ? (
@@ -2345,52 +2856,6 @@ export function SidePanelApp() {
           </div>
         </section>
       )}
-
-      {form.generationMode === "enhance" ? (
-        <section className="panel">
-          <h2>文字翻译</h2>
-          <div className="two-col">
-            <label>
-              <span>文字替换</span>
-              <select
-                value={form.textLanguage === "none" ? "none" : "replace"}
-                onChange={(event) => updateTextReplacementMode(event.target.value)}
-              >
-                <option value="none">不替换原图文字</option>
-                <option value="replace">替换为目标文字</option>
-              </select>
-            </label>
-            <label>
-              <span>目标文字</span>
-              <select
-                disabled={form.textLanguage === "none"}
-                value={form.textLanguage === "none" ? "ko" : form.textLanguage}
-                onChange={(event) => setForm({ ...form, textLanguage: event.target.value as BatchFormState["textLanguage"] })}
-              >
-                {ECOMMERCE_TEXT_LANGUAGES.filter((item) => item.id !== "none").map((item) => (
-                  <option key={item.id} value={item.id}>{item.label}</option>
-                ))}
-              </select>
-            </label>
-          </div>
-        </section>
-      ) : null}
-
-      {form.generationMode === "enhance" ? (
-        <section className="panel">
-          <h2>二创设置</h2>
-          <label>
-            <span>是否二创</span>
-            <select
-              value={form.allowTextRecreation ? "yes" : "no"}
-              onChange={(event) => setForm({ ...form, allowTextRecreation: event.target.value === "yes" })}
-            >
-              <option value="yes">是</option>
-              <option value="no">否</option>
-            </select>
-          </label>
-        </section>
-      ) : null}
 
       {form.generationMode === "enhance" ? (
         <section className="panel">

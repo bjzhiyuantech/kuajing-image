@@ -353,6 +353,45 @@ textarea:focus {
   color: #0d644f;
 }
 
+.translation-entry {
+  align-items: center;
+  background: #f7faf8;
+  border: 1px solid #d8e3de;
+  border-radius: 6px;
+  color: #26352e;
+  cursor: pointer;
+  display: flex;
+  gap: 10px;
+  margin-top: 8px;
+  min-height: 58px;
+  padding: 10px;
+  text-align: left;
+  width: 100%;
+}
+
+.translation-entry svg {
+  color: #0d6b52;
+  flex: 0 0 auto;
+}
+
+.translation-entry strong,
+.translation-entry span {
+  display: block;
+}
+
+.translation-entry strong {
+  color: #0d644f;
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.translation-entry span {
+  color: #607168;
+  font-size: 11px;
+  line-height: 1.4;
+  margin-top: 4px;
+}
+
 .scene-button {
   align-items: center;
   background: #f7faf8;
@@ -585,6 +624,17 @@ textarea:focus {
   color: #66766d;
   font-size: 11px;
   line-height: 1.35;
+}
+
+.translation-upload-row {
+  margin-top: 0;
+}
+
+.translation-picker-actions {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 8px;
 }
 
 .reference-upload-button {
@@ -887,6 +937,15 @@ textarea:focus {
   background: #f7faf8;
   border-radius: 6px;
   padding: 10px;
+}
+
+.translation-download-row {
+  margin-top: 10px;
+}
+
+.archive-download-button {
+  justify-content: center;
+  width: 100%;
 }
 
 .asset-link {

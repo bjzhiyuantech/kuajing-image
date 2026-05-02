@@ -10,7 +10,7 @@ export type CloudStorageProvider = "cos" | "oss";
 export type AssetCloudUploadStatus = "uploaded" | "failed";
 export type EcommercePlatform = "amazon" | "allegro" | "shopify" | "tiktok-shop" | "temu" | "shein" | "etsy" | "aliexpress" | "other";
 export type EcommerceMarket = "us" | "uk" | "pl" | "eu" | "ca" | "au" | "jp" | "kr" | "sg" | "mx" | "br" | "global";
-export type EcommerceGenerationMode = "enhance" | "creative" | "category-kit";
+export type EcommerceGenerationMode = "enhance" | "creative" | "category-kit" | "text-translation";
 export type EcommerceTextLanguage =
   | "none"
   | "zh-hant"
@@ -163,6 +163,14 @@ export const ECOMMERCE_SCENE_TEMPLATES = [
     defaultSizePresetId: "poster-portrait",
     prompt:
       "Create a promotional marketplace poster from the source product image. Keep the product exact and build a clean commercial layout with room for discount text, brand area, and short selling points. Do not redesign the product or add misleading claims."
+  },
+  {
+    id: "text-translation",
+    mode: "text-translation",
+    label: "文字翻译",
+    defaultSizePresetId: "square-1k",
+    prompt:
+      "Translate the readable product or marketing text in the source image into the requested target language. Preserve the original image composition, crop, product, background, spacing, visual hierarchy, and text placement as closely as possible. Do not create a new scene, do not add new claims, and do not redesign the product. Keep brand names, model numbers, legal marks, and non-translation marks unchanged unless they are clearly generic marketing copy."
   },
   {
     id: "lifestyle",
@@ -970,9 +978,11 @@ export function composeEcommercePrompt(context: EcommercePromptContext): string 
   ].filter(Boolean);
 
   const modeGuard =
-    template?.mode === "enhance"
-      ? "Reference image rule: treat the source product image as the single source of truth. Preserve the original product exactly. Only improve lighting, background, layout, selling-point text, callouts, and marketplace composition. Do not generate logos or fake brand marks; brand marks are added later as a separate overlay. Do not redesign the product."
-      : "Reference image rule: use the source product image to preserve the product's key identity, shape, color, material, and recognizable details while creating a new commercial scene.";
+    template?.mode === "text-translation"
+      ? "Reference image rule: treat the source image as the single source of truth. Preserve the product, background, crop, composition, and layout. Only translate eligible visible marketing or product text into the target language; do not add new visual elements, callouts, logos, claims, props, people, or decorative text."
+      : template?.mode === "enhance"
+        ? "Reference image rule: treat the source product image as the single source of truth. Preserve the original product exactly. Only improve lighting, background, layout, selling-point text, callouts, and marketplace composition. Do not generate logos or fake brand marks; brand marks are added later as a separate overlay. Do not redesign the product."
+        : "Reference image rule: use the source product image to preserve the product's key identity, shape, color, material, and recognizable details while creating a new commercial scene.";
 
   const textLanguageGuard =
     textLanguage && textLanguage.id !== "none"
