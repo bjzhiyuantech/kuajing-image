@@ -861,6 +861,10 @@ export function SidePanelApp() {
     () => availableScenes.filter((template) => form.sceneTemplateIds.includes(template.id)),
     [availableScenes, form.sceneTemplateIds]
   );
+  const effectiveSceneTemplateIds =
+    form.generationMode === "category-kit" ? categoryKitScenesByVersion[form.categoryKit.kitVersion] : form.sceneTemplateIds;
+  const effectiveCountPerScene = form.generationMode === "category-kit" ? 1 : form.countPerScene;
+  const effectiveSelectedScenes = availableScenes.filter((template) => effectiveSceneTemplateIds.includes(template.id));
 
   const pageImageUrls = pageContext?.imageUrls ?? [];
   const selectedReferenceImageUrl = form.referenceImageUrl.trim();
@@ -1765,6 +1769,7 @@ export function SidePanelApp() {
       return {
         ...current,
         categoryKit: nextKit,
+        countPerScene: 1,
         sceneTemplateIds: nextScenes
       };
     });
@@ -1962,6 +1967,7 @@ export function SidePanelApp() {
       market: generationMode === "category-kit" ? "pl" : current.market,
       sizeMode: generationMode === "category-kit" ? "preset" : current.sizeMode,
       size: generationMode === "category-kit" ? { width: 2048, height: 2048 } : current.size,
+      countPerScene: generationMode === "category-kit" ? 1 : current.countPerScene,
       stylePresetId: generationMode === "enhance" || generationMode === "category-kit" ? "product" : "photoreal",
       textLanguage: generationMode === "enhance" ? current.textLanguage : generationMode === "category-kit" ? "pl" : "none",
       allowTextRecreation: generationMode === "enhance" ? current.allowTextRecreation : true,
@@ -2009,7 +2015,7 @@ export function SidePanelApp() {
       records: []
     });
 
-    const fallbackRecords = selectedScenes.map((scene): GenerationRecord => ({
+    const fallbackRecords = effectiveSelectedScenes.map((scene): GenerationRecord => ({
       id: `${taskId}-${scene.id}`,
       mode: selectedReferenceImageUrls.length > 0 ? "edit" : "generate",
       prompt: composeEcommercePrompt({
@@ -2027,7 +2033,7 @@ export function SidePanelApp() {
       size: form.size,
       quality: form.quality,
       outputFormat: form.outputFormat,
-      count: form.countPerScene,
+      count: effectiveCountPerScene,
       status: "pending",
       createdAt: new Date().toISOString(),
       outputs: []
@@ -2045,13 +2051,13 @@ export function SidePanelApp() {
           textLanguage: form.textLanguage,
           allowTextRecreation: form.allowTextRecreation,
           removeWatermarkAndLogo: form.removeWatermarkAndLogo,
-          sceneTemplateIds: form.sceneTemplateIds,
+          sceneTemplateIds: effectiveSceneTemplateIds,
           sourcePageUrl: pageContext?.url,
           size: form.size,
           stylePresetId: form.stylePresetId,
           quality: form.quality,
           outputFormat: form.outputFormat,
-          countPerScene: form.countPerScene,
+          countPerScene: effectiveCountPerScene,
           referenceImage,
           extraDirection: effectiveExtraDirection
         })
@@ -2267,7 +2273,7 @@ export function SidePanelApp() {
               <h2>配饰-丝巾类目套图</h2>
               <p>Allegro Poland Listing Image Kit：第一张严格合规，后续图片负责点击率和转化。</p>
             </div>
-            <span>{selectedScenes.length} 张</span>
+            <span>{effectiveSelectedScenes.length} 张</span>
           </div>
           <label>
             <span>套图版本</span>
@@ -2313,16 +2319,11 @@ export function SidePanelApp() {
             </label>
           </div>
           <div className="scene-grid kit-scene-grid">
-            {availableScenes.map((scene) => (
-              <button
-                className={form.sceneTemplateIds.includes(scene.id) ? "scene-button active" : "scene-button"}
-                key={scene.id}
-                type="button"
-                onClick={() => toggleScene(scene.id)}
-              >
+            {effectiveSelectedScenes.map((scene) => (
+              <div className="scene-button active kit-scene-item" key={scene.id}>
                 <Wand2 size={15} />
                 {scene.label}
-              </button>
+              </div>
             ))}
           </div>
         </section>
@@ -2494,14 +2495,16 @@ export function SidePanelApp() {
               ))}
             </select>
           </label>
-          <label>
-            <span>每场景数量</span>
-            <select value={form.countPerScene} onChange={(event) => setForm({ ...form, countPerScene: Number(event.target.value) as 1 | 2 | 4 })}>
-              <option value={1}>1</option>
-              <option value={2}>2</option>
-              <option value={4}>4</option>
-            </select>
-          </label>
+          {form.generationMode === "category-kit" ? null : (
+            <label>
+              <span>每场景数量</span>
+              <select value={form.countPerScene} onChange={(event) => setForm({ ...form, countPerScene: Number(event.target.value) as 1 | 2 | 4 })}>
+                <option value={1}>1</option>
+                <option value={2}>2</option>
+                <option value={4}>4</option>
+              </select>
+            </label>
+          )}
           <label>
             <span>风格</span>
             <select value={form.stylePresetId} onChange={(event) => setForm({ ...form, stylePresetId: event.target.value as StylePresetId })}>
@@ -2535,10 +2538,10 @@ export function SidePanelApp() {
 
       <section className="sticky-actions">
         <div>
-          <strong>{selectedScenes.length * form.countPerScene}</strong>
+          <strong>{effectiveSelectedScenes.length * effectiveCountPerScene}</strong>
           <span>
             {task.status === "pending" || task.status === "running"
-              ? `${task.completedScenes ?? 0}/${task.totalScenes ?? selectedScenes.length} 场景`
+              ? `${task.completedScenes ?? 0}/${task.totalScenes ?? effectiveSelectedScenes.length} 场景`
               : "张图像"}
           </span>
         </div>
