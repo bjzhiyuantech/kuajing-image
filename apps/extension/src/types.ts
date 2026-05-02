@@ -13,10 +13,6 @@ import type {
   StylePresetId
 } from "@gpt-image-canvas/shared";
 
-export interface ExtensionSettings {
-  apiBaseUrl: string;
-}
-
 export interface AuthUser {
   id?: string;
   email: string;

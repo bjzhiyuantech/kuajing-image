@@ -44,10 +44,11 @@ import {
   type ReferenceImageInput,
   type StylePresetId
 } from "@gpt-image-canvas/shared";
-import type { AuthUser, BatchFormState, BatchTask, ExtensionAuthState, ExtensionSettings, PageContext } from "./types";
+import type { AuthUser, BatchFormState, BatchTask, ExtensionAuthState, PageContext } from "./types";
 
 const ACTIVE_BATCH_JOB_STORAGE_KEY = "activeBatchJob";
 const AUTH_STORAGE_KEY = "auth";
+const DEFAULT_API_BASE_URL = "https://imagen.neimou.com";
 const MOCK_BILLING_PLANS: BillingPlan[] = [
   {
     id: "starter",
@@ -80,10 +81,6 @@ const MOCK_BILLING_PLANS: BillingPlan[] = [
   }
 ];
 
-const defaultSettings: ExtensionSettings = {
-  apiBaseUrl: "http://127.0.0.1:8787"
-};
-
 const defaultAuth: ExtensionAuthState = {
   token: "",
   user: null
@@ -95,7 +92,7 @@ interface StoredBatchJob {
   token?: string;
 }
 
-type ToolTab = "account" | "billing" | "history" | "stats" | "settings";
+type ToolTab = "account" | "billing" | "history" | "stats";
 type AuthMode = "login" | "register";
 type PendingAuthAction = "generate" | "billing" | "history" | "stats" | "job";
 
@@ -653,7 +650,6 @@ function formatSourceUrl(url: string): string {
 }
 
 export function SidePanelApp() {
-  const [settings, setSettings] = useState<ExtensionSettings>(defaultSettings);
   const [auth, setAuth] = useState<ExtensionAuthState>(defaultAuth);
   const [authMode, setAuthMode] = useState<AuthMode>("login");
   const [authForm, setAuthForm] = useState({ email: "", password: "", displayName: "" });
@@ -759,24 +755,19 @@ export function SidePanelApp() {
   }, [auth.user, billingState.data.quotaTotal, billingState.data.quotaUsed]);
 
   useEffect(() => {
-    void chrome.storage.local.get(["settings", AUTH_STORAGE_KEY, ACTIVE_BATCH_JOB_STORAGE_KEY]).then((result) => {
-      const nextSettings = {
-        ...defaultSettings,
-        ...(result.settings as Partial<ExtensionSettings> | undefined)
-      };
+    void chrome.storage.local.get([AUTH_STORAGE_KEY, ACTIVE_BATCH_JOB_STORAGE_KEY]).then((result) => {
       const storedAuth = result[AUTH_STORAGE_KEY] as Partial<ExtensionAuthState> | undefined;
       const activeJob = result[ACTIVE_BATCH_JOB_STORAGE_KEY] as StoredBatchJob | undefined;
       const nextAuth = {
         token: storedAuth?.token || activeJob?.token || "",
         user: storedAuth?.user ?? null
       };
-      setSettings({ apiBaseUrl: activeJob?.apiBaseUrl ?? nextSettings.apiBaseUrl });
       setAuth(nextAuth);
       if (nextAuth.token && !nextAuth.user) {
-        void refreshMe(nextAuth.token, activeJob?.apiBaseUrl ?? nextSettings.apiBaseUrl);
+        void refreshMe(nextAuth.token, DEFAULT_API_BASE_URL);
       }
       if (nextAuth.token) {
-        void syncWebAuth(nextAuth.token, activeJob?.apiBaseUrl ?? nextSettings.apiBaseUrl);
+        void syncWebAuth(nextAuth.token, DEFAULT_API_BASE_URL);
       }
       if (activeJob?.jobId) {
         setTask({
@@ -818,7 +809,7 @@ export function SidePanelApp() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [auth.token, settings.apiBaseUrl, task.id, task.status]);
+  }, [auth.token, task.id, task.status]);
 
   useEffect(() => {
     if (!toolPanelOpen) {
@@ -833,10 +824,10 @@ export function SidePanelApp() {
     if (activeTool === "billing") {
       void refreshBilling();
     }
-  }, [activeTool, auth.token, toolPanelOpen, settings.apiBaseUrl]);
+  }, [activeTool, auth.token, toolPanelOpen]);
 
   function apiBaseUrl(): string {
-    return settings.apiBaseUrl.replace(/\/$/u, "");
+    return DEFAULT_API_BASE_URL;
   }
 
   function apiHeaders(json = false, token = auth.token): HeadersInit {
@@ -942,11 +933,6 @@ export function SidePanelApp() {
     }
 
     await chrome.tabs.create({ url: galleryDetailUrl(asset) });
-  }
-
-  async function saveSettings(nextSettings: ExtensionSettings): Promise<void> {
-    setSettings(nextSettings);
-    await chrome.storage.local.set({ settings: nextSettings });
   }
 
   async function saveAuth(nextAuth: ExtensionAuthState): Promise<void> {
@@ -1267,7 +1253,7 @@ export function SidePanelApp() {
     void chrome.storage.local.set({
       [ACTIVE_BATCH_JOB_STORAGE_KEY]: {
         jobId: job.id,
-        apiBaseUrl: settings.apiBaseUrl,
+        apiBaseUrl: DEFAULT_API_BASE_URL,
         token: auth.token
       } satisfies StoredBatchJob
     });
@@ -1360,7 +1346,7 @@ export function SidePanelApp() {
       void chrome.storage.local.set({
         [ACTIVE_BATCH_JOB_STORAGE_KEY]: {
           jobId: body.jobId,
-          apiBaseUrl: settings.apiBaseUrl,
+          apiBaseUrl: DEFAULT_API_BASE_URL,
           token
         } satisfies StoredBatchJob
       });
@@ -2051,16 +2037,12 @@ export function SidePanelApp() {
             <BarChart3 size={15} />
             统计
           </button>
-          <button className={activeTool === "settings" && toolPanelOpen ? "tool-tab active" : "tool-tab"} type="button" onClick={() => openTool("settings")}>
-            <KeyRound size={15} />
-            设置
-          </button>
         </div>
 
         {toolPanelOpen ? (
           <div className="tool-panel">
             <div className="tool-panel-header">
-              <strong>{activeTool === "account" ? "账户" : activeTool === "billing" ? "套餐与余额" : activeTool === "history" ? "历史任务" : activeTool === "stats" ? "统计概览" : "设置"}</strong>
+              <strong>{activeTool === "account" ? "账户" : activeTool === "billing" ? "套餐与余额" : activeTool === "history" ? "历史任务" : "统计概览"}</strong>
               <button className="tool-close" type="button" onClick={() => setToolPanelOpen(false)}>收起</button>
             </div>
 
@@ -2342,15 +2324,6 @@ export function SidePanelApp() {
               </div>
             ) : null}
 
-            {activeTool === "settings" ? (
-              <div>
-                <label>
-                  <span>后端 API</span>
-                  <input value={settings.apiBaseUrl} onChange={(event) => void saveSettings({ apiBaseUrl: event.target.value })} />
-                </label>
-                <p className="settings-note">登录后插件会使用当前账号访问后端，历史任务和统计按账号隔离。</p>
-              </div>
-            ) : null}
           </div>
         ) : null}
       </section>
