@@ -99,7 +99,7 @@ import {
   listEcommerceBatchJobs,
   updateEcommerceBatchJob
 } from "./ecommerce-jobs.js";
-import { deleteGalleryOutput, getGalleryImages, getProjectState, saveProjectSnapshot } from "./project-store.js";
+import { deleteAdminGalleryOutput, deleteGalleryOutput, getAdminGalleryImages, getGalleryImages, getProjectState, saveProjectSnapshot } from "./project-store.js";
 import { planExpiryFrom, resetExpiredUserPlans } from "./plan-expiration.js";
 import { runtimePaths, serverConfig } from "./runtime.js";
 import { assets, ecommerceBatchJobs, subscriptionPlans, users, workspaceMembers, workspaces } from "./schema.js";
@@ -265,10 +265,21 @@ async function getAssetQueryTokenSession(c: Context): Promise<AuthSession | unde
 
 app.get("/api/project", async (c) => c.json(await getProjectState(await requestTenant(c))));
 
-app.get("/api/gallery", async (c) => c.json(await getGalleryImages(await requestTenant(c))));
+app.get("/api/gallery", async (c) => {
+  const session = authSessions.get(c);
+  if (session?.user.role === "admin") {
+    return c.json(await getAdminGalleryImages());
+  }
+
+  return c.json(await getGalleryImages(await requestTenant(c)));
+});
 
 app.delete("/api/gallery/:outputId", async (c) => {
-  const deleted = await deleteGalleryOutput(await requestTenant(c), c.req.param("outputId"));
+  const session = authSessions.get(c);
+  const deleted =
+    session?.user.role === "admin"
+      ? await deleteAdminGalleryOutput(c.req.param("outputId"))
+      : await deleteGalleryOutput(await requestTenant(c), c.req.param("outputId"));
   if (!deleted) {
     return c.json(errorResponse("not_found", "找不到请求的 Gallery 图片记录。"), 404);
   }
@@ -320,7 +331,7 @@ app.get("/api/assets/:id/preview", async (c) => {
     return c.json(errorResponse(parsedWidth.code, parsedWidth.message), 400);
   }
 
-  const preview = await readStoredAssetPreview(await requestTenant(c), c.req.param("id"), parsedWidth.width);
+  const preview = await readStoredAssetPreview(await assetReadTenant(c, c.req.param("id")), c.req.param("id"), parsedWidth.width);
   if (!preview) {
     return c.json(errorResponse("not_found", "Asset not found."), 404);
   }
@@ -336,7 +347,7 @@ app.get("/api/assets/:id/preview", async (c) => {
 });
 
 app.get("/api/assets/:id/download", async (c) => {
-  const asset = await readStoredAsset(await requestTenant(c), c.req.param("id"));
+  const asset = await readStoredAsset(await assetReadTenant(c, c.req.param("id")), c.req.param("id"));
   if (!asset) {
     return c.json(errorResponse("not_found", "找不到请求的图像资源。"), 404);
   }
@@ -352,7 +363,7 @@ app.get("/api/assets/:id/download", async (c) => {
 });
 
 app.get("/api/assets/:id", async (c) => {
-  const asset = await readStoredAsset(await requestTenant(c), c.req.param("id"));
+  const asset = await readStoredAsset(await assetReadTenant(c, c.req.param("id")), c.req.param("id"));
   if (!asset) {
     return c.json(errorResponse("not_found", "找不到请求的图像资源。"), 404);
   }
@@ -1134,6 +1145,29 @@ async function requestTenant(c: Context): Promise<RequestTenant> {
   }
 
   throw new AuthError("unauthorized", "请先登录，并使用 Authorization: Bearer <JWT> 访问接口。", 401);
+}
+
+async function assetReadTenant(c: Context, assetId: string): Promise<RequestTenant> {
+  const session = authSessions.get(c);
+  if (session?.user.role !== "admin") {
+    return requestTenant(c);
+  }
+
+  const [asset] = await db
+    .select({
+      workspaceId: assets.workspaceId,
+      userId: assets.createdByUserId
+    })
+    .from(assets)
+    .where(eq(assets.id, assetId))
+    .limit(1);
+
+  return asset
+    ? {
+        userId: asset.userId,
+        workspaceId: asset.workspaceId
+      }
+    : session.tenant;
 }
 
 async function requireAdminRoute(c: Context): Promise<Response | undefined> {

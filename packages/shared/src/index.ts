@@ -410,6 +410,10 @@ export interface GenerationResponse {
 export interface GalleryImageItem {
   outputId: string;
   generationId: string;
+  userId?: string;
+  userEmail?: string;
+  userDisplayName?: string;
+  workspaceId?: string;
   mode: ImageMode;
   prompt: string;
   effectivePrompt: string;

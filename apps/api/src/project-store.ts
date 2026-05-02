@@ -14,7 +14,7 @@ import type {
   ProjectState
 } from "./contracts.js";
 import { db } from "./database.js";
-import { assets, generationOutputs, generationRecords, projects } from "./schema.js";
+import { assets, generationOutputs, generationRecords, projects, users } from "./schema.js";
 
 export const DEFAULT_PROJECT_ID = "default";
 const DEFAULT_PROJECT_NAME = "Default Project";
@@ -115,22 +115,75 @@ export async function getGalleryImages(tenant: RequestTenant): Promise<GalleryRe
     .orderBy(desc(generationOutputs.createdAt));
 
   return {
-    items: rows.map(({ output, generation, asset }) => ({
-      outputId: output.id,
-      generationId: generation.id,
-      mode: generation.mode as ImageMode,
-      prompt: generation.prompt,
-      effectivePrompt: generation.effectivePrompt,
-      presetId: generation.presetId,
-      size: {
-        width: generation.width,
-        height: generation.height
-      },
-      quality: generation.quality as ImageQuality,
-      outputFormat: generation.outputFormat as OutputFormat,
-      createdAt: output.createdAt,
-      asset: toGeneratedAsset(asset)
-    })).filter((item): item is GalleryImageItem => Boolean(item.asset))
+    items: rows.flatMap(({ output, generation, asset }) => {
+      const generatedAsset = toGeneratedAsset(asset);
+      if (!generatedAsset) {
+        return [];
+      }
+
+      return [{
+        outputId: output.id,
+        generationId: generation.id,
+        mode: generation.mode as ImageMode,
+        prompt: generation.prompt,
+        effectivePrompt: generation.effectivePrompt,
+        presetId: generation.presetId,
+        size: {
+          width: generation.width,
+          height: generation.height
+        },
+        quality: generation.quality as ImageQuality,
+        outputFormat: generation.outputFormat as OutputFormat,
+        createdAt: output.createdAt,
+        asset: generatedAsset
+      }];
+    })
+  };
+}
+
+export async function getAdminGalleryImages(): Promise<GalleryResponse> {
+  const rows = await db
+    .select({
+      output: generationOutputs,
+      generation: generationRecords,
+      asset: assets,
+      user: users
+    })
+    .from(generationOutputs)
+    .innerJoin(generationRecords, eq(generationOutputs.generationId, generationRecords.id))
+    .innerJoin(assets, eq(generationOutputs.assetId, assets.id))
+    .leftJoin(users, eq(users.id, generationRecords.createdByUserId))
+    .where(eq(generationOutputs.status, "succeeded"))
+    .orderBy(desc(generationOutputs.createdAt));
+
+  return {
+    items: rows.flatMap(({ output, generation, asset, user }) => {
+      const generatedAsset = toGeneratedAsset(asset);
+      if (!generatedAsset) {
+        return [];
+      }
+
+      return [{
+        outputId: output.id,
+        generationId: generation.id,
+        userId: generation.createdByUserId,
+        userEmail: user?.email,
+        userDisplayName: user?.displayName,
+        workspaceId: output.workspaceId,
+        mode: generation.mode as ImageMode,
+        prompt: generation.prompt,
+        effectivePrompt: generation.effectivePrompt,
+        presetId: generation.presetId,
+        size: {
+          width: generation.width,
+          height: generation.height
+        },
+        quality: generation.quality as ImageQuality,
+        outputFormat: generation.outputFormat as OutputFormat,
+        createdAt: output.createdAt,
+        asset: generatedAsset
+      }];
+    })
   };
 }
 
@@ -138,6 +191,13 @@ export async function deleteGalleryOutput(tenant: RequestTenant, outputId: strin
   const result = await db
     .delete(generationOutputs)
     .where(and(eq(generationOutputs.id, outputId), eq(generationOutputs.workspaceId, tenant.workspaceId)));
+  return affectedRows(result) > 0;
+}
+
+export async function deleteAdminGalleryOutput(outputId: string): Promise<boolean> {
+  const result = await db
+    .delete(generationOutputs)
+    .where(eq(generationOutputs.id, outputId));
   return affectedRows(result) > 0;
 }
 

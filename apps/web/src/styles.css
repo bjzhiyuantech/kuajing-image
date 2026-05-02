@@ -3311,6 +3311,13 @@ a:focus-visible {
   padding: 0.32rem 0.48rem;
 }
 
+.gallery-owner-tag {
+  max-width: min(100%, 18rem);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .gallery-feature .gallery-card__actions {
   width: auto;
   grid-template-columns: repeat(4, 2.35rem);
@@ -3434,11 +3441,31 @@ a:focus-visible {
   border-top-color: var(--line);
 }
 
+.gallery-card__footer-meta {
+  display: grid;
+  min-width: 0;
+  gap: 0.35rem;
+}
+
 .gallery-time-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
   color: var(--muted-ink);
   font-family: var(--font-mono);
   font-size: 0.68rem;
   font-weight: 600;
+}
+
+.gallery-card__footer .gallery-owner-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
+  min-width: 0;
+  color: #0f5f58;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 700;
 }
 
 .gallery-card__actions {

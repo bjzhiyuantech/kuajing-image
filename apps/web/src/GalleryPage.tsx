@@ -13,6 +13,7 @@ import {
   Search,
   Sparkles,
   Trash2,
+  UserRound,
   X,
   XCircle
 } from "lucide-react";
@@ -159,7 +160,7 @@ export function GalleryPage({ fetcher, onDeleted, onReuse }: GalleryPageProps) {
       return items;
     }
 
-    return items.filter((item) => normalizeSearchText(item.prompt).includes(normalizedQuery));
+    return items.filter((item) => normalizeSearchText(`${item.prompt} ${ownerLabel(item)}`).includes(normalizedQuery));
   }, [items, query]);
   const featuredItem = filteredItems[0] ?? null;
   const gridItems = featuredItem ? filteredItems.slice(1) : filteredItems;
@@ -390,6 +391,7 @@ function FeaturedGalleryItem({
           onToggle={() => onTogglePrompt(item.outputId)}
         />
         <div className="gallery-feature__meta">
+          <GalleryOwnerTag item={item} />
           <span>
             <Clock3 className="size-3.5" aria-hidden="true" />
             {formatCreatedTime(item.createdAt)}
@@ -458,10 +460,13 @@ function GalleryCard({
           onToggle={() => onTogglePrompt(item.outputId)}
         />
         <div className="gallery-card__footer">
-          <span className="gallery-time-tag">
-            <Clock3 className="size-3.5" aria-hidden="true" />
-            {formatCreatedTime(item.createdAt)}
-          </span>
+          <div className="gallery-card__footer-meta">
+            <GalleryOwnerTag item={item} />
+            <span className="gallery-time-tag">
+              <Clock3 className="size-3.5" aria-hidden="true" />
+              {formatCreatedTime(item.createdAt)}
+            </span>
+          </div>
           <GalleryIconActions
             deleting={deleting}
             item={item}
@@ -553,6 +558,20 @@ function GalleryTags({ item, compact = false }: { item: GalleryImageItem; compac
   );
 }
 
+function GalleryOwnerTag({ item }: { item: GalleryImageItem }) {
+  const owner = ownerLabel(item);
+  if (!owner) {
+    return null;
+  }
+
+  return (
+    <span className="gallery-owner-tag" title={owner}>
+      <UserRound className="size-3.5" aria-hidden="true" />
+      {owner}
+    </span>
+  );
+}
+
 function CollapsiblePrompt({
   expanded,
   label,
@@ -634,6 +653,7 @@ function GalleryDetailDialog({
 
           <aside className="gallery-modal__copy">
             <div className="gallery-modal__meta">
+              <GalleryOwnerTag item={item} />
               <span>
                 <Clock3 className="size-3.5" aria-hidden="true" />
                 {formatCreatedTime(item.createdAt)}
@@ -767,6 +787,15 @@ function qualityLabel(quality: GalleryImageItem["quality"]): string {
     default:
       return "自动质量";
   }
+}
+
+function ownerLabel(item: Pick<GalleryImageItem, "userDisplayName" | "userEmail" | "userId">): string {
+  const displayName = item.userDisplayName?.trim();
+  const email = item.userEmail?.trim();
+  if (displayName && email && displayName !== email) {
+    return `${displayName} · ${email}`;
+  }
+  return displayName || email || item.userId || "";
 }
 
 function promptExcerpt(promptValue: string): string {
