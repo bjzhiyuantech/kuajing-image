@@ -1,5 +1,6 @@
 import {
   AlertTriangle,
+  ArrowRight,
   BarChart3,
   CheckCircle2,
   Clock,
@@ -29,6 +30,194 @@ import { authFetch, readApiError, type AuthSession, type AuthUser } from "./auth
 import { BRAND_TAGLINE, BrandMark, BrandName } from "./Brand";
 
 type AuthMode = "login" | "register";
+
+const homeValuePoints = [
+  {
+    icon: ImageIcon,
+    title: "把商品素材变成可出单图片",
+    description: "用提示词或参考图生成主图、场景图、海报和长图，减少反复找图、抠图、改版的时间。"
+  },
+  {
+    icon: Pencil,
+    title: "画布里完成构思和微调",
+    description: "生成结果直接落到专业画布，方便对比、拼版、重跑、下载，让设计过程不再散落在多个工具里。"
+  },
+  {
+    icon: Database,
+    title: "历史资产可找回、可复用",
+    description: "生成记录、提示词和项目状态跟随账户保存，常用素材可以沉淀成下一次上新的起点。"
+  },
+  {
+    icon: ShieldCheck,
+    title: "本地优先，也能接入云备份",
+    description: "支持本地运行数据和可选 OSS/COS 备份，适合团队管理电商图片素材和生成资产。"
+  }
+] as const;
+
+const installSteps = [
+  "注册或登录商图 AI 助手账户",
+  "安装浏览器插件并完成授权",
+  "在商品页、素材页或竞品页打开插件采集灵感",
+  "回到画布生成、整理并下载可用图片"
+] as const;
+
+export function HomePage({
+  onAuthNavigate
+}: {
+  onAuthNavigate: (mode: AuthMode) => void;
+}) {
+  return (
+    <main className="home-page app-view">
+      <header className="home-nav" aria-label="首页导航">
+        <a className="brand-lockup home-nav__brand" href="/" aria-label="商图 AI 助手首页">
+          <BrandMark />
+          <div>
+            <BrandName />
+            <p className="brand-tagline">{BRAND_TAGLINE}</p>
+          </div>
+        </a>
+        <nav className="home-nav__links" aria-label="产品导航">
+          <a href="#value">产品能力</a>
+          <a href="#install">安装插件</a>
+          <button type="button" onClick={() => onAuthNavigate("login")}>
+            登录
+          </button>
+          <button className="home-nav__primary" type="button" onClick={() => onAuthNavigate("register")}>
+            免费注册
+          </button>
+        </nav>
+      </header>
+
+      <section className="home-hero" aria-labelledby="home-hero-title">
+        <div className="home-hero__content">
+          <p className="home-eyebrow">
+            <Sparkles className="size-4" aria-hidden="true" />
+            面向电商卖家的 AI 图片工作台
+          </p>
+          <h1 id="home-hero-title">从网页灵感到商品图片，一条链路完成</h1>
+          <p className="home-hero__lead">
+            商图 AI 助手把浏览器插件、AI 画布、生成历史和素材管理放在一起，帮你更快完成商品主图、场景图、活动海报和内容素材。
+          </p>
+          <div className="home-hero__actions">
+            <button className="home-button home-button--primary" type="button" onClick={() => onAuthNavigate("register")}>
+              免费开始使用
+              <ArrowRight className="size-4" aria-hidden="true" />
+            </button>
+            <a className="home-button home-button--secondary" href="#install">
+              查看插件安装
+            </a>
+          </div>
+          <div className="home-hero__proof" aria-label="核心优势">
+            <span>
+              <CheckCircle2 className="size-4" aria-hidden="true" />
+              支持文生图和参考图生成
+            </span>
+            <span>
+              <CheckCircle2 className="size-4" aria-hidden="true" />
+              画布、历史、图库统一管理
+            </span>
+            <span>
+              <CheckCircle2 className="size-4" aria-hidden="true" />
+              插件连接网页素材场景
+            </span>
+          </div>
+        </div>
+
+        <div className="home-product" aria-label="产品界面预览">
+          <div className="home-product__bar">
+            <span />
+            <span />
+            <span />
+          </div>
+          <div className="home-product__body">
+            <div className="home-product__canvas">
+              <div className="home-product__image">
+                <ImageIcon className="size-7" aria-hidden="true" />
+                <span>商品场景图</span>
+              </div>
+              <div className="home-product__prompt">高端护肤品主图，清透水面，柔和反光，保留标题空间</div>
+            </div>
+            <aside className="home-product__panel">
+              <p>AI 生成</p>
+              <strong>4 张图正在生成</strong>
+              <span>参考图、尺寸、格式和质量可控</span>
+              <div className="home-product__progress" />
+            </aside>
+          </div>
+        </div>
+      </section>
+
+      <section className="home-section" id="value" aria-labelledby="home-value-title">
+        <div className="home-section__header">
+          <p className="home-eyebrow">
+            <Package className="size-4" aria-hidden="true" />
+            用户价值
+          </p>
+          <h2 id="home-value-title">它不是只会出图，而是帮你把图片生产流程收起来</h2>
+        </div>
+        <div className="home-value-grid">
+          {homeValuePoints.map((item) => {
+            const Icon = item.icon;
+            return (
+              <article className="home-value-card" key={item.title}>
+                <span>
+                  <Icon className="size-5" aria-hidden="true" />
+                </span>
+                <h3>{item.title}</h3>
+                <p>{item.description}</p>
+              </article>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="home-section home-install" id="install" aria-labelledby="home-install-title">
+        <div className="home-section__header">
+          <p className="home-eyebrow">
+            <ExternalLink className="size-4" aria-hidden="true" />
+            插件安装
+          </p>
+          <h2 id="home-install-title">安装浏览器插件，把网页素材带回工作台</h2>
+          <p>插件负责连接你正在浏览的商品页、素材页和参考页；工作台负责生成、整理、保存和下载最终图片。</p>
+        </div>
+        <div className="home-install__layout">
+          <ol className="home-steps">
+            {installSteps.map((step, index) => (
+              <li key={step}>
+                <span>{index + 1}</span>
+                <p>{step}</p>
+              </li>
+            ))}
+          </ol>
+          <div className="home-install__panel">
+            <Clock className="size-5" aria-hidden="true" />
+            <h3>建议先注册账户，再安装插件</h3>
+            <p>这样插件授权后可以直接同步到你的画布和图库，避免采集素材、生成记录和账户状态分散。</p>
+            <button className="home-button home-button--primary" type="button" onClick={() => onAuthNavigate("register")}>
+              注册并安装
+              <ArrowRight className="size-4" aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section className="home-cta" aria-labelledby="home-cta-title">
+        <div>
+          <h2 id="home-cta-title">准备好把下一批商品图做得更快一点了吗？</h2>
+          <p>注册后进入画布，安装插件，再从你的真实选品和素材页面开始生成。</p>
+        </div>
+        <div className="home-cta__actions">
+          <button className="home-button home-button--primary" type="button" onClick={() => onAuthNavigate("register")}>
+            创建账户
+          </button>
+          <button className="home-button home-button--ghost" type="button" onClick={() => onAuthNavigate("login")}>
+            已有账户登录
+          </button>
+        </div>
+      </section>
+    </main>
+  );
+}
 
 export function AuthScreen({
   mode,

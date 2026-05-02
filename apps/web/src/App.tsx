@@ -66,7 +66,7 @@ import {
   type StorageTestResult,
   type StylePresetId
 } from "@gpt-image-canvas/shared";
-import { AccountPage, AdminPage, AuthScreen } from "./AuthViews";
+import { AccountPage, AdminPage, AuthScreen, HomePage } from "./AuthViews";
 import {
   authFetch,
   clearStoredAuthToken,
@@ -1459,6 +1459,7 @@ function PanelStatusIcon({ tone }: { tone: PanelStatusTone }) {
 
 export function App() {
   const [route, setRoute] = useState<AppRoute>(() => routeFromLocation());
+  const [publicPath, setPublicPath] = useState(() => window.location.pathname);
   const [authStatus, setAuthStatus] = useState<AuthStatus>(() => (consumeAuthTokenFromUrl() || getStoredAuthToken() ? "checking" : "anonymous"));
   const [authMode, setAuthMode] = useState<AuthMode>("login");
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
@@ -1506,6 +1507,15 @@ export function App() {
       window.history.pushState(null, "", nextPath);
     }
     setRoute(nextRoute);
+    setPublicPath(nextPath);
+  }, []);
+  const navigateToAuth = useCallback((mode: AuthMode): void => {
+    const nextPath = mode === "register" ? "/register" : "/login";
+    if (window.location.pathname !== nextPath) {
+      window.history.pushState(null, "", nextPath);
+    }
+    setAuthMode(mode);
+    setPublicPath(nextPath);
   }, []);
   const isGenerating = activeGenerationCount > 0;
   const isAuthenticated = authStatus === "authenticated" && currentUser !== null;
@@ -1518,6 +1528,8 @@ export function App() {
     setSaveError("");
     setIsProjectLoaded(false);
     if (route === "admin" && !isAdminUser(session.user)) {
+      navigateToRoute("canvas");
+    } else if (window.location.pathname === "/login" || window.location.pathname === "/register") {
       navigateToRoute("canvas");
     }
   }, [navigateToRoute, route]);
@@ -1626,6 +1638,10 @@ export function App() {
   }, [navigateToRoute, route]);
 
   useEffect(() => {
+    if (isAuthenticated && (window.location.pathname === "/login" || window.location.pathname === "/register")) {
+      navigateToRoute("canvas");
+      return;
+    }
     if (isAuthenticated && route === "admin" && !isAdminUser(currentUser)) {
       navigateToRoute("canvas");
     }
@@ -1701,6 +1717,15 @@ export function App() {
 
   useEffect(() => {
     const updateRoute = (): void => {
+      setPublicPath(window.location.pathname);
+      if (!isAuthenticated) {
+        if (window.location.pathname === "/register") {
+          setAuthMode("register");
+        } else if (window.location.pathname === "/login") {
+          setAuthMode("login");
+        }
+        return;
+      }
       const nextRoute = routeFromLocation();
       if (nextRoute === "admin" && !isAdminUser(currentUser)) {
         navigateToRoute("canvas");
@@ -1713,7 +1738,7 @@ export function App() {
     return () => {
       window.removeEventListener("popstate", updateRoute);
     };
-  }, [currentUser, navigateToRoute]);
+  }, [currentUser, isAuthenticated, navigateToRoute]);
 
   useEffect(() => {
     return () => {
@@ -2514,15 +2539,21 @@ export function App() {
   }
 
   if (!isAuthenticated) {
+    const publicAuthMode = publicPath === "/register" ? "register" : publicPath === "/login" ? "login" : null;
+
     return (
       <div className="app-root">
-        <AuthScreen
-          mode={authMode}
-          onAuthenticated={handleAuthenticated}
-          onLogin={loginWithPassword}
-          onModeChange={setAuthMode}
-          onRegister={registerWithPassword}
-        />
+        {publicAuthMode ? (
+          <AuthScreen
+            mode={publicAuthMode === authMode ? authMode : publicAuthMode}
+            onAuthenticated={handleAuthenticated}
+            onLogin={loginWithPassword}
+            onModeChange={navigateToAuth}
+            onRegister={registerWithPassword}
+          />
+        ) : (
+          <HomePage onAuthNavigate={navigateToAuth} />
+        )}
       </div>
     );
   }
