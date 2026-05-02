@@ -114,7 +114,7 @@ export async function fetchCurrentUser(): Promise<AuthUser> {
     throw new Error(await readApiError(response, "无法获取当前账户信息。"));
   }
 
-  return parseAuthUser(await response.json());
+  return parseAuthUserFromMeResponse(await response.json());
 }
 
 export async function readApiError(response: Response, fallback: string): Promise<string> {
@@ -151,6 +151,14 @@ function parseAuthSession(value: unknown): AuthSession {
     token: tokenValue,
     user: parseAuthUser(userValue)
   };
+}
+
+function parseAuthUserFromMeResponse(value: unknown): AuthUser {
+  if (isRecord(value) && isRecord(value.user)) {
+    return parseAuthUser(value.user);
+  }
+
+  return parseAuthUser(value);
 }
 
 export function parseAuthUser(value: unknown): AuthUser {
