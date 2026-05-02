@@ -813,6 +813,16 @@ export function SidePanelApp() {
     const percent = quotaTotal > 0 ? Math.min(100, Math.round((quotaUsed / quotaTotal) * 100)) : 0;
     return { quotaTotal, quotaUsed, remaining, percent };
   }, [auth.user, billingState.data.quotaTotal, billingState.data.quotaUsed]);
+  const activePlanBlocksPurchase = useMemo(() => {
+    const expiresAt = billingState.data.currentPlanExpiresAt || auth.user?.planExpiresAt;
+    return Boolean(
+      auth.user?.planId &&
+        auth.user.planId !== "free" &&
+        expiresAt &&
+        new Date(expiresAt).getTime() > Date.now() &&
+        accountQuota.remaining > 0
+    );
+  }, [accountQuota.remaining, auth.user, billingState.data.currentPlanExpiresAt]);
   const currentPlanLabel = auth.token ? auth.user?.planName || billingState.data.currentPlan?.name || "套餐" : "套餐";
 
   useEffect(() => {
@@ -1256,6 +1266,10 @@ export function SidePanelApp() {
 
   async function purchasePlan(plan: BillingPlan, paymentMethod: "balance" | "alipay"): Promise<void> {
     if (!auth.token.trim() && !requireAuth("billing")) {
+      return;
+    }
+    if (activePlanBlocksPurchase) {
+      setBillingAction("当前套餐未到期且仍有余量，新购无法叠加，只能取高。建议等套餐到期或额度用完后再购买。");
       return;
     }
     if (paymentMethod === "balance" && billingState.data.balanceCents < plan.priceCents) {

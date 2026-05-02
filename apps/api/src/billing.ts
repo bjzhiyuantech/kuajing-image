@@ -182,6 +182,17 @@ export async function purchasePlan(
   if (!plan || Number(plan.enabled ?? 0) !== 1) {
     throw new BillingError("plan_not_found", "套餐不存在或已停用。", 404);
   }
+  const [user] = await db.select().from(users).where(eq(users.id, tenant.userId)).limit(1);
+  if (!user) {
+    throw new BillingError("user_not_found", "用户不存在。", 404);
+  }
+  if (hasActivePlanQuota(user)) {
+    throw new BillingError(
+      "active_plan_not_expired",
+      "当前套餐未到期且仍有余量，新购无法叠加，只能取高。建议等套餐到期或额度用完后再购买。",
+      409
+    );
+  }
 
   const amountCents = Number(plan.priceCents ?? 0);
   const currency = plan.currency || DEFAULT_CURRENCY;
@@ -221,6 +232,17 @@ export async function purchasePlan(
     paymentUrl,
     checkoutUrl: paymentUrl
   };
+}
+
+function hasActivePlanQuota(user: typeof users.$inferSelect): boolean {
+  if (!user.planId || user.planId === "free" || !user.planExpiresAt) {
+    return false;
+  }
+  const expiresAt = new Date(user.planExpiresAt).getTime();
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+    return false;
+  }
+  return Number(user.quotaUsed ?? 0) < Number(user.quotaTotal ?? 0);
 }
 
 export async function listUserBillingOrders(tenant: RequestTenant, limit: number): Promise<BillingOrdersResponse> {

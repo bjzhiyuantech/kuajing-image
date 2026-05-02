@@ -206,6 +206,13 @@ export function AccountPage({ user }: { user: AuthUser }) {
   const currentPlanName = billing.currentPlan?.name || user.planName || user.planId || "未设置";
   const currentPlanExpiresAt = billing.currentPlanExpiresAt || user.planExpiresAt;
   const plans = billing.plans.length > 0 ? billing.plans : fallbackBillingPlans;
+  const activePlanBlocksPurchase = Boolean(
+    user.planId &&
+      user.planId !== "free" &&
+      currentPlanExpiresAt &&
+      new Date(currentPlanExpiresAt).getTime() > Date.now() &&
+      quotaRemaining > 0
+  );
 
   async function loadBilling({ preserveNotice = false, signal }: { preserveNotice?: boolean; signal?: AbortSignal } = {}): Promise<void> {
     setBillingLoading(true);
@@ -296,6 +303,10 @@ export function AccountPage({ user }: { user: AuthUser }) {
   }
 
   async function purchasePlan(plan: BillingPlan, paymentMethod: "balance" | "alipay"): Promise<void> {
+    if (activePlanBlocksPurchase) {
+      setBillingAction("当前套餐未到期且仍有余量，新购无法叠加，只能取高。建议等套餐到期或额度用完后再购买。");
+      return;
+    }
     if (paymentMethod === "balance" && billing.summary.balanceCents < plan.priceCents) {
       setBillingAction(`余额不足，还差 ${formatMoney(plan.priceCents - billing.summary.balanceCents, plan.currency)}，可先充值或选择支付宝购买。`);
       return;
