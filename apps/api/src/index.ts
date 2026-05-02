@@ -2405,7 +2405,7 @@ function parseEcommerceSceneIds(value: unknown): ParseResult<EcommerceSceneTempl
 
   return {
     ok: true,
-    value: sceneIds.slice(0, 6)
+    value: sceneIds
   };
 }
 
