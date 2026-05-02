@@ -71,11 +71,17 @@ function readLazyImageAttributes(element: Element): string[] {
     "data-original",
     "data-original-src",
     "data-ks-lazyload",
+    "data-ks-lazyload-custom",
     "data-img",
+    "data-img-url",
+    "data-image-url",
     "data-url",
     "data-image",
     "data-actualsrc",
-    "data-lazy"
+    "data-lazy",
+    "data-defer-src",
+    "data-origin",
+    "lazy-src"
   ]
     .map((name) => element.getAttribute(name))
     .filter((value): value is string => Boolean(value?.trim()));
@@ -157,7 +163,7 @@ function imageScore(image: HTMLImageElement): number {
 
 function addBackgroundImageCandidates(candidates: ImageCandidate[], seen: Set<string>): void {
   const roots = document.querySelectorAll<HTMLElement>(
-    "[class*='detail'], [class*='desc'], [class*='content'], [class*='Content'], [class*='main'], [class*='gallery'], [class*='album'], [class*='rich'], [class*='Rich'], [id*='detail'], [id*='desc']"
+    "#detail, [class*='detail'], [class*='Detail'], [class*='desc'], [class*='Desc'], [class*='content'], [class*='Content'], [class*='main'], [class*='gallery'], [class*='album'], [class*='rich'], [class*='Rich'], [id*='detail'], [id*='Detail'], [id*='desc'], [id*='Desc']"
   );
   for (const element of Array.from(roots).slice(0, 200)) {
     const background = getComputedStyle(element).backgroundImage;
@@ -170,11 +176,11 @@ function addBackgroundImageCandidates(candidates: ImageCandidate[], seen: Set<st
 
 function addDetailImageCandidates(candidates: ImageCandidate[], seen: Set<string>): void {
   const detailRoots = document.querySelectorAll<HTMLElement>(
-    "[class*='detail'], [class*='desc'], [class*='content'], [class*='Content'], [class*='rich'], [class*='Rich'], [id*='detail'], [id*='desc'], [data-module*='detail']"
+    "#detail, [class*='detail'], [class*='Detail'], [class*='desc'], [class*='Desc'], [class*='content'], [class*='Content'], [class*='rich'], [class*='Rich'], [id*='detail'], [id*='Detail'], [id*='desc'], [id*='Desc'], [data-module*='detail'], [data-module*='Detail']"
   );
   for (const root of Array.from(detailRoots).slice(0, 80)) {
     const context = elementContext(root);
-    for (const element of Array.from(root.querySelectorAll("img, source, [data-src], [data-original], [data-ks-lazyload], [data-lazyload]")).slice(0, 300)) {
+    for (const element of Array.from(root.querySelectorAll("img, source, picture, [srcset], [data-src], [data-srcset], [data-original], [data-ks-lazyload], [data-lazyload], [data-lazy-src], [data-image], [data-image-url]")).slice(0, 400)) {
       for (const value of readLazyImageAttributes(element)) {
         addImageCandidate(candidates, seen, value, 90, `${context} ${elementContext(element)}`);
       }
