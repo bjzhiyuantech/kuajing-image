@@ -804,8 +804,8 @@ export function SidePanelApp() {
   const brandOverlayReady = form.brandOverlay.enabled && Boolean(form.brandOverlay.logoDataUrl || form.brandOverlay.text.trim());
 
   const accountQuota = useMemo(() => {
-    const quotaTotal = billingState.data.quotaTotal || auth.user?.quotaTotal || 0;
-    const quotaUsed = billingState.data.quotaUsed || auth.user?.quotaUsed || 0;
+    const quotaTotal = billingState.data.quotaTotal ?? auth.user?.quotaTotal ?? 0;
+    const quotaUsed = billingState.data.quotaUsed ?? auth.user?.quotaUsed ?? 0;
     const remaining = Math.max(quotaTotal - quotaUsed, 0);
     const percent = quotaTotal > 0 ? Math.min(100, Math.round((quotaUsed / quotaTotal) * 100)) : 0;
     return { quotaTotal, quotaUsed, remaining, percent };
@@ -2270,7 +2270,7 @@ export function SidePanelApp() {
                     </div>
                     <div className="account-meta">
                       <div><span>当前套餐</span><strong>{auth.user?.planName || auth.user?.planId || billingState.data.currentPlan?.name || "未设置"}</strong></div>
-                      <div><span>账户余额</span><strong>{formatMoney(billingState.data.balanceCents || auth.user?.balanceCents || 0, billingState.data.currency || auth.user?.currency)}</strong></div>
+                      <div><span>账户余额</span><strong>{formatMoney(billingState.data.balanceCents ?? auth.user?.balanceCents ?? 0, billingState.data.currency || auth.user?.currency)}</strong></div>
                       <div><span>已用张数</span><strong>{formatCount(accountQuota.quotaUsed)}/{formatCount(accountQuota.quotaTotal)}</strong></div>
                       <div><span>套餐余量</span><strong>{formatCount(accountQuota.remaining)}</strong></div>
                     </div>
