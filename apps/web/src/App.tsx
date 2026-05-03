@@ -1,18 +1,26 @@
 import {
+  ArrowRight,
   AlertTriangle,
+  BadgeCheck,
+  Brush,
   CheckCircle2,
   ChevronDown,
   Cloud,
   Copy,
   Download,
+  Globe2,
   ImageIcon,
   Loader2,
   LogOut,
   MapPin,
+  Megaphone,
+  Package,
   RotateCcw,
   ShieldCheck,
+  ShoppingBag,
   Sparkles,
   Square,
+  Workflow,
   User,
   X,
   XCircle
@@ -55,6 +63,10 @@ import {
   type GenerationResponse,
   type GenerationStatus,
   type GeneratedAsset,
+  ECOMMERCE_MARKETS,
+  ECOMMERCE_PLATFORMS,
+  ECOMMERCE_SCENE_TEMPLATES,
+  ECOMMERCE_TEXT_LANGUAGES,
   type ImageQuality,
   type ImageSize,
   type OutputFormat,
@@ -152,6 +164,44 @@ const promptStarters = [
 ] as const;
 const quickSizePresetIds = new Set(["square-1k", "poster-portrait", "poster-landscape", "story-9-16", "video-16-9", "wide-2k"]);
 const quickSizePresets = SIZE_PRESETS.filter((preset) => quickSizePresetIds.has(preset.id));
+const sidebarTabs: Array<{ id: SidebarTab; label: string; icon: typeof Package }> = [
+  { id: "plugins", label: "插件能力", icon: Package },
+  { id: "creative", label: "自主生图", icon: Brush }
+];
+const ecommerceModeCards = [
+  {
+    id: "enhance",
+    icon: BadgeCheck,
+    title: "原图增强",
+    desc: "保留商品原貌，生成主图、卖点图和电商排版。"
+  },
+  {
+    id: "creative",
+    icon: ShoppingBag,
+    title: "场景创作",
+    desc: "依据主图生成生活方式、模特穿戴和搭配场景。"
+  },
+  {
+    id: "category-kit",
+    icon: Package,
+    title: "品类套图",
+    desc: "按平台和类目生成整套 Listing Image Kit。"
+  },
+  {
+    id: "text-translation",
+    icon: Globe2,
+    title: "文字翻译",
+    desc: "逐张翻译图片文字，保留版式和商品信息。"
+  }
+] as const;
+const ecommerceTemplateCards = ECOMMERCE_SCENE_TEMPLATES.filter((item) =>
+  ["marketplace-main", "logo-benefit", "feature-benefit", "promo-poster", "text-translation", "social-ad"].includes(item.id)
+);
+const ecommercePlatformHighlights = ECOMMERCE_PLATFORMS.filter((item) =>
+  ["1688", "taobao", "tmall", "jd", "douyin", "pinduoduo", "allegro", "tiktok-shop"].includes(item.id)
+);
+const ecommerceMarketHighlights = ECOMMERCE_MARKETS.filter((item) => ["cn", "us", "pl", "eu", "global"].includes(item.id));
+const ecommerceLanguageHighlights = ECOMMERCE_TEXT_LANGUAGES.filter((item) => ["en", "pl", "de", "ja"].includes(item.id));
 
 type GalleryPageModule = { default: typeof import("./GalleryPage").GalleryPage };
 let galleryPageModulePromise: Promise<GalleryPageModule> | undefined;
@@ -174,6 +224,7 @@ type AuthStatus = "checking" | "anonymous" | "authenticated";
 type SaveStatus = "loading" | "saved" | "pending" | "saving" | "error";
 type GenerationMode = "text" | "reference";
 type PanelStatusTone = "progress" | "success" | "warning" | "error";
+type SidebarTab = "plugins" | "creative";
 
 interface PanelStatus {
   tone: PanelStatusTone;
@@ -1464,6 +1515,7 @@ export function App() {
   const [authMode, setAuthMode] = useState<AuthMode>("login");
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [generationMode, setGenerationMode] = useState<GenerationMode>("text");
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>("plugins");
   const [prompt, setPrompt] = useState("");
   const [stylePreset, setStylePreset] = useState<StylePresetId>("none");
   const [sizePresetId, setSizePresetId] = useState(SIZE_PRESETS[0].id);
@@ -2143,6 +2195,27 @@ export function App() {
     setGenerationWarning("");
   }
 
+  function applyEcommerceTemplate(templateId: string): void {
+    const template = ECOMMERCE_SCENE_TEMPLATES.find((item) => item.id === templateId);
+    if (!template) {
+      return;
+    }
+
+    const preset = SIZE_PRESETS.find((item) => item.id === template.defaultSizePresetId);
+    setPrompt(template.prompt);
+    setStylePreset(template.mode === "creative" ? "photoreal" : "product");
+    if (preset) {
+      setSizePresetId(preset.id);
+      setWidth(preset.width);
+      setHeight(preset.height);
+    }
+    setGenerationMode("text");
+    setSidebarTab("creative");
+    setGenerationError("");
+    setGenerationWarning("");
+    setGenerationMessage("已套用电商插件模板，可继续补充商品信息后生成到画布。");
+  }
+
   async function executeGeneration(
     input: GenerationSubmitInput,
     requestMode: GenerationMode,
@@ -2633,7 +2706,7 @@ export function App() {
         role={isMobileDrawer ? "dialog" : "complementary"}
         {...(isMobileDrawer && !isAiPanelOpen ? { inert: "" } : {})}
       >
-        <div className="border-b border-neutral-200 px-5 py-4">
+        <div className="ai-panel-header border-b border-neutral-200 px-5 py-4">
           <div className="flex items-start justify-end gap-3">
             <div className="flex shrink-0 items-center gap-2">
               <button
@@ -2672,11 +2745,123 @@ export function App() {
             </div>
           </div>
           <h1 className="mt-1 text-xl font-semibold text-neutral-950" id="ai-panel-title">
-            生成到画布
+            {sidebarTab === "plugins" ? "插件能力整合" : "自主生图与编辑"}
           </h1>
+          <div className="ai-panel-tabs" role="tablist" aria-label="左侧功能菜单">
+            {sidebarTabs.map((tab) => {
+              const Icon = tab.icon;
+              const active = sidebarTab === tab.id;
+              return (
+                <button
+                  aria-pressed={active}
+                  className={active ? "ai-panel-tab is-active" : "ai-panel-tab"}
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setSidebarTab(tab.id)}
+                >
+                  <Icon className="size-4" aria-hidden="true" />
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         <div className="ai-panel-body flex-1 space-y-5 overflow-y-auto px-5 py-5">
+          {sidebarTab === "plugins" ? (
+            <>
+              <section className="sidebar-hero">
+                <div className="sidebar-hero__top">
+                  <span>AI PRODUCT IMAGE SUITE</span>
+                  <Workflow className="size-4" aria-hidden="true" />
+                </div>
+                <h2>一张产品图，串起整套电商素材</h2>
+                <p>把插件采集、平台模板、图片翻译、去水印和现有画布放进同一个左侧工作区。</p>
+                <div className="sidebar-hero__actions">
+                  <button className="sidebar-cta" type="button" onClick={() => setSidebarTab("creative")}>
+                    去自主生图
+                    <ArrowRight className="size-4" aria-hidden="true" />
+                  </button>
+                  <button className="sidebar-ghost" type="button" onClick={() => setGenerationMode("reference")}>
+                    <ImageIcon className="size-4" aria-hidden="true" />
+                    参考图编辑
+                  </button>
+                </div>
+              </section>
+
+              <section className="sidebar-section">
+                <div className="sidebar-section__head">
+                  <div>
+                    <p className="sidebar-section__eyebrow">常用功能</p>
+                    <h3>插件能力</h3>
+                  </div>
+                  <Megaphone className="size-4 text-amber-700" aria-hidden="true" />
+                </div>
+                <div className="sidebar-grid">
+                  {ecommerceModeCards.map((card) => {
+                    const Icon = card.icon;
+                    return (
+                      <button className="sidebar-card" type="button" key={card.id}>
+                        <Icon className="sidebar-card__icon" aria-hidden="true" />
+                        <span className="sidebar-card__title">{card.title}</span>
+                        <span className="sidebar-card__desc">{card.desc}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+
+              <section className="sidebar-section">
+                <div className="sidebar-section__head">
+                  <div>
+                    <p className="sidebar-section__eyebrow">推荐工作流</p>
+                    <h3>电商模板</h3>
+                  </div>
+                  <Package className="size-4 text-amber-700" aria-hidden="true" />
+                </div>
+                <div className="sidebar-template-grid">
+                  {ecommerceTemplateCards.map((item) => (
+                    <button key={item.id} className="sidebar-template" type="button" onClick={() => applyEcommerceTemplate(item.id)}>
+                      <span className="sidebar-template__title">{item.label}</span>
+                      <span className="sidebar-template__desc">套用模板到画布生成</span>
+                    </button>
+                  ))}
+                </div>
+              </section>
+
+              <section className="sidebar-section">
+                <div className="sidebar-section__head">
+                  <div>
+                    <p className="sidebar-section__eyebrow">平台与市场</p>
+                    <h3>跨境与国内电商</h3>
+                  </div>
+                  <Globe2 className="size-4 text-amber-700" aria-hidden="true" />
+                </div>
+                <div className="sidebar-chip-row">
+                  {ecommercePlatformHighlights.map((item) => (
+                    <span key={item.id} className="sidebar-chip">
+                      {item.label}
+                    </span>
+                  ))}
+                </div>
+                <div className="sidebar-chip-row sidebar-chip-row--muted">
+                  {ecommerceMarketHighlights.map((item) => (
+                    <span key={item.id} className="sidebar-chip sidebar-chip--static">
+                      {item.label}
+                    </span>
+                  ))}
+                  {ecommerceLanguageHighlights.map((item) => (
+                    <span key={item.id} className="sidebar-chip sidebar-chip--static">
+                      {item.label}
+                    </span>
+                  ))}
+                </div>
+              </section>
+            </>
+          ) : null}
+
+          {sidebarTab === "creative" ? (
+            <>
           {saveError ? (
             <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700" data-testid="save-error">
               {saveError}
@@ -3095,26 +3280,35 @@ export function App() {
               </div>
             )}
           </section>
+            </>
+          ) : null}
         </div>
 
         <div className="ai-panel-actions grid grid-cols-1 gap-3 border-t border-neutral-200 bg-white px-5 py-4">
-          <button
-            className="primary-action"
-            disabled={!canGenerate}
-            type="button"
-            data-generation-mode={generationMode}
-            data-reference-mode={isReferenceReady ? "edit" : "generate"}
-            data-testid="generate-button"
-            title={validationMessage || undefined}
-            onClick={submitGeneration}
-          >
-            {isReferenceReady ? (
-              <ImageIcon className="size-4" aria-hidden="true" />
-            ) : (
-              <Square className="size-4" aria-hidden="true" />
-            )}
-            {generationMode === "reference" ? "参考图生成到画布" : "生成到画布"}
-          </button>
+          {sidebarTab === "plugins" ? (
+            <button className="primary-action" type="button" onClick={() => setSidebarTab("creative")}>
+              <Workflow className="size-4" aria-hidden="true" />
+              进入自主生图
+            </button>
+          ) : (
+            <button
+              className="primary-action"
+              disabled={!canGenerate}
+              type="button"
+              data-generation-mode={generationMode}
+              data-reference-mode={isReferenceReady ? "edit" : "generate"}
+              data-testid="generate-button"
+              title={validationMessage || undefined}
+              onClick={submitGeneration}
+            >
+              {isReferenceReady ? (
+                <ImageIcon className="size-4" aria-hidden="true" />
+              ) : (
+                <Square className="size-4" aria-hidden="true" />
+              )}
+              {generationMode === "reference" ? "参考图生成到画布" : "生成到画布"}
+            </button>
+          )}
         </div>
       </aside>
 
