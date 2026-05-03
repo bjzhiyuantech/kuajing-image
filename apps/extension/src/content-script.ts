@@ -236,7 +236,7 @@ function addImageCandidate(
     return;
   }
   const url = absoluteUrl(normalizedValue);
-  if (!url || seen.has(url) || isLikelyDecorativeImage(url, context) || isLikelyThumbnailVariant(url) || hasTinySizeHint(url)) {
+  if (!url || seen.has(url) || isLikelyDecorativeImage(url, context) || hasTinySizeHint(url)) {
     return;
   }
   const exactKey = exactImageUrlKey(url);
