@@ -22,6 +22,11 @@ interface ImageProbeResult {
   width: number;
   height: number;
   ok: boolean;
+  fingerprint?: string;
+}
+
+interface RankedImageCandidate extends ImageCandidate {
+  identityKey: string;
 }
 
 const IMAGE_URL_PATTERN = /(?:https?:)?\/\/[^"'()<>\s\\]+?\.(?:jpg|jpeg|png|webp|gif|bmp|avif)(?:\?[^"'()<>\s\\]*)?/giu;
@@ -71,6 +76,7 @@ function imageIdentityKey(url: string): string {
     parsed.hash = "";
     parsed.search = "";
     parsed.pathname = parsed.pathname
+      .replace(/\.(?:\d{2,5}x\d{2,5})\.(jpg|jpeg|png|webp|gif|avif|bmp)$/iu, ".$1")
       .replace(/_(?:\d+x\d+|(?:sum|m|b|q)\d+|webp|jpg|jpeg|png|avif|gif)(?=(?:\.[a-z0-9]+)?$)/giu, "")
       .replace(/\.(?:jpg|jpeg|png|webp|gif|avif|bmp)_(?:\d+x\d+|(?:sum|m|b|q)\d+|webp|jpg|jpeg|png|avif|gif).*$/giu, (match) => {
         const extension = match.match(/\.(jpg|jpeg|png|webp|gif|avif|bmp)/iu)?.[0] ?? "";
@@ -84,6 +90,45 @@ function imageIdentityKey(url: string): string {
   } catch {
     return url.toLowerCase();
   }
+}
+
+function imageUrlVariantRank(url: string): number {
+  let rank = 0;
+  try {
+    const parsed = new URL(url);
+    const path = parsed.pathname;
+    const sizeMatch = path.match(/\.(\d{2,5})x(\d{2,5})\.(?:jpg|jpeg|png|webp|gif|avif|bmp)$/iu);
+    if (sizeMatch) {
+      rank += Math.max(Number(sizeMatch[1]), Number(sizeMatch[2]));
+    } else {
+      rank += 100000;
+    }
+    if (parsed.search) {
+      rank -= 100;
+    }
+  } catch {
+    return rank;
+  }
+  return rank;
+}
+
+function bestImageCandidates(candidates: ImageCandidate[]): ImageCandidate[] {
+  const bestByIdentity = new Map<string, RankedImageCandidate>();
+  for (const candidate of candidates) {
+    const identityKey = imageIdentityKey(candidate.url);
+    const rankedCandidate = { ...candidate, identityKey };
+    const existing = bestByIdentity.get(identityKey);
+    if (!existing) {
+      bestByIdentity.set(identityKey, rankedCandidate);
+      continue;
+    }
+    const currentRank = imageUrlVariantRank(candidate.url) + candidate.score;
+    const existingRank = imageUrlVariantRank(existing.url) + existing.score;
+    if (currentRank > existingRank) {
+      bestByIdentity.set(identityKey, rankedCandidate);
+    }
+  }
+  return Array.from(bestByIdentity.values());
 }
 
 function addImageCandidate(
@@ -286,6 +331,26 @@ function addScriptImageCandidates(doc: Document, candidates: ImageCandidate[], s
   }
 }
 
+function imageFingerprint(image: HTMLImageElement): string | undefined {
+  const canvas = document.createElement("canvas");
+  const size = 8;
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx || image.naturalWidth <= 0 || image.naturalHeight <= 0) {
+    return undefined;
+  }
+
+  ctx.drawImage(image, 0, 0, size, size);
+  const data = ctx.getImageData(0, 0, size, size).data;
+  const luminance: number[] = [];
+  for (let index = 0; index < data.length; index += 4) {
+    luminance.push(data[index] * 0.299 + data[index + 1] * 0.587 + data[index + 2] * 0.114);
+  }
+  const average = luminance.reduce((total, value) => total + value, 0) / luminance.length;
+  return luminance.map((value) => (value >= average ? "1" : "0")).join("");
+}
+
 function probeImage(url: string): Promise<ImageProbeResult> {
   return new Promise((resolve) => {
     const image = new Image();
@@ -297,7 +362,7 @@ function probeImage(url: string): Promise<ImageProbeResult> {
 
     image.onload = () => {
       window.clearTimeout(timer);
-      resolve({ url, width: image.naturalWidth, height: image.naturalHeight, ok: true });
+      resolve({ url, width: image.naturalWidth, height: image.naturalHeight, ok: true, fingerprint: imageFingerprint(image) });
     };
     image.onerror = () => {
       window.clearTimeout(timer);
@@ -309,7 +374,8 @@ function probeImage(url: string): Promise<ImageProbeResult> {
 
 async function filterProductImageUrls(candidates: ImageCandidate[]): Promise<string[]> {
   const acceptedKeys = new Set<string>();
-  const sortedUrls = candidates
+  const acceptedFingerprints = new Set<string>();
+  const sortedUrls = bestImageCandidates(candidates)
     .sort((left, right) => right.score - left.score)
     .map((candidate) => candidate.url)
     .slice(0, 96);
@@ -325,8 +391,17 @@ async function filterProductImageUrls(candidates: ImageCandidate[]): Promise<str
       const longestSide = Math.max(result.width, result.height);
       const shortestSide = Math.min(result.width, result.height);
       const identityKey = imageIdentityKey(result.url);
-      if (longestSide >= 220 && shortestSide >= 120 && !acceptedKeys.has(identityKey)) {
+      const fingerprint = result.fingerprint;
+      if (
+        longestSide >= 220 &&
+        shortestSide >= 120 &&
+        !acceptedKeys.has(identityKey) &&
+        (!fingerprint || !acceptedFingerprints.has(fingerprint))
+      ) {
         acceptedKeys.add(identityKey);
+        if (fingerprint) {
+          acceptedFingerprints.add(fingerprint);
+        }
         accepted.push(result.url);
       }
     }
