@@ -11,10 +11,11 @@ export default defineConfig({
       input: {
         sidepanel: resolve(__dirname, "index.html"),
         background: resolve(__dirname, "src/background.ts"),
-        "content-script": resolve(__dirname, "src/content-script.ts")
+        "content-script": resolve(__dirname, "src/content-script.ts"),
+        "page-hook": resolve(__dirname, "src/page-hook.ts")
       },
       output: {
-        entryFileNames: (chunk) => (chunk.name === "background" || chunk.name === "content-script" ? "[name].js" : "assets/[name]-[hash].js")
+        entryFileNames: (chunk) => (chunk.name === "background" || chunk.name === "content-script" || chunk.name === "page-hook" ? "[name].js" : "assets/[name]-[hash].js")
       }
     }
   }

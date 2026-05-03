@@ -31,98 +31,11 @@ function injectPageCaptureScript(): void {
 
   const script = document.createElement("script");
   script.dataset.source = "kuajing-image-page-hook";
-  script.textContent = `(() => {
-    if (window.__kuajingImagePageHookInstalled) return;
-    window.__kuajingImagePageHookInstalled = true;
-    const IMAGE_URL_PATTERN = ${IMAGE_URL_PATTERN};
-    const found = new Set();
-    const normalize = (value) => String(value || "")
-      .trim()
-      .replace(/^url\\(["']?/u, "")
-      .replace(/["']?\\)$/u, "")
-      .replace(/\\\\u002f/giu, "/")
-      .replace(/\\\\\\//gu, "/")
-      .replace(/&amp;/gu, "&")
-      .replace(/\\\\u0026/giu, "&")
-      .replace(/\\\\u003d/giu, "=");
-    const emit = (urls) => {
-      const next = [];
-      for (const url of urls) {
-        if (!url || found.has(url)) continue;
-        found.add(url);
-        next.push(url);
-      }
-      if (next.length > 0) {
-        window.postMessage({ source: "kuajing-image-page-hook", type: "kuajing-image:captured-urls", urls: next }, "*");
-      }
-    };
-    const extract = (text) => {
-      const normalized = normalize(text);
-      IMAGE_URL_PATTERN.lastIndex = 0;
-      return Array.from(normalized.matchAll(IMAGE_URL_PATTERN)).map((match) => match[0]).filter((url) => /alicdn|ibank|O1CN|cbu01/i.test(url));
-    };
-    const inspectText = (text) => {
-      if (!text || (!/alicdn|ibank|O1CN|cbu01|offer_details|img\\/ibank/i.test(String(text)))) return;
-      emit(extract(text));
-    };
-
-    const originalFetch = window.fetch;
-    if (typeof originalFetch === "function") {
-      window.fetch = async (...args) => {
-        const response = await originalFetch(...args);
-        try {
-          const clone = response.clone();
-          const contentType = clone.headers.get("content-type") || "";
-          if (/json|javascript|text|html/i.test(contentType)) {
-            clone.text().then(inspectText).catch(() => {});
-          }
-        } catch {}
-        return response;
-      };
-    }
-
-    const originalOpen = XMLHttpRequest.prototype.open;
-    const originalSend = XMLHttpRequest.prototype.send;
-    XMLHttpRequest.prototype.open = function (...args) {
-      this.__kuajingImageRequestUrl = args[1];
-      return originalOpen.apply(this, args);
-    };
-    XMLHttpRequest.prototype.send = function (...args) {
-      this.addEventListener("load", function () {
-        try {
-          const responseType = this.responseType || "";
-          const contentType = this.getResponseHeader("content-type") || "";
-          if ((!responseType || responseType === "text") && /json|javascript|text|html/i.test(contentType)) {
-            inspectText(this.responseText || "");
-          }
-        } catch {}
-      });
-      return originalSend.apply(this, args);
-    };
-
-    const observer = new MutationObserver((records) => {
-      for (const record of records) {
-        for (const node of Array.from(record.addedNodes)) {
-          if (node instanceof HTMLScriptElement) {
-            inspectText(node.textContent || "");
-            if (node.src) emit([node.src]);
-          } else if (node instanceof HTMLElement) {
-            inspectText(node.outerHTML || "");
-          }
-        }
-      }
-    });
-    observer.observe(document.documentElement, { childList: true, subtree: true });
-
-    inspectText(document.documentElement?.outerHTML || "");
-    for (const scriptNode of Array.from(document.scripts)) {
-      inspectText(scriptNode.textContent || "");
-      if (scriptNode.src) emit([scriptNode.src]);
-    }
-  })();`;
+  script.src = chrome.runtime.getURL("page-hook.js");
 
   (document.documentElement || document.head || document.body).appendChild(script);
-  script.remove();
+  script.addEventListener("load", () => script.remove(), { once: true });
+  script.addEventListener("error", () => script.remove(), { once: true });
 }
 
 function normalizeText(value: string): string {

@@ -21,5 +21,11 @@
       "js": ["content-script.js"],
       "run_at": "document_idle"
     }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["page-hook.js"],
+      "matches": ["http://*/*", "https://*/*"]
+    }
   ]
 }
