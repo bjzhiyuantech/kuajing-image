@@ -965,6 +965,14 @@ export function composeEcommercePrompt(context: EcommercePromptContext): string 
   const market = ECOMMERCE_MARKETS.find((item) => item.id === context.market)?.label ?? context.market;
   const textLanguage = ECOMMERCE_TEXT_LANGUAGES.find((item) => item.id === context.textLanguage);
   const product = context.product;
+  const extraDirection = context.extraDirection?.trim();
+  const priorityDirectionGuard = extraDirection
+    ? [
+        "Highest-priority user direction:",
+        extraDirection,
+        "Treat these user-supplied requirements as hard visual constraints. If they mention product dimensions, body scale, garment length, physical proportions, placement, or forbidden positions, obey them over style, composition, and template preferences. The final image must make those constraints visibly true."
+      ].join(" ")
+    : "";
   const details = [
     `Product title: ${product.title.trim()}`,
     product.description ? `Description: ${product.description.trim()}` : "",
@@ -973,8 +981,7 @@ export function composeEcommercePrompt(context: EcommercePromptContext): string 
     product.usageScene ? `Usage scene: ${product.usageScene.trim()}` : "",
     product.material ? `Material: ${product.material.trim()}` : "",
     product.color ? `Color: ${product.color.trim()}` : "",
-    product.brandTone ? `Brand tone: ${product.brandTone.trim()}` : "",
-    context.extraDirection ? `Additional direction: ${context.extraDirection.trim()}` : ""
+    product.brandTone ? `Brand tone: ${product.brandTone.trim()}` : ""
   ].filter(Boolean);
 
   const modeGuard =
@@ -1009,12 +1016,16 @@ export function composeEcommercePrompt(context: EcommercePromptContext): string 
 
   return [
     template?.prompt ?? "Create a professional cross-border e-commerce product image.",
+    priorityDirectionGuard,
     `Optimize for ${platform} in the ${market} market.`,
     ...details,
     modeGuard,
     cleanupGuard,
     textLanguageGuard,
     sourcePreservationGuard,
+    extraDirection
+      ? "Final constraint check before rendering: verify the user direction is visibly satisfied, especially any numeric size, scale relationship, garment endpoint, product placement, or explicit negative constraint."
+      : "",
     "Keep the result accurate and commercially usable. Avoid watermarks, unreadable text, misleading claims, and extra hands or people unless explicitly requested."
   ].filter(Boolean).join("\n");
 }
