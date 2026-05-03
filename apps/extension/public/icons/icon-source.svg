@@ -9,15 +9,15 @@
       <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.34"/>
       <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
     </linearGradient>
-    <filter id="shadow" x="10" y="12" width="108" height="110" color-interpolation-filters="sRGB">
-      <feDropShadow dx="0" dy="5" stdDeviation="5" flood-color="#073A45" flood-opacity="0.22"/>
+    <filter id="shadow" x="0" y="0" width="128" height="128" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="3" stdDeviation="3" flood-color="#073A45" flood-opacity="0.16"/>
     </filter>
   </defs>
-  <rect x="16" y="16" width="96" height="96" rx="22" fill="url(#bg)" filter="url(#shadow)"/>
-  <path d="M38 28h52c7.732 0 14 6.268 14 14v5c-26-3-48-2-78 9V40c0-6.627 5.373-12 12-12Z" fill="url(#shine)"/>
-  <path d="M91 31v11m-5.5-5.5h11M98 44v7m-3.5-3.5h7" fill="none" stroke="#FFECA8" stroke-width="4" stroke-linecap="round"/>
-  <text x="64" y="77" text-anchor="middle" dominant-baseline="middle"
+  <rect x="5" y="5" width="118" height="118" rx="25" fill="url(#bg)" filter="url(#shadow)"/>
+  <path d="M28 17h70c12.15 0 22 9.85 22 22v7c-33-4-61-2-110 15V37c0-11.046 8.954-20 20-20Z" fill="url(#shine)"/>
+  <path d="M99 24v13m-6.5-6.5h13M110 38v9m-4.5-4.5h9" fill="none" stroke="#FFECA8" stroke-width="5" stroke-linecap="round"/>
+  <text x="64" y="79" text-anchor="middle" dominant-baseline="middle"
         font-family="Heiti SC, Hiragino Sans GB, PingFang SC, Noto Sans CJK SC, sans-serif"
-        font-size="61" font-weight="700" fill="#FFFFFF">图</text>
-  <path d="M42 90h44" stroke="#DFFEF4" stroke-width="5" stroke-linecap="round" opacity="0.92"/>
+        font-size="76" font-weight="700" fill="#FFFFFF">图</text>
+  <path d="M35 99h58" stroke="#DFFEF4" stroke-width="6" stroke-linecap="round" opacity="0.92"/>
 </svg>
