@@ -332,23 +332,31 @@ function addScriptImageCandidates(doc: Document, candidates: ImageCandidate[], s
 }
 
 function imageFingerprint(image: HTMLImageElement): string | undefined {
-  const canvas = document.createElement("canvas");
-  const size = 8;
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
-  if (!ctx || image.naturalWidth <= 0 || image.naturalHeight <= 0) {
+  if (image.naturalWidth <= 0 || image.naturalHeight <= 0) {
     return undefined;
   }
 
-  ctx.drawImage(image, 0, 0, size, size);
-  const data = ctx.getImageData(0, 0, size, size).data;
-  const luminance: number[] = [];
-  for (let index = 0; index < data.length; index += 4) {
-    luminance.push(data[index] * 0.299 + data[index + 1] * 0.587 + data[index + 2] * 0.114);
+  try {
+    const canvas = document.createElement("canvas");
+    const size = 8;
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) {
+      return undefined;
+    }
+
+    ctx.drawImage(image, 0, 0, size, size);
+    const data = ctx.getImageData(0, 0, size, size).data;
+    const luminance: number[] = [];
+    for (let index = 0; index < data.length; index += 4) {
+      luminance.push(data[index] * 0.299 + data[index + 1] * 0.587 + data[index + 2] * 0.114);
+    }
+    const average = luminance.reduce((total, value) => total + value, 0) / luminance.length;
+    return luminance.map((value) => (value >= average ? "1" : "0")).join("");
+  } catch {
+    return undefined;
   }
-  const average = luminance.reduce((total, value) => total + value, 0) / luminance.length;
-  return luminance.map((value) => (value >= average ? "1" : "0")).join("");
 }
 
 function probeImage(url: string): Promise<ImageProbeResult> {
@@ -380,10 +388,14 @@ async function filterProductImageUrls(candidates: ImageCandidate[]): Promise<str
     .map((candidate) => candidate.url)
     .slice(0, 96);
   const accepted: string[] = [];
+  const fallbackUrls = sortedUrls.filter((url) => !hasTinySizeHint(url)).slice(0, 64);
 
   for (let index = 0; index < sortedUrls.length && accepted.length < 64; index += 12) {
     const batch = sortedUrls.slice(index, index + 12);
-    const results = await Promise.all(batch.map((url) => probeImage(url)));
+    const results = await Promise.race([
+      Promise.all(batch.map((url) => probeImage(url))),
+      sleep(3200).then(() => [] as ImageProbeResult[])
+    ]);
     for (const result of results) {
       if (!result.ok) {
         continue;
@@ -407,7 +419,7 @@ async function filterProductImageUrls(candidates: ImageCandidate[]): Promise<str
     }
   }
 
-  return accepted;
+  return accepted.length > 0 ? accepted : fallbackUrls;
 }
 
 function collectAccessibleDocuments(doc: Document, depth = 0, seen = new Set<Document>()): Document[] {
