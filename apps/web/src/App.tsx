@@ -840,13 +840,14 @@ function livePlacement(editor: Editor, placement: GenerationPlaceholderPlacement
 
 function createImageAsset(asset: GeneratedAsset): TLAsset {
   initialCanvasPreviewWidths.set(asset.id, GENERATED_ASSET_INITIAL_PREVIEW_WIDTH);
+  const displayUrl = assetDisplayUrl(asset, GENERATED_ASSET_INITIAL_PREVIEW_WIDTH);
 
   return {
     id: createTldrawAssetId(asset.id),
     typeName: "asset",
     type: "image",
     props: {
-      src: authenticatedAssetUrl(asset.url),
+      src: displayUrl,
       w: asset.width,
       h: asset.height,
       name: asset.fileName,
@@ -854,7 +855,10 @@ function createImageAsset(asset: GeneratedAsset): TLAsset {
       isAnimated: false
     },
     meta: {
-      localAssetId: asset.id
+      localAssetId: asset.id,
+      sourceUrl: authenticatedAssetUrl(asset.url),
+      cdnUrl: asset.cdnUrl,
+      cdnPreviewUrls: asset.cdnPreviewUrls
     }
   };
 }
@@ -865,6 +869,7 @@ function createImageShape(
   promptValue: string
 ): Partial<TLImageShape> & { id: TLShapeId; type: "image" } {
   const assetId = createTldrawAssetId(asset.id);
+  const displayUrl = assetDisplayUrl(asset, GENERATED_ASSET_INITIAL_PREVIEW_WIDTH);
 
   return {
     id: createTldrawShapeId(),
@@ -875,7 +880,7 @@ function createImageShape(
       assetId,
       w: placement.width,
       h: placement.height,
-      url: authenticatedAssetUrl(asset.url),
+      url: displayUrl,
       playing: true,
       crop: null,
       flipX: false,
@@ -982,7 +987,7 @@ async function preloadGenerationRecordPreviews(record: GenerationRecord, signal:
 
 async function preloadGeneratedAssetPreview(asset: GeneratedAsset, signal: AbortSignal): Promise<void> {
   try {
-    await preloadImageUrl(assetPreviewUrl(asset.id, GENERATED_ASSET_INITIAL_PREVIEW_WIDTH), signal);
+    await preloadImageUrl(assetDisplayUrl(asset, GENERATED_ASSET_INITIAL_PREVIEW_WIDTH), signal);
   } catch (error) {
     if (signal.aborted) {
       throw error;
@@ -1218,15 +1223,26 @@ function resolveCanvasAssetUrl(asset: TLAsset, context: TLAssetContext): string 
     return sourceUrl;
   }
 
+  const cdnUrl = getCanvasAssetMetaString(asset, "cdnUrl");
+  const cdnPreviewUrls = getCanvasAssetMetaRecord(asset, "cdnPreviewUrls");
   const previewWidth = Math.max(
     previewWidthForAssetContext(asset, context),
     initialCanvasPreviewWidths.get(localAssetId) ?? ASSET_PREVIEW_WIDTHS[0]
   );
+  const cdnPreviewUrl = cdnPreviewUrls ? nearestPreviewUrl(cdnPreviewUrls, previewWidth) : undefined;
+  if (cdnPreviewUrl || cdnUrl) {
+    return cdnPreviewUrl || cdnUrl || null;
+  }
+
   return assetPreviewUrl(localAssetId, previewWidth);
 }
 
 function assetPreviewUrl(assetId: string, width: number): string {
   return authenticatedAssetUrl(`/api/assets/${encodeURIComponent(assetId)}/preview?width=${width}`);
+}
+
+function assetDisplayUrl(asset: GeneratedAsset, preferredWidth?: number): string {
+  return previewUrlForWidth(asset.cdnPreviewUrls, preferredWidth) || asset.cdnUrl || authenticatedAssetUrl(asset.url);
 }
 
 function authenticatedAssetUrl(url: string): string {
@@ -1237,6 +1253,37 @@ function authenticatedAssetUrl(url: string): string {
 
   const separator = url.includes("?") ? "&" : "?";
   return `${url}${separator}token=${encodeURIComponent(token)}`;
+}
+
+function getCanvasAssetMetaString(asset: TLAsset, key: string): string | undefined {
+  const value = (asset.meta as Record<string, unknown> | undefined)?.[key];
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function getCanvasAssetMetaRecord(asset: TLAsset, key: string): Record<string, string> | undefined {
+  const value = (asset.meta as Record<string, unknown> | undefined)?.[key];
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+
+  return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === "string" && entry[1].trim().length > 0));
+}
+
+function previewUrlForWidth(previewUrls: Record<string, string> | undefined, preferredWidth: number | undefined): string | undefined {
+  if (!previewUrls || !preferredWidth) {
+    return undefined;
+  }
+
+  return nearestPreviewUrl(previewUrls, preferredWidth);
+}
+
+function nearestPreviewUrl(previewUrls: Record<string, string>, preferredWidth: number): string | undefined {
+  const widths = Object.keys(previewUrls)
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value))
+    .sort((a, b) => a - b);
+  const selectedWidth = widths.find((width) => width >= preferredWidth) ?? widths[widths.length - 1];
+  return selectedWidth ? previewUrls[String(selectedWidth)] : undefined;
 }
 
 function isExtensionAuthMessage(value: unknown): value is { source: string; type: string; token: string } {

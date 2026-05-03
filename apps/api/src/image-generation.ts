@@ -19,6 +19,7 @@ import {
   type ImageProviderInput,
   type ProviderImage
 } from "./image-provider.js";
+import { buildAssetCdnPreviewUrls, buildAssetCdnUrl } from "./asset-cdn.js";
 import {
   type CloudAssetLocation,
   CosAssetStorageAdapter,
@@ -315,6 +316,8 @@ async function saveProviderImage(
     asset: {
       id: assetId,
       url: `/api/assets/${assetId}`,
+      cdnUrl: buildAssetCdnUrl(cloudStorage),
+      cdnPreviewUrls: buildAssetCdnPreviewUrls(cloudStorage),
       fileName,
       mimeType,
       width: input.size.width,

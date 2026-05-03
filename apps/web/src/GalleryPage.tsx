@@ -368,7 +368,7 @@ function FeaturedGalleryItem({
           alt={item.prompt}
           className="gallery-feature__image"
           height={item.asset.height}
-          src={assetPreviewUrl(item.asset.id, 1024)}
+          src={assetDisplayUrl(item.asset, 1024)}
           width={item.asset.width}
         />
         <span className="gallery-feature__badge">Latest</span>
@@ -442,7 +442,7 @@ function GalleryCard({
           className="gallery-card__image"
           height={item.asset.height}
           loading="lazy"
-          src={assetPreviewUrl(item.asset.id, 512)}
+          src={assetDisplayUrl(item.asset, 512)}
           width={item.asset.width}
         />
         <span className="gallery-card__zoom">
@@ -646,7 +646,7 @@ function GalleryDetailDialog({
               alt={item.prompt}
               className="gallery-modal__image"
               height={item.asset.height}
-              src={authenticatedAssetUrl(item.asset.url)}
+              src={assetDisplayUrl(item.asset)}
               width={item.asset.width}
             />
           </div>
@@ -739,6 +739,23 @@ function DeleteGalleryDialog({
 
 function assetPreviewUrl(assetId: string, width: number): string {
   return authenticatedAssetUrl(`/api/assets/${encodeURIComponent(assetId)}/preview?width=${width}`);
+}
+
+function assetDisplayUrl(asset: GalleryImageItem["asset"], fallbackPreviewWidth?: number): string {
+  return previewUrlForWidth(asset.cdnPreviewUrls, fallbackPreviewWidth) || asset.cdnUrl || (fallbackPreviewWidth ? assetPreviewUrl(asset.id, fallbackPreviewWidth) : authenticatedAssetUrl(asset.url));
+}
+
+function previewUrlForWidth(previewUrls: Record<string, string> | undefined, preferredWidth: number | undefined): string | undefined {
+  if (!previewUrls || !preferredWidth) {
+    return undefined;
+  }
+
+  const widths = Object.keys(previewUrls)
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value))
+    .sort((a, b) => a - b);
+  const selectedWidth = widths.find((width) => width >= preferredWidth) ?? widths[widths.length - 1];
+  return selectedWidth ? previewUrls[String(selectedWidth)] : undefined;
 }
 
 function authenticatedAssetUrl(url: string): string {

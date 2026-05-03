@@ -1229,11 +1229,31 @@ export function SidePanelApp() {
   }
 
   function assetPreviewUrl(asset: GeneratedAsset, width = 512): string {
+    const cdnPreviewUrl = previewUrlForWidth(asset.cdnPreviewUrls, width);
+    if (cdnPreviewUrl) {
+      return cdnPreviewUrl;
+    }
+    if (asset.cdnUrl) {
+      return asset.cdnUrl;
+    }
     if (!isApiAssetUrl(asset.url)) {
       return asset.url;
     }
 
     return authenticatedApiUrl(`/api/assets/${encodeURIComponent(asset.id)}/preview?width=${width}`);
+  }
+
+  function previewUrlForWidth(previewUrls: Record<string, string> | undefined, preferredWidth: number): string | undefined {
+    if (!previewUrls) {
+      return undefined;
+    }
+
+    const widths = Object.keys(previewUrls)
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value))
+      .sort((a, b) => a - b);
+    const selectedWidth = widths.find((candidate) => candidate >= preferredWidth) ?? widths[widths.length - 1];
+    return selectedWidth ? previewUrls[String(selectedWidth)] : undefined;
   }
 
   function assetDownloadUrl(asset: GeneratedAsset): string {

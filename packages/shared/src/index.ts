@@ -524,6 +524,8 @@ export interface EditImageRequest extends GenerateImageRequest {
 export interface GeneratedAsset {
   id: string;
   url: string;
+  cdnUrl?: string;
+  cdnPreviewUrls?: Record<string, string>;
   fileName: string;
   mimeType: string;
   width: number;

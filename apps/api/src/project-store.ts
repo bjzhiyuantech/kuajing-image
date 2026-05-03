@@ -13,6 +13,7 @@ import type {
   OutputStatus,
   ProjectState
 } from "./contracts.js";
+import { buildAssetCdnPreviewUrls, buildAssetCdnUrl } from "./asset-cdn.js";
 import { db } from "./database.js";
 import { assets, generationOutputs, generationRecords, projects, users } from "./schema.js";
 
@@ -347,12 +348,14 @@ function toGeneratedAsset(asset: (typeof assets.$inferSelect) | undefined): Gene
   return {
     id: asset.id,
     url: `/api/assets/${asset.id}`,
+    cdnUrl: buildAssetCdnUrl({ objectKey: asset.cloudObjectKey, provider: asset.cloudProvider, status: asset.cloudStatus }),
+    cdnPreviewUrls: buildAssetCdnPreviewUrls({ objectKey: asset.cloudObjectKey, provider: asset.cloudProvider, status: asset.cloudStatus }),
     fileName: asset.fileName,
     mimeType: asset.mimeType,
     width: asset.width,
     height: asset.height,
     cloud:
-      asset.cloudProvider === "cos" && (asset.cloudStatus === "uploaded" || asset.cloudStatus === "failed")
+      (asset.cloudProvider === "cos" || asset.cloudProvider === "oss") && (asset.cloudStatus === "uploaded" || asset.cloudStatus === "failed")
         ? {
             provider: asset.cloudProvider,
             status: asset.cloudStatus,
