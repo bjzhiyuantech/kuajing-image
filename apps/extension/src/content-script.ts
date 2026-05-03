@@ -65,6 +65,27 @@ function hasTinySizeHint(url: string): boolean {
   return /(?:[?&](?:w|h|width|height)=)(?:[1-9]\d?|1[01]\d|12[0-8])(?:[^\d]|$)/u.test(decodedUrl);
 }
 
+function imageIdentityKey(url: string): string {
+  try {
+    const parsed = new URL(url);
+    parsed.hash = "";
+    parsed.search = "";
+    parsed.pathname = parsed.pathname
+      .replace(/_(?:\d+x\d+|(?:sum|m|b|q)\d+|webp|jpg|jpeg|png|avif|gif)(?=(?:\.[a-z0-9]+)?$)/giu, "")
+      .replace(/\.(?:jpg|jpeg|png|webp|gif|avif|bmp)_(?:\d+x\d+|(?:sum|m|b|q)\d+|webp|jpg|jpeg|png|avif|gif).*$/giu, (match) => {
+        const extension = match.match(/\.(jpg|jpeg|png|webp|gif|avif|bmp)/iu)?.[0] ?? "";
+        return extension.toLowerCase();
+      })
+      .replace(/(?:!!|_)(?:\d+x\d+|(?:sum|m|b|q)\d+|webp|jpg|jpeg|png|avif|gif)+(?=(?:\.[a-z0-9]+)?$)/giu, "")
+      .replace(/\/resize,m_[^/]+/giu, "")
+      .replace(/\/quality,Q_[^/]+/giu, "")
+      .replace(/\/format,[^/]+/giu, "");
+    return `${parsed.hostname}${parsed.pathname}`.toLowerCase();
+  } catch {
+    return url.toLowerCase();
+  }
+}
+
 function addImageCandidate(
   candidates: ImageCandidate[],
   seen: Set<string>,
@@ -83,7 +104,12 @@ function addImageCandidate(
   if (!url || seen.has(url) || isLikelyDecorativeImage(url, context) || hasTinySizeHint(url)) {
     return;
   }
+  const identityKey = imageIdentityKey(url);
+  if (seen.has(identityKey)) {
+    return;
+  }
   seen.add(url);
+  seen.add(identityKey);
   candidates.push({ url, score });
 }
 
@@ -282,6 +308,7 @@ function probeImage(url: string): Promise<ImageProbeResult> {
 }
 
 async function filterProductImageUrls(candidates: ImageCandidate[]): Promise<string[]> {
+  const acceptedKeys = new Set<string>();
   const sortedUrls = candidates
     .sort((left, right) => right.score - left.score)
     .map((candidate) => candidate.url)
@@ -297,7 +324,9 @@ async function filterProductImageUrls(candidates: ImageCandidate[]): Promise<str
       }
       const longestSide = Math.max(result.width, result.height);
       const shortestSide = Math.min(result.width, result.height);
-      if (longestSide >= 220 && shortestSide >= 120) {
+      const identityKey = imageIdentityKey(result.url);
+      if (longestSide >= 220 && shortestSide >= 120 && !acceptedKeys.has(identityKey)) {
+        acceptedKeys.add(identityKey);
         accepted.push(result.url);
       }
     }
