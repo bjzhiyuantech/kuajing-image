@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="商图AI助手">
+  <defs>
+    <linearGradient id="bg" x1="24" y1="20" x2="104" y2="108" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1DBA6B"/>
+      <stop offset="0.58" stop-color="#0A8F7C"/>
+      <stop offset="1" stop-color="#246BFE"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="28" y1="18" x2="92" y2="82" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.34"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="shadow" x="10" y="12" width="108" height="110" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="5" stdDeviation="5" flood-color="#073A45" flood-opacity="0.22"/>
+    </filter>
+  </defs>
+  <rect x="16" y="16" width="96" height="96" rx="22" fill="url(#bg)" filter="url(#shadow)"/>
+  <path d="M38 28h52c7.732 0 14 6.268 14 14v5c-26-3-48-2-78 9V40c0-6.627 5.373-12 12-12Z" fill="url(#shine)"/>
+  <path d="M91 31v11m-5.5-5.5h11M98 44v7m-3.5-3.5h7" fill="none" stroke="#FFECA8" stroke-width="4" stroke-linecap="round"/>
+  <text x="64" y="77" text-anchor="middle" dominant-baseline="middle"
+        font-family="Heiti SC, Hiragino Sans GB, PingFang SC, Noto Sans CJK SC, sans-serif"
+        font-size="61" font-weight="700" fill="#FFFFFF">图</text>
+  <path d="M42 90h44" stroke="#DFFEF4" stroke-width="5" stroke-linecap="round" opacity="0.92"/>
+</svg>
