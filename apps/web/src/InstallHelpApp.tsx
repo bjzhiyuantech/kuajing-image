@@ -1,7 +1,7 @@
 import { Copy, Download, ExternalLink, Globe, Package, ShieldCheck } from "lucide-react";
 import { useMemo, useState } from "react";
 
-const ZIP_DOWNLOAD_URL = "/downloads/kuajing-image-extension.zip";
+const ZIP_DOWNLOAD_URL = "https://imagen.neimou.com/downloads/shangtu_extension.zip";
 
 function extensionManagerUrl(browser: "chrome" | "edge"): string {
   return browser === "chrome" ? "chrome://extensions" : "edge://extensions";
