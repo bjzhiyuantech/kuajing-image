@@ -54,7 +54,7 @@ import type { AuthUser, BatchFormState, BatchTask, ExtensionAuthState, PageConte
 
 const ACTIVE_BATCH_JOB_STORAGE_KEY = "activeBatchJob";
 const AUTH_STORAGE_KEY = "auth";
-const DEFAULT_API_BASE_URL = "https://imagen.neimou.com";
+const DEFAULT_API_BASE_URL = import.meta.env.VITE_EXTENSION_API_BASE_URL || "https://imagen.neimou.com";
 const TEXT_TRANSLATION_SCENE_ID = "text-translation" as const;
 const TEXT_TRANSLATION_CONCURRENCY = 4;
 const MOCK_BILLING_PLANS: BillingPlan[] = [

@@ -106,6 +106,27 @@ pnpm build
 - `pnpm build` 构建 shared、web 和 API 包。
 - `pnpm start` 启动构建后的 API 包。
 
+## 浏览器插件 Dev / Product 版本
+
+插件支持按构建目标写入不同的 API 域名，方便同时安装测试版和正式版：
+
+```sh
+pnpm --filter @gpt-image-canvas/extension build:dev
+pnpm --filter @gpt-image-canvas/extension build:prod
+```
+
+构建产物：
+
+- `apps/extension/dist-dev`：插件名称为“跨境图片助手 Dev”，默认 API 为 `https://dev.neimou.com`。
+- `apps/extension/dist-prod`：插件名称为“跨境图片助手”，默认 API 为 `https://imagen.neimou.com`。
+
+Chrome/Edge 中打开扩展管理页，启用开发者模式后，分别“加载已解压的扩展程序”并选择对应目录即可。
+
+服务器部署脚本会额外把两个插件目录打成 zip 包并复制到 `downloads/`：
+
+- `downloads/kuajing-image-extension-dev-v<version>.zip`
+- `downloads/kuajing-image-extension-prod-v<version>.zip`
+
 ## Docker
 
 Docker Compose 会把共享契约、Web 应用和 API 构建到同一个镜像中。Hono API 会在同一个本地端口同时提供 `/api` 和构建后的 Web bundle，SQLite 数据和生成资产会持久化到宿主机 `./data`。
@@ -158,6 +179,86 @@ NODE_IMAGE=node:22-bookworm-slim docker compose up --build
 ```
 
 `OPENAI_API_KEY` 可以在本地启动检查时留空。应用仍会启动，生成端点会返回缺少 key 的 JSON 错误，直到配置凭证为止。
+
+## 蓝绿部署
+
+如果希望升级时生产入口不断线，可以使用仓库内置的蓝绿部署 Compose 文件。它会同时运行两套应用服务：
+
+- `app-blue`：蓝色环境。
+- `app-green`：绿色环境。
+- `nginx`：对外暴露统一入口，默认 `http://localhost:8787`，只把流量转发到当前上线环境。
+- `mysql`：两套应用共享同一个 MySQL 数据库。
+
+默认端口：
+
+- 生产入口：`http://localhost:8787`。
+- dev 入口：`http://localhost:8790`。
+- blue 直连入口：`http://localhost:8788`。
+- green 直连入口：`http://localhost:8789`。
+
+首次启动：
+
+```sh
+cp .env.example .env
+docker compose -f docker-compose.bluegreen.yml up -d --build
+```
+
+默认生产流量指向 `app-blue`。你可以把未接流量的一侧作为开发/预发布环境，完成升级后切换生产流量：
+
+```sh
+./scripts/bluegreen-switch.sh green
+```
+
+不传参数时，脚本会自动切到当前环境的另一侧：
+
+```sh
+./scripts/bluegreen-switch.sh
+```
+
+脚本会先启动并构建目标服务，等待目标服务的 `/api/health` 通过，再重写 Nginx upstream 并 reload Nginx。切换完成后，旧环境仍保持运行，可以作为下一轮开发/升级环境，也可以用于快速回滚：
+
+```sh
+./scripts/bluegreen-switch.sh blue
+```
+
+线上入口端口可通过 `.env` 中的 `PUBLIC_PORT` 修改，例如：
+
+```env
+PUBLIC_PORT=80
+```
+
+两套环境的直连测试端口可通过 `BLUE_PORT` 和 `GREEN_PORT` 修改。
+
+如果外部 Nginx 配了两个域名，推荐这样代理：
+
+```text
+imagen.neimou.com -> 127.0.0.1:8787
+dev.neimou.com    -> 127.0.0.1:8790
+```
+
+Docker 内部 Nginx 会自动维护两条线路：生产入口指向当前上线颜色，dev 入口指向另一种颜色。例如生产在 `blue` 时，dev 指向 `green`；生产切到 `green` 后，dev 会指向 `blue`。
+
+服务器上拉取 GitHub 最新代码、启动 inactive 颜色作为 dev 环境、打包两个插件 zip，可以运行：
+
+```sh
+./scripts/server-deploy.sh
+```
+
+也可以明确指定本次要启动哪一侧作为 dev 环境：
+
+```sh
+./scripts/server-deploy.sh green
+```
+
+脚本完成后先访问 `https://dev.neimou.com`，并安装 `downloads/` 里的 Dev 插件包验证。确认没问题后，再把生产流量切到本次验证过的颜色：
+
+```sh
+./scripts/bluegreen-switch.sh green
+```
+
+下一轮发布时，当前生产色会变成 `green`，再运行 `./scripts/server-deploy.sh` 会自动选择 `blue` 作为 dev 环境。
+
+注意：蓝绿部署可以避免应用容器重启导致的断链，但数据库结构变更仍需要向前兼容。发布前请避免“新代码必须依赖刚删除的旧字段”或“旧代码无法读取新结构”这类一次性破坏性迁移；更稳妥的做法是先加字段/表，确认新旧版本都能运行，再在后续版本清理旧结构。
 
 ## 云存储备份
 

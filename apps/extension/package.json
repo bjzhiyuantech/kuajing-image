@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json --noEmit && vite build && node scripts/copy-manifest.mjs",
+    "build:dev": "tsc -p tsconfig.json --noEmit && EXTENSION_BUILD_TARGET=dev VITE_EXTENSION_API_BASE_URL=https://dev.neimou.com VITE_EXTENSION_NAME='跨境图片助手 Dev' vite build --outDir dist-dev && EXTENSION_BUILD_TARGET=dev VITE_EXTENSION_API_BASE_URL=https://dev.neimou.com VITE_EXTENSION_NAME='跨境图片助手 Dev' node scripts/copy-manifest.mjs dist-dev",
+    "build:prod": "tsc -p tsconfig.json --noEmit && EXTENSION_BUILD_TARGET=prod VITE_EXTENSION_API_BASE_URL=https://imagen.neimou.com VITE_EXTENSION_NAME='跨境图片助手' vite build --outDir dist-prod && EXTENSION_BUILD_TARGET=prod VITE_EXTENSION_API_BASE_URL=https://imagen.neimou.com VITE_EXTENSION_NAME='跨境图片助手' node scripts/copy-manifest.mjs dist-prod",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
