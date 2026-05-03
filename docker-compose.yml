@@ -41,6 +41,7 @@ services:
       - "${PORT:-8787}:${PORT:-8787}"
     volumes:
       - ./data:/app/data
+      - ./downloads:/app/apps/web/dist/downloads
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
