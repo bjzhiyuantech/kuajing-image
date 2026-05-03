@@ -4,10 +4,10 @@ type CdnAssetLocation = {
   status?: string | null;
 };
 
-const assetCdnBaseUrl = normalizeCdnBaseUrl(process.env.ASSET_CDN_BASE_URL);
 const OSS_PREVIEW_WIDTHS = [192, 256, 512, 1024] as const;
 
 export function buildAssetCdnUrl(location: CdnAssetLocation | undefined): string | undefined {
+  const assetCdnBaseUrl = normalizeCdnBaseUrl(process.env.ASSET_CDN_BASE_URL);
   if (!assetCdnBaseUrl || !location || location.status !== "uploaded" || !location.objectKey?.trim()) {
     return undefined;
   }
