@@ -1,5 +1,130 @@
 import type { PageContext } from "./types";
 
+const capturedResponseImageUrls = new Set<string>();
+let pageCaptureScriptInjected = false;
+
+function recordCapturedUrls(urls: string[]): void {
+  for (const url of urls) {
+    const normalized = absoluteUrl(normalizeUrlCandidate(url));
+    if (normalized) {
+      capturedResponseImageUrls.add(normalized);
+    }
+  }
+}
+
+function installPageCaptureListener(): void {
+  window.addEventListener("message", (event) => {
+    if (event.source !== window || !event.data || event.data.source !== "kuajing-image-page-hook") {
+      return;
+    }
+    if (event.data.type === "kuajing-image:captured-urls" && Array.isArray(event.data.urls)) {
+      recordCapturedUrls(event.data.urls);
+    }
+  });
+}
+
+function injectPageCaptureScript(): void {
+  if (pageCaptureScriptInjected || !document.documentElement) {
+    return;
+  }
+  pageCaptureScriptInjected = true;
+
+  const script = document.createElement("script");
+  script.dataset.source = "kuajing-image-page-hook";
+  script.textContent = `(() => {
+    if (window.__kuajingImagePageHookInstalled) return;
+    window.__kuajingImagePageHookInstalled = true;
+    const IMAGE_URL_PATTERN = ${IMAGE_URL_PATTERN};
+    const found = new Set();
+    const normalize = (value) => String(value || "")
+      .trim()
+      .replace(/^url\\(["']?/u, "")
+      .replace(/["']?\\)$/u, "")
+      .replace(/\\\\u002f/giu, "/")
+      .replace(/\\\\\\//gu, "/")
+      .replace(/&amp;/gu, "&")
+      .replace(/\\\\u0026/giu, "&")
+      .replace(/\\\\u003d/giu, "=");
+    const emit = (urls) => {
+      const next = [];
+      for (const url of urls) {
+        if (!url || found.has(url)) continue;
+        found.add(url);
+        next.push(url);
+      }
+      if (next.length > 0) {
+        window.postMessage({ source: "kuajing-image-page-hook", type: "kuajing-image:captured-urls", urls: next }, "*");
+      }
+    };
+    const extract = (text) => {
+      const normalized = normalize(text);
+      IMAGE_URL_PATTERN.lastIndex = 0;
+      return Array.from(normalized.matchAll(IMAGE_URL_PATTERN)).map((match) => match[0]).filter((url) => /alicdn|ibank|O1CN|cbu01/i.test(url));
+    };
+    const inspectText = (text) => {
+      if (!text || (!/alicdn|ibank|O1CN|cbu01|offer_details|img\\/ibank/i.test(String(text)))) return;
+      emit(extract(text));
+    };
+
+    const originalFetch = window.fetch;
+    if (typeof originalFetch === "function") {
+      window.fetch = async (...args) => {
+        const response = await originalFetch(...args);
+        try {
+          const clone = response.clone();
+          const contentType = clone.headers.get("content-type") || "";
+          if (/json|javascript|text|html/i.test(contentType)) {
+            clone.text().then(inspectText).catch(() => {});
+          }
+        } catch {}
+        return response;
+      };
+    }
+
+    const originalOpen = XMLHttpRequest.prototype.open;
+    const originalSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function (...args) {
+      this.__kuajingImageRequestUrl = args[1];
+      return originalOpen.apply(this, args);
+    };
+    XMLHttpRequest.prototype.send = function (...args) {
+      this.addEventListener("load", function () {
+        try {
+          const responseType = this.responseType || "";
+          const contentType = this.getResponseHeader("content-type") || "";
+          if ((!responseType || responseType === "text") && /json|javascript|text|html/i.test(contentType)) {
+            inspectText(this.responseText || "");
+          }
+        } catch {}
+      });
+      return originalSend.apply(this, args);
+    };
+
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of Array.from(record.addedNodes)) {
+          if (node instanceof HTMLScriptElement) {
+            inspectText(node.textContent || "");
+            if (node.src) emit([node.src]);
+          } else if (node instanceof HTMLElement) {
+            inspectText(node.outerHTML || "");
+          }
+        }
+      }
+    });
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+
+    inspectText(document.documentElement?.outerHTML || "");
+    for (const scriptNode of Array.from(document.scripts)) {
+      inspectText(scriptNode.textContent || "");
+      if (scriptNode.src) emit([scriptNode.src]);
+    }
+  })();`;
+
+  (document.documentElement || document.head || document.body).appendChild(script);
+  script.remove();
+}
+
 function normalizeText(value: string): string {
   return value.replace(/\s+/gu, " ").trim();
 }
@@ -127,10 +252,22 @@ function imageUrlVariantRank(url: string): number {
     if (parsed.search) {
       rank -= 100;
     }
+    if (/\/img\/ibank\/O1CN/iu.test(path)) {
+      rank += 500;
+    }
   } catch {
     return rank;
   }
   return rank;
+}
+
+function isAlibabaProductResourceImage(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return /(?:^|\.)alicdn\.com$/iu.test(parsed.hostname) && /\/img\/ibank\/O1CN/iu.test(parsed.pathname);
+  } catch {
+    return false;
+  }
 }
 
 function bestImageCandidates(candidates: ImageCandidate[]): ImageCandidate[] {
@@ -335,8 +472,18 @@ function addResourceImageCandidates(doc: Document, candidates: ImageCandidate[],
       /\.(?:jpg|jpeg|png|webp|gif|bmp|avif)(?:[?#]|$)/iu.test(url) ||
       /[?&](?:image|img|pic|picture|photo|src)=/iu.test(url)
     ) {
-      addImageCandidate(candidates, seen, url, 78, "performance resource image");
+      const score = isAlibabaProductResourceImage(url) ? 130 : 78;
+      const context = isAlibabaProductResourceImage(url) ? "1688 ibank product detail gallery resource image" : "performance resource image";
+      addImageCandidate(candidates, seen, url, score, context);
     }
+  }
+}
+
+function addCapturedResponseImageCandidates(candidates: ImageCandidate[], seen: Set<string>): void {
+  for (const url of capturedResponseImageUrls) {
+    const score = isAlibabaProductResourceImage(url) ? 140 : 92;
+    const context = isAlibabaProductResourceImage(url) ? "captured response 1688 detail image" : "captured response image";
+    addImageCandidate(candidates, seen, url, score, context);
   }
 }
 
@@ -359,26 +506,58 @@ function addDetailImageCandidates(doc: Document, candidates: ImageCandidate[], s
 }
 
 function addMarkupImageCandidates(doc: Document, candidates: ImageCandidate[], seen: Set<string>): void {
-  const roots = doc.querySelectorAll<HTMLElement>(DETAIL_ROOT_SELECTOR);
-  const markupParts = Array.from(roots)
-    .slice(0, 20)
-    .map((element) => element.outerHTML);
+  const roots = Array.from(doc.querySelectorAll<HTMLElement>(DETAIL_ROOT_SELECTOR)).slice(0, 20);
+  const markupParts = roots.length > 0 ? roots.map((element) => element.outerHTML) : [doc.documentElement.outerHTML];
 
   for (const markup of markupParts) {
     for (const imageUrl of extractImageUrlsFromText(markup)) {
-      addImageCandidate(candidates, seen, imageUrl, 65, "page markup detail image");
+      const score = isAlibabaProductResourceImage(imageUrl) ? 125 : 65;
+      addImageCandidate(candidates, seen, imageUrl, score, "page markup detail image");
     }
   }
 }
 
 function addScriptImageCandidates(doc: Document, candidates: ImageCandidate[], seen: Set<string>): void {
-  for (const script of Array.from(doc.scripts).slice(0, 80)) {
+  for (const script of Array.from(doc.scripts).slice(0, 180)) {
     const text = script.textContent ?? "";
-    if (!text || !/detail|desc|content|rich|offer|product|image|img|主图|详情|商品/iu.test(text.slice(0, 2000))) {
+    if (!text || !/detail|desc|content|rich|offer|product|image|img|ibank|alicdn|O1CN|主图|详情|商品/iu.test(text.slice(0, 8000))) {
       continue;
     }
     for (const imageUrl of extractImageUrlsFromText(text)) {
-      addImageCandidate(candidates, seen, imageUrl, 60, "script image url");
+      const score = isAlibabaProductResourceImage(imageUrl) ? 128 : 60;
+      addImageCandidate(candidates, seen, imageUrl, score, "script image url");
+    }
+  }
+}
+
+function addGlobalStateImageCandidates(doc: Document, candidates: ImageCandidate[], seen: Set<string>): void {
+  const win = doc.defaultView as (Window & Record<string, unknown>) | null;
+  if (!win) {
+    return;
+  }
+
+  for (const key of Object.keys(win).slice(0, 2500)) {
+    if (!/offer|detail|desc|product|image|img|data|apollo|redux|__|mod/iu.test(key)) {
+      continue;
+    }
+    try {
+      const value = win[key];
+      if (typeof value === "string") {
+        for (const imageUrl of extractImageUrlsFromText(value)) {
+          const score = isAlibabaProductResourceImage(imageUrl) ? 126 : 58;
+          addImageCandidate(candidates, seen, imageUrl, score, `window state ${key}`);
+        }
+      } else if (value && typeof value === "object") {
+        const serialized = JSON.stringify(value);
+        if (serialized && /alicdn|ibank|O1CN|jpg|jpeg|png|webp/iu.test(serialized)) {
+          for (const imageUrl of extractImageUrlsFromText(serialized)) {
+            const score = isAlibabaProductResourceImage(imageUrl) ? 126 : 58;
+            addImageCandidate(candidates, seen, imageUrl, score, `window state ${key}`);
+          }
+        }
+      }
+    } catch {
+      // Some window properties throw when read or serialized.
     }
   }
 }
@@ -438,11 +617,11 @@ async function filterProductImageUrls(candidates: ImageCandidate[]): Promise<str
   const dedupedCandidates = bestImageCandidates(candidates);
   const sortedCandidates = dedupedCandidates
     .sort((left, right) => right.score - left.score)
-    .slice(0, 96);
+    .slice(0, 180);
   const accepted: string[] = [];
-  const fallbackUrls = sortedCandidates.map((candidate) => candidate.url).filter((url) => !hasTinySizeHint(url)).slice(0, 64);
+  const fallbackUrls = sortedCandidates.map((candidate) => candidate.url).filter((url) => !hasTinySizeHint(url)).slice(0, 120);
 
-  for (let index = 0; index < sortedCandidates.length && accepted.length < 64; index += 12) {
+  for (let index = 0; index < sortedCandidates.length && accepted.length < 120; index += 12) {
     const batch = sortedCandidates.slice(index, index + 12);
     const results = await Promise.race([
       Promise.all(batch.map((candidate) => probeImage(candidate.url).then((result) => ({ ...result, context: candidate.context })))),
@@ -528,11 +707,14 @@ async function hydrateDetailImages(doc: Document): Promise<void> {
 }
 
 async function pageContext(): Promise<PageContext> {
+  injectPageCaptureScript();
   await hydrateDetailImages(document);
 
   const imageCandidates: ImageCandidate[] = [];
   const seenImageUrls = new Set<string>();
   const documents = collectAccessibleDocuments(document);
+
+  addCapturedResponseImageCandidates(imageCandidates, seenImageUrls);
 
   for (const doc of documents) {
     const ogImage = readDocMeta(doc, 'meta[property="og:image"], meta[name="og:image"]');
@@ -553,7 +735,9 @@ async function pageContext(): Promise<PageContext> {
     addDetailImageCandidates(doc, imageCandidates, seenImageUrls);
     addMarkupImageCandidates(doc, imageCandidates, seenImageUrls);
     addScriptImageCandidates(doc, imageCandidates, seenImageUrls);
+    addGlobalStateImageCandidates(doc, imageCandidates, seenImageUrls);
     addResourceImageCandidates(doc, imageCandidates, seenImageUrls);
+    addCapturedResponseImageCandidates(imageCandidates, seenImageUrls);
   }
 
   return {
@@ -585,3 +769,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   return false;
 });
+
+installPageCaptureListener();
+injectPageCaptureScript();
