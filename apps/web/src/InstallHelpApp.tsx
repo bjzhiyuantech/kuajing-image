@@ -1,7 +1,7 @@
 import { Copy, Download, ExternalLink, Globe, Package, ShieldCheck } from "lucide-react";
 import { useMemo, useState } from "react";
 
-const ZIP_DOWNLOAD_URL = "https://imagen.neimou.com/downloads/shangtu_extension.zip";
+const ZIP_DOWNLOAD_URL = "https://imagen.neimou.com/downloads/kuajing-image-extension-prod-latest.zip";
 
 function extensionManagerUrl(browser: "chrome" | "edge"): string {
   return browser === "chrome" ? "chrome://extensions" : "edge://extensions";
@@ -30,14 +30,14 @@ export function InstallHelpApp() {
           插件安装帮助
         </div>
         <h1>下载压缩包，按浏览器完成安装</h1>
-        <p>先下载插件压缩包，解压后再在 Chrome 或 Edge 中加载扩展目录。下载地址已预留，替换成正式链接后即可使用。</p>
+        <p>先下载最新插件压缩包，解压后再在 Chrome 或 Edge 中加载扩展目录。后续插件会自动检测新版，并从这里下载升级包。</p>
       </section>
 
       <section className="install-download-card">
         <div className="install-download-header">
           <div>
             <h2>插件压缩包下载</h2>
-            <p>请把这里的地址替换为正式 zip 文件地址。</p>
+            <p>始终指向当前生产版最新安装包。</p>
           </div>
           <a className="install-download-button" href={ZIP_DOWNLOAD_URL} target="_blank" rel="noreferrer">
             <Download size={16} />

@@ -1,4 +1,5 @@
-import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { basename, join, relative, resolve, sep } from "node:path";
 
 const rootDir = resolve(import.meta.dirname, "..");
@@ -6,6 +7,13 @@ const outputDir = resolve(rootDir, process.argv[2] || "downloads");
 const extensionDir = resolve(rootDir, "apps/extension");
 const extensionPackage = JSON.parse(readFileSync(resolve(extensionDir, "package.json"), "utf8"));
 const version = extensionPackage.version || "0.0.0";
+const publishedAt = new Date().toISOString();
+const releaseNotes = (process.env.EXTENSION_RELEASE_NOTES || "")
+  .split(/\r?\n/u)
+  .map((line) => line.trim())
+  .filter(Boolean);
+
+mkdirSync(outputDir, { recursive: true });
 
 const targets = [
   {
@@ -141,6 +149,22 @@ function createZip(sourceDir, outputFile) {
 
 for (const target of targets) {
   createZip(target.sourceDir, target.outputFile);
+  const latestZipFile = resolve(outputDir, `kuajing-image-extension-${target.name}-latest.zip`);
+  copyFileSync(target.outputFile, latestZipFile);
+  const bytes = readFileSync(target.outputFile);
+  const latestManifest = {
+    target: target.name,
+    version,
+    publishedAt,
+    downloadUrl: `/downloads/${basename(target.outputFile)}`,
+    latestDownloadUrl: `/downloads/${basename(latestZipFile)}`,
+    installHelpUrl: "/install-help.html",
+    fileName: basename(target.outputFile),
+    sizeBytes: bytes.byteLength,
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    releaseNotes: releaseNotes.length > 0 ? releaseNotes : ["优化插件体验并修复已知问题。"]
+  };
+  writeFileSync(resolve(outputDir, `kuajing-image-extension-${target.name}-latest.json`), `${JSON.stringify(latestManifest, null, 2)}\n`);
   const displayPath = relative(rootDir, target.outputFile);
   console.log(`${target.name}: ${displayPath}`);
 }

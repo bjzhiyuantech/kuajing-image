@@ -55,6 +55,7 @@ import type { AuthUser, BatchFormState, BatchTask, ExtensionAuthState, PageConte
 const ACTIVE_BATCH_JOB_STORAGE_KEY = "activeBatchJob";
 const AUTH_STORAGE_KEY = "auth";
 const DEFAULT_API_BASE_URL = import.meta.env.VITE_EXTENSION_API_BASE_URL || "https://imagen.neimou.com";
+const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const TEXT_TRANSLATION_SCENE_ID = "text-translation" as const;
 const TEXT_TRANSLATION_CONCURRENCY = 4;
 const MOCK_BILLING_PLANS: BillingPlan[] = [
@@ -100,7 +101,7 @@ interface StoredBatchJob {
   token?: string;
 }
 
-type ToolTab = "account" | "billing" | "history" | "stats";
+type ToolTab = "account" | "billing" | "history" | "stats" | "version";
 type AuthMode = "login" | "register";
 type PendingAuthAction = "generate" | "billing" | "history" | "stats" | "job";
 
@@ -143,6 +144,27 @@ interface BillingOverview {
 
 interface RemoteState<T> {
   data: T;
+  error: string;
+  loading: boolean;
+}
+
+interface ExtensionUpdateInfo {
+  target: string;
+  version: string;
+  publishedAt?: string;
+  downloadUrl: string;
+  latestDownloadUrl?: string;
+  installHelpUrl?: string;
+  fileName?: string;
+  sizeBytes?: number;
+  sha256?: string;
+  releaseNotes?: string[];
+}
+
+interface ExtensionVersionState {
+  currentVersion: string;
+  checkedAt?: string;
+  update: ExtensionUpdateInfo | null;
   error: string;
   loading: boolean;
 }
@@ -833,6 +855,44 @@ function formatCount(value?: number): string {
   return typeof value === "number" && Number.isFinite(value) ? value.toLocaleString("zh-CN") : "0";
 }
 
+function formatBytes(value?: number): string {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return "未知大小";
+  }
+  if (value >= 1024 * 1024) {
+    return `${(value / 1024 / 1024).toFixed(1)} MB`;
+  }
+  if (value >= 1024) {
+    return `${Math.round(value / 1024)} KB`;
+  }
+  return `${value} B`;
+}
+
+function compareVersions(left: string, right: string): number {
+  const leftParts = left.split(/[.-]/u).map((part) => Number.parseInt(part, 10) || 0);
+  const rightParts = right.split(/[.-]/u).map((part) => Number.parseInt(part, 10) || 0);
+  const length = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < length; index += 1) {
+    const diff = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
+    if (diff !== 0) {
+      return diff;
+    }
+  }
+  return 0;
+}
+
+function extensionTarget(): "dev" | "prod" {
+  return chrome.runtime.getManifest().name.toLowerCase().includes("dev") ? "dev" : "prod";
+}
+
+function extensionVersionManifestUrl(baseUrl: string): string {
+  return new URL(`/downloads/kuajing-image-extension-${extensionTarget()}-latest.json`, `${baseUrl.replace(/\/$/u, "")}/`).toString();
+}
+
+function absoluteAppUrl(pathOrUrl: string, baseUrl: string): string {
+  return new URL(pathOrUrl, `${baseUrl.replace(/\/$/u, "")}/`).toString();
+}
+
 function planBenefits(plan: BillingPlan): string[] {
   if (Array.isArray(plan.benefits)) {
     return plan.benefits.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).slice(0, 3);
@@ -983,6 +1043,12 @@ export function SidePanelApp() {
   const [translationReturnMode, setTranslationReturnMode] = useState<EcommerceGenerationMode>("enhance");
   const [translationImageUrls, setTranslationImageUrls] = useState<string[]>([]);
   const [zipDownloadLoading, setZipDownloadLoading] = useState(false);
+  const [extensionVersionState, setExtensionVersionState] = useState<ExtensionVersionState>({
+    currentVersion: chrome.runtime.getManifest().version,
+    update: null,
+    error: "",
+    loading: false
+  });
 
   const availableScenes = useMemo(
     () => ECOMMERCE_SCENE_TEMPLATES.filter((template) => template.mode === form.generationMode),
@@ -1077,6 +1143,14 @@ export function SidePanelApp() {
         });
       }
     });
+  }, []);
+
+  useEffect(() => {
+    void checkExtensionUpdate("silent");
+    const timer = window.setInterval(() => {
+      void checkExtensionUpdate("silent");
+    }, UPDATE_CHECK_INTERVAL_MS);
+    return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -1291,6 +1365,71 @@ export function SidePanelApp() {
       dataUrl: await blobToDataUrl(blob),
       fileName: asset.fileName
     };
+  }
+
+  function normalizeExtensionUpdateInfo(payload: unknown): ExtensionUpdateInfo {
+    const root = asRecord(payload);
+    const version = firstString(root, ["version", "latestVersion"]);
+    const downloadUrl = firstString(root, ["downloadUrl", "download_url"]);
+    if (!version || !downloadUrl) {
+      throw new Error("版本清单格式不完整。");
+    }
+    const notes = root.releaseNotes;
+    return {
+      target: firstString(root, ["target"]) ?? extensionTarget(),
+      version,
+      publishedAt: firstString(root, ["publishedAt", "published_at"]),
+      downloadUrl,
+      latestDownloadUrl: firstString(root, ["latestDownloadUrl", "latest_download_url"]),
+      installHelpUrl: firstString(root, ["installHelpUrl", "install_help_url"]),
+      fileName: firstString(root, ["fileName", "file_name"]),
+      sizeBytes: firstNumber(root, ["sizeBytes", "size_bytes"]),
+      sha256: firstString(root, ["sha256"]),
+      releaseNotes: Array.isArray(notes) ? notes.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).slice(0, 6) : []
+    };
+  }
+
+  async function checkExtensionUpdate(mode: "silent" | "manual" = "manual"): Promise<void> {
+    setExtensionVersionState((current) => ({
+      ...current,
+      error: mode === "manual" ? "" : current.error,
+      loading: mode === "manual"
+    }));
+    try {
+      const response = await fetch(extensionVersionManifestUrl(apiBaseUrl()), { cache: "no-store" });
+      if (!response.ok) {
+        throw new Error("版本清单读取失败。");
+      }
+      const latest = normalizeExtensionUpdateInfo(await response.json());
+      const hasUpdate = compareVersions(latest.version, chrome.runtime.getManifest().version) > 0;
+      setExtensionVersionState({
+        currentVersion: chrome.runtime.getManifest().version,
+        checkedAt: new Date().toISOString(),
+        update: hasUpdate ? latest : null,
+        error: "",
+        loading: false
+      });
+    } catch (error) {
+      setExtensionVersionState((current) => ({
+        ...current,
+        checkedAt: new Date().toISOString(),
+        error: mode === "manual" ? (error instanceof Error ? error.message : "版本检查失败。") : current.error,
+        loading: false
+      }));
+    }
+  }
+
+  async function upgradeExtension(): Promise<void> {
+    const update = extensionVersionState.update;
+    if (!update) {
+      await checkExtensionUpdate("manual");
+      return;
+    }
+    const downloadHref = absoluteAppUrl(update.latestDownloadUrl || update.downloadUrl, apiBaseUrl());
+    downloadUrl(downloadHref, update.fileName || `kuajing-image-extension-${extensionTarget()}-v${update.version}.zip`);
+    if (update.installHelpUrl) {
+      await chrome.tabs.create({ url: absoluteAppUrl(update.installHelpUrl, apiBaseUrl()) });
+    }
   }
 
   async function refreshMe(token = auth.token, baseUrl = apiBaseUrl()): Promise<AuthUser | null> {
@@ -1555,6 +1694,14 @@ export function SidePanelApp() {
     }
     setActiveTool(tab);
     setToolPanelOpen(true);
+  }
+
+  function toolTitle(tab: ToolTab): string {
+    if (tab === "account") return "账户";
+    if (tab === "billing") return "套餐与余额";
+    if (tab === "history") return "历史任务";
+    if (tab === "stats") return "统计概览";
+    return "版本升级";
   }
 
   function openHistoryJob(job: EcommerceJobSummary): void {
@@ -2719,10 +2866,16 @@ export function SidePanelApp() {
     <main className="app-shell">
       <header className="topbar">
         <div>
-          <p className="eyebrow">Cross-border image studio</p>
-          <h1>跨境图片助手</h1>
+          <p className="eyebrow">电商图片AI助手</p>
+          <h1>商图AI助手</h1>
         </div>
         <div className="topbar-actions">
+          {extensionVersionState.update ? (
+            <button className="update-badge" title={`发现新版本 ${extensionVersionState.update.version}`} type="button" onClick={() => openTool("version")}>
+              <Download size={14} />
+              <span>升级</span>
+            </button>
+          ) : null}
           <button className="plan-badge" title="查看套餐" type="button" onClick={() => openTool("billing")}>
             <Package size={14} />
             <span>{currentPlanLabel}</span>
@@ -3134,12 +3287,16 @@ export function SidePanelApp() {
             <BarChart3 size={15} />
             统计
           </button>
+          <button className={activeTool === "version" && toolPanelOpen ? "tool-tab active" : "tool-tab"} type="button" onClick={() => openTool("version")}>
+            <Download size={15} />
+            版本
+          </button>
         </div>
 
         {toolPanelOpen ? (
           <div className="tool-panel">
             <div className="tool-panel-header">
-              <strong>{activeTool === "account" ? "账户" : activeTool === "billing" ? "套餐与余额" : activeTool === "history" ? "历史任务" : "统计概览"}</strong>
+              <strong>{toolTitle(activeTool)}</strong>
               <button className="tool-close" type="button" onClick={() => setToolPanelOpen(false)}>收起</button>
             </div>
 
@@ -3454,6 +3611,54 @@ export function SidePanelApp() {
                   <div><span>进行中</span><strong>{statsState.data.runningJobs}</strong></div>
                   <div className="wide-stat"><span>生成图片</span><strong>{statsState.data.generatedImages}</strong></div>
                 </div>
+              </div>
+            ) : null}
+
+            {activeTool === "version" ? (
+              <div>
+                <div className="tool-actions">
+                  <span>自动检测插件更新</span>
+                  <button className="mini-button" disabled={extensionVersionState.loading} type="button" onClick={() => void checkExtensionUpdate("manual")}>
+                    {extensionVersionState.loading ? <Loader2 className="spin" size={13} /> : <RefreshCw size={13} />}
+                    检查
+                  </button>
+                </div>
+                <div className={extensionVersionState.update ? "version-card update-available" : "version-card"}>
+                  <div className="version-card-top">
+                    <div>
+                      <span>当前版本</span>
+                      <strong>v{extensionVersionState.currentVersion}</strong>
+                    </div>
+                    <div>
+                      <span>发布通道</span>
+                      <strong>{extensionTarget() === "dev" ? "Dev" : "Prod"}</strong>
+                    </div>
+                  </div>
+                  {extensionVersionState.update ? (
+                    <>
+                      <div className="version-update-title">
+                        <strong>发现 v{extensionVersionState.update.version}</strong>
+                        <span>{formatBytes(extensionVersionState.update.sizeBytes)}</span>
+                      </div>
+                      {extensionVersionState.update.releaseNotes && extensionVersionState.update.releaseNotes.length > 0 ? (
+                        <ul className="version-notes">
+                          {extensionVersionState.update.releaseNotes.map((note) => (
+                            <li key={note}>{note}</li>
+                          ))}
+                        </ul>
+                      ) : null}
+                      <button className="primary-button version-upgrade-button" type="button" onClick={() => void upgradeExtension()}>
+                        <Download size={15} />
+                        下载并查看升级步骤
+                      </button>
+                    </>
+                  ) : (
+                    <p className="tool-empty">当前已是最新版本。</p>
+                  )}
+                </div>
+                {extensionVersionState.checkedAt ? <p className="settings-note">上次检查：{formatDateTime(extensionVersionState.checkedAt)}</p> : null}
+                {extensionVersionState.error ? <p className="tool-error">{extensionVersionState.error}</p> : null}
+                <p className="settings-note">浏览器不允许手动安装的扩展静默替换自身，升级按钮会下载新版压缩包并打开安装帮助。</p>
               </div>
             ) : null}
 

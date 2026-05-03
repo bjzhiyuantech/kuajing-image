@@ -37,6 +37,7 @@ textarea {
 .mini-button,
 .topbar-actions,
 .plan-badge,
+.update-badge,
 .account-heading,
 .button-row,
 .quota-title-row,
@@ -69,6 +70,19 @@ textarea {
   gap: 6px;
   height: 34px;
   max-width: 120px;
+  padding: 0 10px;
+}
+
+.update-badge {
+  background: #17201c;
+  border: 1px solid #17201c;
+  border-radius: 8px;
+  color: #ffffff;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 900;
+  gap: 6px;
+  height: 34px;
   padding: 0 10px;
 }
 
@@ -1253,6 +1267,63 @@ textarea:focus {
   color: #66766d;
   font-size: 11px;
   overflow-wrap: anywhere;
+}
+
+.version-card {
+  background: #f7faf8;
+  border: 1px solid #e4ebe7;
+  border-radius: 7px;
+  padding: 11px;
+}
+
+.version-card.update-available {
+  background: #f4fbf7;
+  border-color: #b9e4cf;
+}
+
+.version-card-top,
+.version-update-title {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.version-card-top span,
+.version-update-title span {
+  color: #66766d;
+  display: block;
+  font-size: 11px;
+}
+
+.version-card-top strong {
+  color: #17201c;
+  display: block;
+  font-size: 14px;
+  margin-top: 3px;
+}
+
+.version-update-title {
+  border-top: 1px solid #dce8e2;
+  margin-top: 10px;
+  padding-top: 10px;
+}
+
+.version-update-title strong {
+  font-size: 15px;
+}
+
+.version-notes {
+  color: #4a5a51;
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+.version-upgrade-button {
+  margin-top: 10px;
+  width: 100%;
 }
 
 .quota-row {

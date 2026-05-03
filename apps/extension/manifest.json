@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
-  "name": "跨境图片助手",
+  "name": "商图AI助手",
   "version": "0.1.1",
-  "description": "在浏览器右侧边栏批量生成跨境电商商品图。",
+  "description": "在浏览器右侧边栏使用电商图片 AI 助手批量生成商品图。",
   "action": {
-    "default_title": "打开跨境图片助手"
+    "default_title": "打开商图AI助手"
   },
   "background": {
     "service_worker": "background.js",
