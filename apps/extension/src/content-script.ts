@@ -15,6 +15,7 @@ function absoluteUrl(value: string): string {
 interface ImageCandidate {
   url: string;
   score: number;
+  context: string;
 }
 
 interface ImageProbeResult {
@@ -29,7 +30,7 @@ interface RankedImageCandidate extends ImageCandidate {
   identityKey: string;
 }
 
-const IMAGE_URL_PATTERN = /(?:https?:)?\/\/[^"'()<>\s\\]+?\.(?:jpg|jpeg|png|webp|gif|bmp|avif)(?:\?[^"'()<>\s\\]*)?/giu;
+const IMAGE_URL_PATTERN = /(?:https?:)?\/\/[^"'()<>\s\\]+?\.(?:jpg|jpeg|png|webp|gif|bmp|avif)(?:[._!-][^"'()<>\s\\?]*)?(?:\?[^"'()<>\s\\]*)?/giu;
 const DETAIL_ROOT_SELECTOR =
   "#detail, [class*='detail'], [class*='Detail'], [class*='desc'], [class*='Desc'], [class*='content'], [class*='Content'], [class*='rich'], [class*='Rich'], [id*='detail'], [id*='Detail'], [id*='desc'], [id*='Desc'], [data-module*='detail'], [data-module*='Detail']";
 
@@ -44,7 +45,15 @@ function normalizeUrlCandidate(value: string): string {
     .replace(/["']?\)$/u, "")
     .replace(/\\u002f/giu, "/")
     .replace(/\\\//gu, "/")
-    .replace(/&amp;/gu, "&");
+    .replace(/&amp;/gu, "&")
+    .replace(/\\u0026/giu, "&")
+    .replace(/\\u003d/giu, "=");
+}
+
+function extractImageUrlsFromText(value: string): string[] {
+  const normalizedValue = normalizeUrlCandidate(value);
+  IMAGE_URL_PATTERN.lastIndex = 0;
+  return Array.from(normalizedValue.matchAll(IMAGE_URL_PATTERN)).map((match) => match[0]);
 }
 
 function isLikelyDecorativeImage(url: string, context = ""): boolean {
@@ -75,6 +84,7 @@ function imageIdentityKey(url: string): string {
     const parsed = new URL(url);
     parsed.hash = "";
     parsed.search = "";
+    parsed.protocol = "https:";
     parsed.pathname = parsed.pathname
       .replace(/\.(?:\d{2,5}x\d{2,5})\.(jpg|jpeg|png|webp|gif|avif|bmp)$/iu, ".$1")
       .replace(/_(?:\d+x\d+|(?:sum|m|b|q)\d+|webp|jpg|jpeg|png|avif|gif)(?=(?:\.[a-z0-9]+)?$)/giu, "")
@@ -87,6 +97,17 @@ function imageIdentityKey(url: string): string {
       .replace(/\/quality,Q_[^/]+/giu, "")
       .replace(/\/format,[^/]+/giu, "");
     return `${parsed.hostname}${parsed.pathname}`.toLowerCase();
+  } catch {
+    return url.toLowerCase();
+  }
+}
+
+function exactImageUrlKey(url: string): string {
+  try {
+    const parsed = new URL(url);
+    parsed.hash = "";
+    parsed.protocol = "https:";
+    return parsed.toString().toLowerCase();
   } catch {
     return url.toLowerCase();
   }
@@ -145,17 +166,22 @@ function addImageCandidate(
   if (!normalizedValue || normalizedValue.startsWith("data:") || normalizedValue.startsWith("blob:")) {
     return;
   }
+  if (!/^(?:https?:)?\/\//iu.test(normalizedValue)) {
+    for (const embeddedUrl of extractImageUrlsFromText(normalizedValue)) {
+      addImageCandidate(candidates, seen, embeddedUrl, score, context);
+    }
+    return;
+  }
   const url = absoluteUrl(normalizedValue);
   if (!url || seen.has(url) || isLikelyDecorativeImage(url, context) || hasTinySizeHint(url)) {
     return;
   }
-  const identityKey = imageIdentityKey(url);
-  if (seen.has(identityKey)) {
+  const exactKey = exactImageUrlKey(url);
+  if (seen.has(exactKey)) {
     return;
   }
-  seen.add(url);
-  seen.add(identityKey);
-  candidates.push({ url, score });
+  seen.add(exactKey);
+  candidates.push({ url, score, context });
 }
 
 function addSrcsetCandidates(
@@ -193,6 +219,14 @@ function readLazyImageAttributes(element: Element): string[] {
     "data-lazy",
     "data-defer-src",
     "data-origin",
+    "data-origin-src",
+    "data-raw-src",
+    "data-imgs",
+    "data-images",
+    "data-src-list",
+    "data-lazy-image",
+    "data-lazy-img",
+    "data-aplus-src",
     "lazy-src"
   ]
     .map((name) => element.getAttribute(name))
@@ -298,6 +332,11 @@ function addDetailImageCandidates(doc: Document, candidates: ImageCandidate[], s
       for (const value of readLazyImageAttributes(element)) {
         addImageCandidate(candidates, seen, value, 90, `${context} ${elementContext(element)}`);
       }
+      for (const attribute of Array.from(element.attributes)) {
+        if (/^(?:data-|lazy|original|src)/iu.test(attribute.name) && /(?:\/\/|jpg|jpeg|png|webp|avif|gif|bmp)/iu.test(attribute.value)) {
+          addImageCandidate(candidates, seen, attribute.value, 88, `${context} ${attribute.name} ${elementContext(element)}`);
+        }
+      }
       addSrcsetCandidates(candidates, seen, element.getAttribute("srcset") || element.getAttribute("data-srcset"), 90, context);
     }
   }
@@ -310,10 +349,8 @@ function addMarkupImageCandidates(doc: Document, candidates: ImageCandidate[], s
     .map((element) => element.outerHTML);
 
   for (const markup of markupParts) {
-    const normalizedMarkup = markup.replace(/\\u002f/giu, "/").replace(/\\\//gu, "/").replace(/&amp;/gu, "&");
-    const matches = normalizedMarkup.matchAll(IMAGE_URL_PATTERN);
-    for (const match of matches) {
-      addImageCandidate(candidates, seen, match[0], 65, "page markup detail image");
+    for (const imageUrl of extractImageUrlsFromText(markup)) {
+      addImageCandidate(candidates, seen, imageUrl, 65, "page markup detail image");
     }
   }
 }
@@ -324,9 +361,8 @@ function addScriptImageCandidates(doc: Document, candidates: ImageCandidate[], s
     if (!text || !/detail|desc|content|rich|offer|product|image|img|主图|详情|商品/iu.test(text.slice(0, 2000))) {
       continue;
     }
-    const normalizedText = text.replace(/\\u002f/giu, "/").replace(/\\\//gu, "/").replace(/&amp;/gu, "&");
-    for (const match of normalizedText.matchAll(IMAGE_URL_PATTERN)) {
-      addImageCandidate(candidates, seen, match[0], 60, "script image url");
+    for (const imageUrl of extractImageUrlsFromText(text)) {
+      addImageCandidate(candidates, seen, imageUrl, 60, "script image url");
     }
   }
 }
@@ -383,7 +419,8 @@ function probeImage(url: string): Promise<ImageProbeResult> {
 async function filterProductImageUrls(candidates: ImageCandidate[]): Promise<string[]> {
   const acceptedKeys = new Set<string>();
   const acceptedFingerprints = new Set<string>();
-  const sortedUrls = bestImageCandidates(candidates)
+  const dedupedCandidates = bestImageCandidates(candidates);
+  const sortedUrls = dedupedCandidates
     .sort((left, right) => right.score - left.score)
     .map((candidate) => candidate.url)
     .slice(0, 96);
@@ -403,14 +440,17 @@ async function filterProductImageUrls(candidates: ImageCandidate[]): Promise<str
       const longestSide = Math.max(result.width, result.height);
       const shortestSide = Math.min(result.width, result.height);
       const identityKey = imageIdentityKey(result.url);
+      const exactKey = exactImageUrlKey(result.url);
       const fingerprint = result.fingerprint;
       if (
         longestSide >= 220 &&
         shortestSide >= 120 &&
         !acceptedKeys.has(identityKey) &&
+        !acceptedKeys.has(exactKey) &&
         (!fingerprint || !acceptedFingerprints.has(fingerprint))
       ) {
         acceptedKeys.add(identityKey);
+        acceptedKeys.add(exactKey);
         if (fingerprint) {
           acceptedFingerprints.add(fingerprint);
         }
