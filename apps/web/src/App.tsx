@@ -1501,12 +1501,18 @@ function SaveStatusIcon({ status }: { status: SaveStatus }) {
 function TopNavigation({
   route,
   user,
+  generationHistoryCount,
+  ecommerceStats,
+  onOpenGenerationHistory,
   onNavigate,
   onPreloadGallery,
   onLogout
 }: {
   route: AppRoute;
   user: AuthUser;
+  generationHistoryCount: number;
+  ecommerceStats: EcommerceStatsResponse;
+  onOpenGenerationHistory: () => void;
   onNavigate: (route: AppRoute) => void;
   onPreloadGallery: () => void;
   onLogout: () => void;
@@ -1588,6 +1594,26 @@ function TopNavigation({
             </a>
           ) : null}
         </nav>
+        <div className="top-navigation__ops" aria-label="运营入口">
+          <button type="button" onClick={() => onNavigate("account")}>
+            <User className="size-3.5" aria-hidden="true" />
+            账户
+          </button>
+          <button type="button" onClick={() => onNavigate("account")}>
+            <Sparkles className="size-3.5" aria-hidden="true" />
+            额度 {packageRemaining.toLocaleString("zh-CN")}
+          </button>
+          <button type="button" onClick={() => onNavigate("gallery")}>
+            <ImageIcon className="size-3.5" aria-hidden="true" />
+            素材历史
+          </button>
+          <button type="button" onClick={onOpenGenerationHistory}>
+            <Workflow className="size-3.5" aria-hidden="true" />
+            生成历史 {generationHistoryCount}
+          </button>
+          <span>任务 {ecommerceStats.totalJobs}</span>
+          <span>图 {ecommerceStats.generatedImages}</span>
+        </div>
         <div className="top-navigation__account">
           <button
             className="quota-chip"
@@ -2968,10 +2994,17 @@ export function App() {
   return (
     <div className="app-root">
       <TopNavigation
+        ecommerceStats={ecommerceStats}
+        generationHistoryCount={generationHistory.length}
         route={resolvedRoute}
         user={currentUser}
         onLogout={handleLogout}
         onNavigate={navigateToRoute}
+        onOpenGenerationHistory={() => {
+          navigateToRoute("canvas");
+          setSidebarTab("creative");
+          setIsHistoryExpanded(true);
+        }}
         onPreloadGallery={preloadGalleryPage}
       />
       <main className="app-shell app-view relative flex min-h-0 overflow-hidden bg-neutral-950 text-neutral-900" data-active-route={resolvedRoute} hidden={resolvedRoute !== "canvas"}>
@@ -3109,45 +3142,6 @@ export function App() {
                 </div>
                 <h2>一张产品图，串起整套电商素材</h2>
                 <p>PC 主站可直接上传产品图、录入商品信息、选择场景并生成到画布；浏览器插件继续保留采集和网页侧入口。</p>
-              </section>
-
-              <section className="sidebar-section">
-                <div className="sidebar-section__head">
-                  <div>
-                    <p className="sidebar-section__eyebrow">账户与数据</p>
-                    <h3>运营入口</h3>
-                  </div>
-                  <Sparkles className="size-4 text-amber-700" aria-hidden="true" />
-                </div>
-                <div className="ecommerce-dashboard-grid">
-                  <button className="ecommerce-dashboard-card" type="button" onClick={() => navigateToRoute("account")}>
-                    <User className="size-4" aria-hidden="true" />
-                    <span>账户</span>
-                    <strong>{currentUser.displayName}</strong>
-                  </button>
-                  <button className="ecommerce-dashboard-card" type="button" onClick={() => navigateToRoute("account")}>
-                    <Sparkles className="size-4" aria-hidden="true" />
-                    <span>额度</span>
-                    <strong>
-                      {(currentUser.packageRemaining ?? Math.max(0, (currentUser.quotaTotal ?? 0) - (currentUser.quotaUsed ?? 0))).toLocaleString("zh-CN")} 次
-                    </strong>
-                  </button>
-                  <button className="ecommerce-dashboard-card" type="button" onClick={() => navigateToRoute("gallery")}>
-                    <ImageIcon className="size-4" aria-hidden="true" />
-                    <span>素材历史</span>
-                    <strong>Gallery</strong>
-                  </button>
-                  <button className="ecommerce-dashboard-card" type="button" onClick={() => setSidebarTab("creative")}>
-                    <Workflow className="size-4" aria-hidden="true" />
-                    <span>生成历史</span>
-                    <strong>{generationHistory.length} 条</strong>
-                  </button>
-                </div>
-                <div className="ecommerce-stats-strip">
-                  <span>任务 {ecommerceStats.totalJobs}</span>
-                  <span>生成图 {ecommerceStats.generatedImages}</span>
-                  <span>成功场景 {ecommerceStats.succeededScenes}</span>
-                </div>
               </section>
 
               <section className="sidebar-section">

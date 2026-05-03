@@ -2603,6 +2603,40 @@ a:focus-visible {
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.72);
 }
 
+.top-navigation__ops {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 22rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.38rem;
+  padding: 0 0.5rem;
+}
+
+.top-navigation__ops button,
+.top-navigation__ops span {
+  display: inline-flex;
+  height: 2rem;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 0.28rem;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fffdf8;
+  padding: 0 0.55rem;
+  color: var(--muted-ink);
+  font-size: 0.76rem;
+  font-weight: 820;
+  white-space: nowrap;
+}
+
+.top-navigation__ops button:hover {
+  border-color: #d59b73;
+  background: #fff4e4;
+  color: var(--accent-dark);
+}
+
 .top-navigation__link {
   min-width: 5.25rem;
   border-radius: 6px;
@@ -3152,68 +3186,6 @@ a:focus-visible {
   width: 1rem;
   height: 1rem;
   accent-color: var(--accent-dark);
-}
-
-.ecommerce-dashboard-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.55rem;
-}
-
-.ecommerce-dashboard-card {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 0.18rem 0.45rem;
-  align-items: center;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #fffaf2;
-  padding: 0.65rem;
-  color: var(--muted-ink);
-  text-align: left;
-}
-
-.ecommerce-dashboard-card svg {
-  grid-row: span 2;
-  color: var(--accent-dark);
-}
-
-.ecommerce-dashboard-card span {
-  font-size: 0.7rem;
-  font-weight: 800;
-}
-
-.ecommerce-dashboard-card strong {
-  overflow: hidden;
-  color: var(--ink);
-  font-size: 0.82rem;
-  font-weight: 900;
-  line-height: 1.25;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ecommerce-dashboard-card:hover {
-  border-color: #d59b73;
-  background: #fff4e4;
-}
-
-.ecommerce-stats-strip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.45rem;
-  margin-top: 0.65rem;
-}
-
-.ecommerce-stats-strip span {
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: #fffdf8;
-  padding: 0.3rem 0.55rem;
-  color: var(--muted-ink);
-  font-size: 0.7rem;
-  font-weight: 800;
 }
 
 .quick-size-grid {
