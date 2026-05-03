@@ -1065,7 +1065,6 @@ export function SidePanelApp() {
         });
       }
     });
-    void refreshPageContext();
   }, []);
 
   useEffect(() => {
