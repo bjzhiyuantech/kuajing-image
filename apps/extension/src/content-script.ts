@@ -100,7 +100,17 @@ function isLikelyDecorativeImage(url: string, context = ""): boolean {
     /logo|icon|sprite|avatar|qrcode|qr-code|barcode|xiaohongshu|小红书|pinduoduo|拼多多|douyin|抖音|kuaishou|快手|jd|京东|taobao|淘宝|alipay|支付|wangwang|旺旺/u.test(
       lower
     ) ||
-    /48\s*小时|发货|保障|货源|服务|售后|赔付|极速|闪电|service|promise|guarantee|delivery|insurance/u.test(lower)
+    /48\s*小时|发货|保障|货源|服务|售后|赔付|极速|闪电|service|promise|guarantee|delivery|insurance|官方铺货|免费福利|铺货|分销|智淘/u.test(lower)
+  );
+}
+
+function isLikelyThumbnailVariant(url: string): boolean {
+  const lower = decodeURIComponent(url).toLowerCase();
+  return (
+    /(?:^|[._-])(sum|summ|search)(?:\.[a-z0-9]+)?$/u.test(lower) ||
+    /(?:\.jpg|\.jpeg|\.png|\.webp)_(?:sum|summ|search)(?:\.[a-z0-9]+)?$/u.test(lower) ||
+    /-0-cib\.jpg_\.webp$/u.test(lower) ||
+    /!!0-0-cib\.jpg$/u.test(lower)
   );
 }
 
@@ -168,6 +178,9 @@ function imageUrlVariantRank(url: string): number {
     if (/\/img\/ibank\/O1CN/iu.test(path)) {
       rank += 500;
     }
+    if (isLikelyThumbnailVariant(url)) {
+      rank -= 50000;
+    }
   } catch {
     return rank;
   }
@@ -223,7 +236,7 @@ function addImageCandidate(
     return;
   }
   const url = absoluteUrl(normalizedValue);
-  if (!url || seen.has(url) || isLikelyDecorativeImage(url, context) || hasTinySizeHint(url)) {
+  if (!url || seen.has(url) || isLikelyDecorativeImage(url, context) || isLikelyThumbnailVariant(url) || hasTinySizeHint(url)) {
     return;
   }
   const exactKey = exactImageUrlKey(url);
