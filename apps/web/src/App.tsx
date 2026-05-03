@@ -62,6 +62,7 @@ import {
   type EcommerceMarket,
   type EcommercePlatform,
   type EcommerceSceneTemplateId,
+  type EcommerceStatsResponse,
   type EcommerceTextLanguage,
   type GenerationCount,
   type GenerationRecord,
@@ -224,6 +225,19 @@ const ecommerceScenesByMode = {
 } satisfies Record<EcommerceGenerationMode, EcommerceSceneTemplateId[]>;
 const ecommerceSizePresetIds = new Set(["square-1k", "poster-landscape", "poster-portrait", "story-9-16"]);
 const ecommerceSizePresets = SIZE_PRESETS.filter((preset) => ecommerceSizePresetIds.has(preset.id));
+const emptyEcommerceStats: EcommerceStatsResponse = {
+  totalJobs: 0,
+  pendingJobs: 0,
+  runningJobs: 0,
+  succeededJobs: 0,
+  partialJobs: 0,
+  failedJobs: 0,
+  totalScenes: 0,
+  completedScenes: 0,
+  succeededScenes: 0,
+  failedScenes: 0,
+  generatedImages: 0
+};
 
 type GalleryPageModule = { default: typeof import("./GalleryPage").GalleryPage };
 let galleryPageModulePromise: Promise<GalleryPageModule> | undefined;
@@ -1648,6 +1662,7 @@ export function App() {
   const [ecommerceRemoveWatermark, setEcommerceRemoveWatermark] = useState(true);
   const [ecommerceExtraDirection, setEcommerceExtraDirection] = useState("");
   const [isEcommerceGenerating, setIsEcommerceGenerating] = useState(false);
+  const [ecommerceStats, setEcommerceStats] = useState<EcommerceStatsResponse>(emptyEcommerceStats);
   const [prompt, setPrompt] = useState("");
   const [stylePreset, setStylePreset] = useState<StylePresetId>("none");
   const [sizePresetId, setSizePresetId] = useState(SIZE_PRESETS[0].id);
@@ -1830,6 +1845,34 @@ export function App() {
       navigateToRoute("canvas");
     }
   }, [currentUser, isAuthenticated, navigateToRoute, route]);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setEcommerceStats(emptyEcommerceStats);
+      return;
+    }
+
+    const controller = new AbortController();
+    async function loadEcommerceStats(): Promise<void> {
+      try {
+        const response = await authFetch("/api/ecommerce/stats", { signal: controller.signal });
+        if (!response.ok) {
+          return;
+        }
+        const body = (await response.json()) as EcommerceStatsResponse;
+        if (!controller.signal.aborted) {
+          setEcommerceStats(body);
+        }
+      } catch {
+        if (!controller.signal.aborted) {
+          setEcommerceStats(emptyEcommerceStats);
+        }
+      }
+    }
+
+    void loadEcommerceStats();
+    return () => controller.abort();
+  }, [isAuthenticated]);
 
   const trimmedPrompt = prompt.trim();
   const promptValidationMessage = prompt.trim() ? "" : "请输入提示词。";
@@ -3066,6 +3109,45 @@ export function App() {
                 </div>
                 <h2>一张产品图，串起整套电商素材</h2>
                 <p>PC 主站可直接上传产品图、录入商品信息、选择场景并生成到画布；浏览器插件继续保留采集和网页侧入口。</p>
+              </section>
+
+              <section className="sidebar-section">
+                <div className="sidebar-section__head">
+                  <div>
+                    <p className="sidebar-section__eyebrow">账户与数据</p>
+                    <h3>运营入口</h3>
+                  </div>
+                  <Sparkles className="size-4 text-amber-700" aria-hidden="true" />
+                </div>
+                <div className="ecommerce-dashboard-grid">
+                  <button className="ecommerce-dashboard-card" type="button" onClick={() => navigateToRoute("account")}>
+                    <User className="size-4" aria-hidden="true" />
+                    <span>账户</span>
+                    <strong>{currentUser.displayName}</strong>
+                  </button>
+                  <button className="ecommerce-dashboard-card" type="button" onClick={() => navigateToRoute("account")}>
+                    <Sparkles className="size-4" aria-hidden="true" />
+                    <span>额度</span>
+                    <strong>
+                      {(currentUser.packageRemaining ?? Math.max(0, (currentUser.quotaTotal ?? 0) - (currentUser.quotaUsed ?? 0))).toLocaleString("zh-CN")} 次
+                    </strong>
+                  </button>
+                  <button className="ecommerce-dashboard-card" type="button" onClick={() => navigateToRoute("gallery")}>
+                    <ImageIcon className="size-4" aria-hidden="true" />
+                    <span>素材历史</span>
+                    <strong>Gallery</strong>
+                  </button>
+                  <button className="ecommerce-dashboard-card" type="button" onClick={() => setSidebarTab("creative")}>
+                    <Workflow className="size-4" aria-hidden="true" />
+                    <span>生成历史</span>
+                    <strong>{generationHistory.length} 条</strong>
+                  </button>
+                </div>
+                <div className="ecommerce-stats-strip">
+                  <span>任务 {ecommerceStats.totalJobs}</span>
+                  <span>生成图 {ecommerceStats.generatedImages}</span>
+                  <span>成功场景 {ecommerceStats.succeededScenes}</span>
+                </div>
               </section>
 
               <section className="sidebar-section">
