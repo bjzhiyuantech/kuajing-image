@@ -19,6 +19,7 @@ body,
 
 body {
   min-width: 320px;
+  overflow: auto;
   background:
     linear-gradient(180deg, #eff4ff 0%, #f5f7fb 35%, #f8fafc 100%);
 }
@@ -28,76 +29,79 @@ a {
   font: inherit;
 }
 
-.help-page {
+.install-help-page {
   display: flex;
+  width: min(900px, calc(100% - 32px));
+  min-height: 100vh;
   flex-direction: column;
   gap: 16px;
-  padding: 20px;
+  margin: 0 auto;
+  padding: 32px 0;
 }
 
-.hero,
-.download-card,
-.step-card,
-.note-card {
+.install-hero,
+.install-download-card,
+.install-step-card,
+.install-note-card {
   border: 1px solid #dbe4f0;
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.92);
   box-shadow: 0 8px 24px rgba(16, 32, 51, 0.06);
 }
 
-.hero {
-  padding: 18px;
+.install-hero {
+  padding: 24px;
 }
 
-.hero-badge,
-.step-title {
+.install-badge,
+.install-step-title {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  color: #2952a3;
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0;
-  color: #2952a3;
 }
 
-.hero h1 {
+.install-hero h1 {
   margin: 12px 0 8px;
-  font-size: 22px;
-  line-height: 1.2;
   color: #102033;
+  font-size: 30px;
+  line-height: 1.2;
 }
 
-.hero p,
-.download-card p,
-.step-card p,
-.note-card p,
-.step-card li {
+.install-hero p,
+.install-download-card p,
+.install-step-card p,
+.install-note-card p,
+.install-step-card li {
   margin: 0;
-  font-size: 13px;
-  line-height: 1.6;
   color: #4b5c74;
+  font-size: 14px;
+  line-height: 1.7;
 }
 
-.download-card {
-  padding: 16px;
+.install-download-card {
+  padding: 18px;
 }
 
-.download-header {
+.install-download-header {
   display: flex;
   align-items: start;
   justify-content: space-between;
   gap: 12px;
 }
 
-.download-header h2 {
+.install-download-header h2 {
   margin: 0 0 4px;
-  font-size: 16px;
   color: #102033;
+  font-size: 18px;
 }
 
-.download-button,
-.ghost-button,
-.browser-pill {
+.install-download-button,
+.install-ghost-button,
+.install-browser-pill {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -111,123 +115,128 @@ a {
     background-color 0.15s ease;
 }
 
-.download-button {
+.install-download-button {
   padding: 10px 14px;
-  text-decoration: none;
   background: #2857c8;
   color: #fff;
+  text-decoration: none;
   white-space: nowrap;
 }
 
-.ghost-button {
+.install-ghost-button {
   padding: 10px 12px;
   background: #eef3ff;
   color: #24406d;
 }
 
-.browser-pill {
+.install-browser-pill {
   padding: 10px 14px;
-  background: #fff;
   border-color: #d7e1ee;
+  background: #fff;
   color: #40556f;
 }
 
-.download-button:hover,
-.ghost-button:hover,
-.browser-pill:hover {
+.install-download-button:hover,
+.install-ghost-button:hover,
+.install-browser-pill:hover {
   transform: translateY(-1px);
 }
 
-.download-link-row {
+.install-link-row {
   display: flex;
   align-items: stretch;
   gap: 12px;
   margin-top: 14px;
 }
 
-.download-link {
-  flex: 1;
-  min-width: 0;
+.install-link {
   display: flex;
+  min-width: 0;
+  flex: 1;
   flex-direction: column;
   gap: 6px;
-  padding: 12px;
+  border: 1px dashed #cbd6e3;
   border-radius: 12px;
   background: #f7f9fc;
-  border: 1px dashed #cbd6e3;
+  padding: 12px;
 }
 
-.download-link span {
+.install-link span {
+  color: #6a7f99;
   font-size: 12px;
   font-weight: 600;
-  color: #6a7f99;
 }
 
-.download-link code,
-.page-link {
+.install-link code,
+.install-page-link {
   overflow-wrap: anywhere;
-  font-size: 12px;
   color: #102033;
+  font-size: 12px;
 }
 
-.browser-switcher {
+.install-browser-switcher {
   display: flex;
   gap: 10px;
 }
 
-.browser-pill.active {
+.install-browser-pill.active {
   border-color: #2857c8;
   background: #eaf1ff;
   color: #1f4aa8;
 }
 
-.steps-grid,
-.browser-notes {
+.install-steps-grid,
+.install-browser-notes {
   display: grid;
   gap: 12px;
 }
 
-.step-card,
-.note-card {
-  padding: 16px;
+.install-browser-notes {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.step-card ol {
+.install-step-card,
+.install-note-card {
+  padding: 18px;
+}
+
+.install-step-card ol {
   margin: 12px 0 0;
   padding-left: 18px;
 }
 
-.step-card li + li {
+.install-step-card li + li {
   margin-top: 6px;
 }
 
-.hint {
+.install-hint {
   margin-top: 8px;
-  font-size: 12px;
   color: #6a7f99;
+  font-size: 12px;
 }
 
-.browser-notes {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.note-card h3 {
+.install-note-card h3 {
   margin: 0 0 8px;
-  font-size: 14px;
   color: #102033;
+  font-size: 15px;
 }
 
-@media (max-width: 420px) {
-  .help-page {
-    padding: 14px;
+@media (max-width: 560px) {
+  .install-help-page {
+    width: min(100% - 24px, 900px);
+    padding: 18px 0;
   }
 
-  .download-header,
-  .download-link-row {
+  .install-hero h1 {
+    font-size: 24px;
+  }
+
+  .install-download-header,
+  .install-link-row {
     flex-direction: column;
   }
 
-  .browser-notes {
+  .install-browser-notes {
     grid-template-columns: 1fr;
   }
 }

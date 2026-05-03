@@ -10,7 +10,6 @@ export default defineConfig({
     rollupOptions: {
       input: {
         sidepanel: resolve(__dirname, "index.html"),
-        installHelp: resolve(__dirname, "install-help.html"),
         background: resolve(__dirname, "src/background.ts"),
         "content-script": resolve(__dirname, "src/content-script.ts")
       },
