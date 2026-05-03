@@ -324,6 +324,22 @@ function addBackgroundImageCandidates(doc: Document, candidates: ImageCandidate[
   }
 }
 
+function addResourceImageCandidates(doc: Document, candidates: ImageCandidate[], seen: Set<string>): void {
+  const resourceEntries = performance.getEntriesByType("resource") as PerformanceResourceTiming[];
+  for (const entry of resourceEntries.slice(0, 1200)) {
+    const url = entry.name;
+    const initiatorType = (entry.initiatorType || "").toLowerCase();
+    if (
+      initiatorType === "img" ||
+      initiatorType === "image" ||
+      /\.(?:jpg|jpeg|png|webp|gif|bmp|avif)(?:[?#]|$)/iu.test(url) ||
+      /[?&](?:image|img|pic|picture|photo|src)=/iu.test(url)
+    ) {
+      addImageCandidate(candidates, seen, url, 78, "performance resource image");
+    }
+  }
+}
+
 function addDetailImageCandidates(doc: Document, candidates: ImageCandidate[], seen: Set<string>): void {
   const detailRoots = doc.querySelectorAll<HTMLElement>(DETAIL_ROOT_SELECTOR);
   for (const root of Array.from(detailRoots).slice(0, 80)) {
@@ -420,17 +436,16 @@ async function filterProductImageUrls(candidates: ImageCandidate[]): Promise<str
   const acceptedKeys = new Set<string>();
   const acceptedFingerprints = new Set<string>();
   const dedupedCandidates = bestImageCandidates(candidates);
-  const sortedUrls = dedupedCandidates
+  const sortedCandidates = dedupedCandidates
     .sort((left, right) => right.score - left.score)
-    .map((candidate) => candidate.url)
     .slice(0, 96);
   const accepted: string[] = [];
-  const fallbackUrls = sortedUrls.filter((url) => !hasTinySizeHint(url)).slice(0, 64);
+  const fallbackUrls = sortedCandidates.map((candidate) => candidate.url).filter((url) => !hasTinySizeHint(url)).slice(0, 64);
 
-  for (let index = 0; index < sortedUrls.length && accepted.length < 64; index += 12) {
-    const batch = sortedUrls.slice(index, index + 12);
+  for (let index = 0; index < sortedCandidates.length && accepted.length < 64; index += 12) {
+    const batch = sortedCandidates.slice(index, index + 12);
     const results = await Promise.race([
-      Promise.all(batch.map((url) => probeImage(url))),
+      Promise.all(batch.map((candidate) => probeImage(candidate.url).then((result) => ({ ...result, context: candidate.context })))),
       sleep(3200).then(() => [] as ImageProbeResult[])
     ]);
     for (const result of results) {
@@ -442,9 +457,13 @@ async function filterProductImageUrls(candidates: ImageCandidate[]): Promise<str
       const identityKey = imageIdentityKey(result.url);
       const exactKey = exactImageUrlKey(result.url);
       const fingerprint = result.fingerprint;
+      const context = (result as ImageProbeResult & { context?: string }).context?.toLowerCase() ?? "";
+      const allowSmallImage = /gallery|album|thumb|sku|offer|product|detail|desc|content|rich|主图|商品|图片|image|img|carousel|swiper|thumbnail/u.test(context);
+      const minLongestSide = allowSmallImage ? 80 : 220;
+      const minShortestSide = allowSmallImage ? 60 : 120;
       if (
-        longestSide >= 220 &&
-        shortestSide >= 120 &&
+        longestSide >= minLongestSide &&
+        shortestSide >= minShortestSide &&
         !acceptedKeys.has(identityKey) &&
         !acceptedKeys.has(exactKey) &&
         (!fingerprint || !acceptedFingerprints.has(fingerprint))
@@ -534,6 +553,7 @@ async function pageContext(): Promise<PageContext> {
     addDetailImageCandidates(doc, imageCandidates, seenImageUrls);
     addMarkupImageCandidates(doc, imageCandidates, seenImageUrls);
     addScriptImageCandidates(doc, imageCandidates, seenImageUrls);
+    addResourceImageCandidates(doc, imageCandidates, seenImageUrls);
   }
 
   return {
