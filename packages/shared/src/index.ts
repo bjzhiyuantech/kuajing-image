@@ -8,11 +8,31 @@ export type GenerationStatus = "pending" | "running" | "succeeded" | "partial" |
 export type OutputStatus = "succeeded" | "failed";
 export type CloudStorageProvider = "cos" | "oss";
 export type AssetCloudUploadStatus = "uploaded" | "failed";
-export type EcommercePlatform = "amazon" | "allegro" | "shopify" | "tiktok-shop" | "temu" | "shein" | "etsy" | "aliexpress" | "other";
-export type EcommerceMarket = "us" | "uk" | "pl" | "eu" | "ca" | "au" | "jp" | "kr" | "sg" | "mx" | "br" | "global";
+export type EcommercePlatform =
+  | "amazon"
+  | "allegro"
+  | "shopify"
+  | "tiktok-shop"
+  | "temu"
+  | "shein"
+  | "etsy"
+  | "aliexpress"
+  | "1688"
+  | "taobao"
+  | "tmall"
+  | "jd"
+  | "douyin"
+  | "pinduoduo"
+  | "xiaohongshu"
+  | "kuaishou"
+  | "weidian"
+  | "dewu"
+  | "other";
+export type EcommerceMarket = "cn" | "us" | "uk" | "pl" | "eu" | "ca" | "au" | "jp" | "kr" | "sg" | "mx" | "br" | "global";
 export type EcommerceGenerationMode = "enhance" | "creative" | "category-kit" | "text-translation";
 export type EcommerceTextLanguage =
   | "none"
+  | "zh-hans"
   | "zh-hant"
   | "ko"
   | "ja"
@@ -96,10 +116,21 @@ export const ECOMMERCE_PLATFORMS = [
   { id: "shein", label: "SHEIN" },
   { id: "etsy", label: "Etsy" },
   { id: "aliexpress", label: "AliExpress" },
+  { id: "1688", label: "1688" },
+  { id: "taobao", label: "淘宝" },
+  { id: "tmall", label: "天猫" },
+  { id: "jd", label: "京东" },
+  { id: "douyin", label: "抖音电商" },
+  { id: "pinduoduo", label: "拼多多" },
+  { id: "xiaohongshu", label: "小红书" },
+  { id: "kuaishou", label: "快手小店" },
+  { id: "weidian", label: "微店" },
+  { id: "dewu", label: "得物" },
   { id: "other", label: "Other marketplace" }
 ] as const satisfies ReadonlyArray<{ id: EcommercePlatform; label: string }>;
 
 export const ECOMMERCE_MARKETS = [
+  { id: "cn", label: "中国大陆" },
   { id: "us", label: "United States" },
   { id: "uk", label: "United Kingdom" },
   { id: "pl", label: "Poland" },
@@ -116,6 +147,7 @@ export const ECOMMERCE_MARKETS = [
 
 export const ECOMMERCE_TEXT_LANGUAGES = [
   { id: "none", label: "不替换", promptLabel: "" },
+  { id: "zh-hans", label: "简体中文", promptLabel: "Simplified Chinese" },
   { id: "zh-hant", label: "繁体中文", promptLabel: "Traditional Chinese" },
   { id: "ko", label: "韩文", promptLabel: "Korean" },
   { id: "ja", label: "日文", promptLabel: "Japanese" },
@@ -130,6 +162,19 @@ export const ECOMMERCE_TEXT_LANGUAGES = [
   { id: "nl", label: "荷兰文", promptLabel: "Dutch" },
   { id: "ar", label: "阿拉伯文", promptLabel: "Arabic" }
 ] as const satisfies ReadonlyArray<{ id: EcommerceTextLanguage; label: string; promptLabel: string }>;
+
+const CHINESE_ECOMMERCE_PLATFORM_IDS = new Set<EcommercePlatform>([
+  "1688",
+  "taobao",
+  "tmall",
+  "jd",
+  "douyin",
+  "pinduoduo",
+  "xiaohongshu",
+  "kuaishou",
+  "weidian",
+  "dewu"
+]);
 
 export const ECOMMERCE_SCENE_TEMPLATES = [
   {
@@ -964,6 +1009,7 @@ export function composeEcommercePrompt(context: EcommercePromptContext): string 
   const platform = ECOMMERCE_PLATFORMS.find((item) => item.id === context.platform)?.label ?? context.platform;
   const market = ECOMMERCE_MARKETS.find((item) => item.id === context.market)?.label ?? context.market;
   const textLanguage = ECOMMERCE_TEXT_LANGUAGES.find((item) => item.id === context.textLanguage);
+  const isChineseEcommerceTarget = CHINESE_ECOMMERCE_PLATFORM_IDS.has(context.platform) || context.market === "cn";
   const product = context.product;
   const extraDirection = context.extraDirection?.trim();
   const priorityDirectionGuard = extraDirection
@@ -995,6 +1041,15 @@ export function composeEcommercePrompt(context: EcommercePromptContext): string 
     textLanguage && textLanguage.id !== "none"
       ? `Image text localization: replace only the remaining marketing text with natural ${textLanguage.promptLabel}. Keep brand names, model numbers, and required trademarks unchanged. Do not mix languages except for preserved brand/model text. Text must be short, readable, native-sounding, and placed cleanly without covering the product. Do not translate or recreate watermark text, logo text, source marks, corner captions, or any overlay that has already been identified as cleanup content.`
       : "";
+  const chineseMarketplaceGuard = isChineseEcommerceTarget
+    ? [
+        "Chinese marketplace copy rule:",
+        "When the image template uses selling-point text, feature callouts, promo copy, scene labels, or explanatory captions, create concise Simplified Chinese copy by default.",
+        "Use natural domestic e-commerce phrasing suitable for the selected platform, with readable Chinese characters, clear hierarchy, and short phrases such as material, size, function, comfort, value, usage scenario, discount, or service points only when supported by the product brief or visible reference.",
+        "For Taobao, Tmall, JD, 1688, Douyin, Pinduoduo, Xiaohongshu, Kuaishou, Weidian, and Dewu, avoid English selling-point copy unless the user explicitly requests it or it is a preserved brand/model name.",
+        "Do not invent unsupported claims, certificates, rankings, fake scarcity, medical claims, absolute claims, or platform badges."
+      ].join(" ")
+    : "";
   const sourcePreservationGuard =
     context.allowTextRecreation === false
       ? [
@@ -1021,6 +1076,7 @@ export function composeEcommercePrompt(context: EcommercePromptContext): string 
     ...details,
     modeGuard,
     cleanupGuard,
+    chineseMarketplaceGuard,
     textLanguageGuard,
     sourcePreservationGuard,
     extraDirection

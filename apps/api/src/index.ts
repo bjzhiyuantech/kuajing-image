@@ -27,6 +27,8 @@ import {
   OUTPUT_FORMATS,
   SIZE_PRESETS,
   STYLE_PRESETS,
+  ECOMMERCE_MARKETS,
+  ECOMMERCE_PLATFORMS,
   ECOMMERCE_TEXT_LANGUAGES,
   composeEcommercePrompt,
   composePrompt,
@@ -2336,8 +2338,7 @@ function parseEcommerceProduct(value: unknown): ParseResult<EcommerceProductBrie
 
 function parseEcommercePlatform(value: unknown): ParseResult<EcommercePlatform> {
   const platform = parseOptionalString(value) ?? "amazon";
-  const platforms: EcommercePlatform[] = ["amazon", "allegro", "shopify", "tiktok-shop", "temu", "shein", "etsy", "aliexpress", "other"];
-  if (!platforms.includes(platform as EcommercePlatform)) {
+  if (!ECOMMERCE_PLATFORMS.some((item) => item.id === platform)) {
     return {
       ok: false,
       error: errorResponse("invalid_platform", "不支持的电商平台。")
@@ -2352,8 +2353,7 @@ function parseEcommercePlatform(value: unknown): ParseResult<EcommercePlatform> 
 
 function parseEcommerceMarket(value: unknown): ParseResult<EcommerceMarket> {
   const market = parseOptionalString(value) ?? "us";
-  const markets: EcommerceMarket[] = ["us", "uk", "pl", "eu", "ca", "au", "jp", "kr", "sg", "mx", "br", "global"];
-  if (!markets.includes(market as EcommerceMarket)) {
+  if (!ECOMMERCE_MARKETS.some((item) => item.id === market)) {
     return {
       ok: false,
       error: errorResponse("invalid_market", "不支持的目标市场。")

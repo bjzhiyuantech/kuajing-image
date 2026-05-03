@@ -294,6 +294,18 @@ const styleOptions: Array<{ id: StylePresetId; label: string }> = [
 
 const SOURCE_ASPECT_SIZE_OPTION = "source-aspect";
 const SOURCE_ASPECT_BASE_SIZE = 1024;
+const CHINESE_ECOMMERCE_PLATFORM_IDS = new Set<BatchFormState["platform"]>([
+  "1688",
+  "taobao",
+  "tmall",
+  "jd",
+  "douyin",
+  "pinduoduo",
+  "xiaohongshu",
+  "kuaishou",
+  "weidian",
+  "dewu"
+]);
 
 const isApiAssetUrl = (url: string): boolean => url.startsWith("/api/assets/");
 
@@ -2243,6 +2255,16 @@ export function SidePanelApp() {
     });
   }
 
+  function updatePlatform(platform: BatchFormState["platform"]): void {
+    const isChinesePlatform = CHINESE_ECOMMERCE_PLATFORM_IDS.has(platform);
+    setForm((current) => ({
+      ...current,
+      platform,
+      market: isChinesePlatform ? "cn" : current.market,
+      textLanguage: isChinesePlatform && current.textLanguage === "none" ? "zh-hans" : current.textLanguage
+    }));
+  }
+
   function updateGenerationMode(generationMode: EcommerceGenerationMode): void {
     setForm((current) => ({
       ...current,
@@ -2804,7 +2826,7 @@ export function SidePanelApp() {
         <div className="two-col">
           <label>
             <span>平台</span>
-            <select value={form.platform} onChange={(event) => setForm({ ...form, platform: event.target.value as BatchFormState["platform"] })}>
+            <select value={form.platform} onChange={(event) => updatePlatform(event.target.value as BatchFormState["platform"])}>
               {ECOMMERCE_PLATFORMS.map((item) => (
                 <option key={item.id} value={item.id}>{item.label}</option>
               ))}
