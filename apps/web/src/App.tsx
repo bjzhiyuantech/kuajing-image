@@ -1,5 +1,4 @@
 import {
-  ArrowRight,
   AlertTriangle,
   BadgeCheck,
   Brush,
@@ -58,6 +57,12 @@ import {
   validateImageSize,
   type GalleryImageItem,
   type CloudStorageProvider,
+  type EcommerceBatchGenerateResponse,
+  type EcommerceGenerationMode,
+  type EcommerceMarket,
+  type EcommercePlatform,
+  type EcommerceSceneTemplateId,
+  type EcommerceTextLanguage,
   type GenerationCount,
   type GenerationRecord,
   type GenerationResponse,
@@ -194,14 +199,31 @@ const ecommerceModeCards = [
     desc: "逐张翻译图片文字，保留版式和商品信息。"
   }
 ] as const;
-const ecommerceTemplateCards = ECOMMERCE_SCENE_TEMPLATES.filter((item) =>
-  ["marketplace-main", "logo-benefit", "feature-benefit", "promo-poster", "text-translation", "social-ad"].includes(item.id)
-);
-const ecommercePlatformHighlights = ECOMMERCE_PLATFORMS.filter((item) =>
-  ["1688", "taobao", "tmall", "jd", "douyin", "pinduoduo", "allegro", "tiktok-shop"].includes(item.id)
-);
-const ecommerceMarketHighlights = ECOMMERCE_MARKETS.filter((item) => ["cn", "us", "pl", "eu", "global"].includes(item.id));
-const ecommerceLanguageHighlights = ECOMMERCE_TEXT_LANGUAGES.filter((item) => ["en", "pl", "de", "ja"].includes(item.id));
+const ecommerceModeLabels: Record<EcommerceGenerationMode, string> = {
+  enhance: "原图增强",
+  creative: "场景创作",
+  "category-kit": "品类套图",
+  "text-translation": "文字翻译"
+};
+const ecommerceScenesByMode = {
+  enhance: ["marketplace-main", "logo-benefit", "feature-benefit", "promo-poster"],
+  creative: ["lifestyle", "model-wear", "accessory-match", "seasonal-campaign", "social-ad"],
+  "category-kit": [
+    "allegro-scarf-main-flat",
+    "allegro-scarf-main-styled",
+    "allegro-scarf-drape-product",
+    "allegro-scarf-fabric-detail",
+    "allegro-scarf-edge-detail",
+    "allegro-scarf-size-guide",
+    "allegro-scarf-wear-grid",
+    "allegro-scarf-neck-model",
+    "allegro-scarf-bag-styling",
+    "allegro-scarf-lifestyle"
+  ],
+  "text-translation": ["text-translation"]
+} satisfies Record<EcommerceGenerationMode, EcommerceSceneTemplateId[]>;
+const ecommerceSizePresetIds = new Set(["square-1k", "poster-landscape", "poster-portrait", "story-9-16"]);
+const ecommerceSizePresets = SIZE_PRESETS.filter((preset) => ecommerceSizePresetIds.has(preset.id));
 
 type GalleryPageModule = { default: typeof import("./GalleryPage").GalleryPage };
 let galleryPageModulePromise: Promise<GalleryPageModule> | undefined;
@@ -225,6 +247,7 @@ type SaveStatus = "loading" | "saved" | "pending" | "saving" | "error";
 type GenerationMode = "text" | "reference";
 type PanelStatusTone = "progress" | "success" | "warning" | "error";
 type SidebarTab = "plugins" | "creative";
+type EcommerceImageSource = { dataUrl: string; fileName: string; previewUrl: string };
 
 interface PanelStatus {
   tone: PanelStatusTone;
@@ -532,6 +555,43 @@ function createTemporaryGenerationRecord(input: {
   };
 }
 
+function createEcommerceCombinedRecord(input: {
+  job: EcommerceBatchGenerateResponse;
+  prompt: string;
+  size: ImageSize;
+  presetId: StylePresetId;
+  outputFormat: OutputFormat;
+  count: number;
+}): GenerationRecord {
+  const records = input.job.records;
+  const outputs = records.flatMap((record) => record.outputs);
+  const failedRecords = records.filter((record) => record.status === "failed").length;
+  const status: GenerationStatus =
+    input.job.status === "failed"
+      ? "failed"
+      : input.job.status === "partial" || failedRecords > 0
+        ? "partial"
+        : input.job.status === "succeeded"
+          ? "succeeded"
+          : "running";
+
+  return {
+    id: input.job.jobId,
+    mode: "edit",
+    prompt: input.prompt,
+    effectivePrompt: input.prompt,
+    presetId: input.presetId,
+    size: input.size,
+    quality: "auto",
+    outputFormat: input.outputFormat,
+    count: input.count,
+    status,
+    error: status === "failed" ? input.job.message : undefined,
+    createdAt: input.job.createdAt,
+    outputs
+  };
+}
+
 function promptExcerpt(promptValue: string): string {
   const compact = promptValue.replace(/\s+/gu, " ").trim();
   return compact.length > 72 ? `${compact.slice(0, 72)}...` : compact;
@@ -683,6 +743,61 @@ function createGenerationPlaceholders(
   if (options.selectPlaceholders ?? true) {
     editor.select(...placeholderIds);
   }
+
+  return {
+    requestId,
+    placements
+  };
+}
+
+function createEcommerceBatchPlaceholders(
+  editor: Editor,
+  totalCount: number,
+  size: ImageSize,
+  requestId: number
+): ActiveGenerationPlaceholders {
+  const placeholderSize = displaySize(size);
+  const columns = totalCount === 1 ? 1 : 2;
+  const rows = Math.ceil(totalCount / columns);
+  const gap = 48;
+  const gridWidth = columns * placeholderSize.width + (columns - 1) * gap;
+  const gridHeight = rows * placeholderSize.height + (rows - 1) * gap;
+  const viewport = editor.getViewportPageBounds();
+  const placements: GenerationPlaceholderPlacement[] = Array.from({ length: totalCount }, (_, index) => {
+    const column = index % columns;
+    const row = Math.floor(index / columns);
+
+    return {
+      id: createTldrawShapeId(),
+      x: viewport.center.x - gridWidth / 2 + column * (placeholderSize.width + gap),
+      y: viewport.center.y - gridHeight / 2 + row * (placeholderSize.height + gap),
+      width: placeholderSize.width,
+      height: placeholderSize.height,
+      targetWidth: size.width,
+      targetHeight: size.height
+    };
+  });
+
+  editor.createShapes<GenerationPlaceholderShape>(
+    placements.map((placement, index) => ({
+      id: placement.id,
+      type: GENERATION_PLACEHOLDER_TYPE,
+      x: placement.x,
+      y: placement.y,
+      props: {
+        w: placement.width,
+        h: placement.height,
+        targetWidth: placement.targetWidth,
+        targetHeight: placement.targetHeight,
+        status: "loading",
+        error: "",
+        requestId: String(requestId),
+        outputIndex: index
+      }
+    }))
+  );
+  editor.bringToFront(placements.map((placement) => placement.id));
+  editor.select(...placements.map((placement) => placement.id));
 
   return {
     requestId,
@@ -1516,6 +1631,23 @@ export function App() {
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [generationMode, setGenerationMode] = useState<GenerationMode>("text");
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("plugins");
+  const [ecommerceMode, setEcommerceMode] = useState<EcommerceGenerationMode>("enhance");
+  const [ecommerceImage, setEcommerceImage] = useState<EcommerceImageSource | null>(null);
+  const [ecommerceTitle, setEcommerceTitle] = useState("");
+  const [ecommerceDescription, setEcommerceDescription] = useState("");
+  const [ecommerceTargetCustomer, setEcommerceTargetCustomer] = useState("");
+  const [ecommerceUsageScene, setEcommerceUsageScene] = useState("");
+  const [ecommerceMaterial, setEcommerceMaterial] = useState("");
+  const [ecommerceColor, setEcommerceColor] = useState("");
+  const [ecommercePlatform, setEcommercePlatform] = useState<EcommercePlatform>("taobao");
+  const [ecommerceMarket, setEcommerceMarket] = useState<EcommerceMarket>("cn");
+  const [ecommerceTextLanguage, setEcommerceTextLanguage] = useState<EcommerceTextLanguage>("en");
+  const [ecommerceSceneIds, setEcommerceSceneIds] = useState<EcommerceSceneTemplateId[]>(() => ecommerceScenesByMode.enhance);
+  const [ecommerceSizePresetId, setEcommerceSizePresetId] = useState("square-1k");
+  const [ecommerceCount, setEcommerceCount] = useState<GenerationCount>(1);
+  const [ecommerceRemoveWatermark, setEcommerceRemoveWatermark] = useState(true);
+  const [ecommerceExtraDirection, setEcommerceExtraDirection] = useState("");
+  const [isEcommerceGenerating, setIsEcommerceGenerating] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [stylePreset, setStylePreset] = useState<StylePresetId>("none");
   const [sizePresetId, setSizePresetId] = useState(SIZE_PRESETS[0].id);
@@ -2195,25 +2327,182 @@ export function App() {
     setGenerationWarning("");
   }
 
-  function applyEcommerceTemplate(templateId: string): void {
-    const template = ECOMMERCE_SCENE_TEMPLATES.find((item) => item.id === templateId);
-    if (!template) {
+  function selectEcommerceMode(nextMode: EcommerceGenerationMode): void {
+    const nextScenes = ecommerceScenesByMode[nextMode];
+    const firstScene = ECOMMERCE_SCENE_TEMPLATES.find((item) => item.id === nextScenes[0]);
+    const nextPreset = firstScene ? SIZE_PRESETS.find((item) => item.id === firstScene.defaultSizePresetId) : undefined;
+
+    setEcommerceMode(nextMode);
+    setEcommerceSceneIds(nextScenes);
+    setEcommerceSizePresetId(nextPreset?.id ?? "square-1k");
+    setEcommerceTextLanguage(nextMode === "text-translation" ? ecommerceTextLanguage === "none" ? "en" : ecommerceTextLanguage : "none");
+  }
+
+  async function selectEcommerceImage(file: File | undefined): Promise<void> {
+    if (!file) {
+      return;
+    }
+    if (!isSupportedReferenceImageType(file.type)) {
+      setGenerationError("请上传 PNG、JPEG 或 WebP 图片。");
+      return;
+    }
+    if (file.size > MAX_REFERENCE_IMAGE_BYTES) {
+      setGenerationError("商品图不能超过 50MB。");
       return;
     }
 
-    const preset = SIZE_PRESETS.find((item) => item.id === template.defaultSizePresetId);
-    setPrompt(template.prompt);
-    setStylePreset(template.mode === "creative" ? "photoreal" : "product");
-    if (preset) {
-      setSizePresetId(preset.id);
-      setWidth(preset.width);
-      setHeight(preset.height);
+    const previousPreviewUrl = ecommerceImage?.previewUrl;
+    const previewUrl = URL.createObjectURL(file);
+    setEcommerceImage({
+      dataUrl: await blobToDataUrl(file),
+      fileName: fileNameWithImageExtension(file.name || "product-image", file.type),
+      previewUrl
+    });
+    if (previousPreviewUrl) {
+      URL.revokeObjectURL(previousPreviewUrl);
     }
-    setGenerationMode("text");
-    setSidebarTab("creative");
     setGenerationError("");
+  }
+
+  function toggleEcommerceScene(sceneId: EcommerceSceneTemplateId): void {
+    setEcommerceSceneIds((sceneIds) =>
+      sceneIds.includes(sceneId) ? sceneIds.filter((id) => id !== sceneId) : [...sceneIds, sceneId]
+    );
+  }
+
+  async function pollEcommerceJob(jobId: string, signal: AbortSignal): Promise<EcommerceBatchGenerateResponse> {
+    for (;;) {
+      if (signal.aborted) {
+        throw new DOMException("Ecommerce generation was aborted.", "AbortError");
+      }
+      const response = await authFetch(`/api/ecommerce/images/batch-generate/${encodeURIComponent(jobId)}`, { signal });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const body = (await response.json()) as EcommerceBatchGenerateResponse;
+      if (body.status === "succeeded" || body.status === "partial" || body.status === "failed") {
+        return body;
+      }
+      setGenerationMessage(body.message || `电商任务生成中：${body.completedScenes}/${body.totalScenes}`);
+      await new Promise((resolve) => window.setTimeout(resolve, 1400));
+    }
+  }
+
+  async function submitEcommerceGeneration(): Promise<void> {
+    const title = ecommerceTitle.trim();
+    const selectedSize = SIZE_PRESETS.find((item) => item.id === ecommerceSizePresetId) ?? SIZE_PRESETS[0];
+    const totalOutputs = ecommerceSceneIds.length * ecommerceCount;
+
+    setGenerationError("");
+    setGenerationMessage("");
     setGenerationWarning("");
-    setGenerationMessage("已套用电商插件模板，可继续补充商品信息后生成到画布。");
+
+    if (!ecommerceImage) {
+      setGenerationError("请先上传一张产品图。");
+      return;
+    }
+    if (!title) {
+      setGenerationError("请输入商品标题。");
+      return;
+    }
+    if (ecommerceSceneIds.length === 0) {
+      setGenerationError("请至少选择一个生成场景。");
+      return;
+    }
+    if (!editorRef.current) {
+      setGenerationError("画布未就绪。");
+      return;
+    }
+
+    const editor = editorRef.current;
+    const requestId = generationRequestRef.current + 1;
+    generationRequestRef.current = requestId;
+    const placeholderSet = createEcommerceBatchPlaceholders(editor, totalOutputs, selectedSize, requestId);
+    const controller = new AbortController();
+
+    setIsEcommerceGenerating(true);
+    setActiveGenerationCount((value) => value + 1);
+    try {
+      const payload = {
+        product: {
+          title,
+          description: ecommerceDescription.trim(),
+          targetCustomer: ecommerceTargetCustomer.trim(),
+          usageScene: ecommerceUsageScene.trim(),
+          material: ecommerceMaterial.trim(),
+          color: ecommerceColor.trim()
+        },
+        platform: ecommercePlatform,
+        market: ecommerceMarket,
+        textLanguage: ecommerceMode === "text-translation" ? ecommerceTextLanguage : "none",
+        allowTextRecreation: ecommerceMode !== "text-translation",
+        removeWatermarkAndLogo: ecommerceRemoveWatermark,
+        sceneTemplateIds: ecommerceSceneIds,
+        sizePresetId: selectedSize.id,
+        size: {
+          width: selectedSize.width,
+          height: selectedSize.height
+        },
+        stylePresetId: ecommerceMode === "creative" ? "photoreal" : "product",
+        quality: "auto",
+        outputFormat: "png",
+        countPerScene: ecommerceCount,
+        referenceImage: {
+          dataUrl: ecommerceImage.dataUrl,
+          fileName: ecommerceImage.fileName
+        },
+        extraDirection: ecommerceExtraDirection.trim()
+      };
+
+      const response = await authFetch("/api/ecommerce/images/batch-generate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const createdJob = (await response.json()) as EcommerceBatchGenerateResponse;
+      setGenerationMessage(createdJob.message || "电商批量任务已创建。");
+      const completedJob = await pollEcommerceJob(createdJob.jobId, controller.signal);
+      const combinedRecord = createEcommerceCombinedRecord({
+        job: completedJob,
+        prompt: `${ecommerceModeLabels[ecommerceMode]}：${title}`,
+        size: {
+          width: selectedSize.width,
+          height: selectedSize.height
+        },
+        presetId: ecommerceMode === "creative" ? "photoreal" : "product",
+        outputFormat: "png",
+        count: totalOutputs
+      });
+      await Promise.all(combinedRecord.outputs.flatMap((output) => (output.asset ? [preloadGeneratedAssetPreview(output.asset, controller.signal)] : [])));
+      const insertedCount = replaceGenerationPlaceholders(editor, placeholderSet, combinedRecord);
+      const failedCount = Math.max(0, totalOutputs - insertedCount);
+      setGenerationHistory((history) => [
+        ...completedJob.records,
+        ...history.filter((record) => !completedJob.records.some((item) => item.id === record.id))
+      ].slice(0, 20));
+      if (insertedCount > 0) {
+        setGenerationMessage(
+          failedCount > 0
+            ? `已生成并插入 ${insertedCount} 张电商图，${failedCount} 张失败。`
+            : `已生成并插入 ${insertedCount} 张电商图。`
+        );
+      } else {
+        setGenerationError(completedJob.message || "电商生成未返回可插入图片。");
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "电商生成失败，请重试。";
+      markGenerationPlaceholdersFailed(editor, placeholderSet, message);
+      setGenerationError(message);
+    } finally {
+      setIsEcommerceGenerating(false);
+      setActiveGenerationCount((value) => Math.max(0, value - 1));
+    }
   }
 
   async function executeGeneration(
@@ -2776,32 +3065,29 @@ export function App() {
                   <Workflow className="size-4" aria-hidden="true" />
                 </div>
                 <h2>一张产品图，串起整套电商素材</h2>
-                <p>把插件采集、平台模板、图片翻译、去水印和现有画布放进同一个左侧工作区。</p>
-                <div className="sidebar-hero__actions">
-                  <button className="sidebar-cta" type="button" onClick={() => setSidebarTab("creative")}>
-                    去自主生图
-                    <ArrowRight className="size-4" aria-hidden="true" />
-                  </button>
-                  <button className="sidebar-ghost" type="button" onClick={() => setGenerationMode("reference")}>
-                    <ImageIcon className="size-4" aria-hidden="true" />
-                    参考图编辑
-                  </button>
-                </div>
+                <p>PC 主站可直接上传产品图、录入商品信息、选择场景并生成到画布；浏览器插件继续保留采集和网页侧入口。</p>
               </section>
 
               <section className="sidebar-section">
                 <div className="sidebar-section__head">
                   <div>
-                    <p className="sidebar-section__eyebrow">常用功能</p>
-                    <h3>插件能力</h3>
+                    <p className="sidebar-section__eyebrow">生成方式</p>
+                    <h3>{ecommerceModeLabels[ecommerceMode]}</h3>
                   </div>
                   <Megaphone className="size-4 text-amber-700" aria-hidden="true" />
                 </div>
                 <div className="sidebar-grid">
                   {ecommerceModeCards.map((card) => {
                     const Icon = card.icon;
+                    const active = ecommerceMode === card.id;
                     return (
-                      <button className="sidebar-card" type="button" key={card.id}>
+                      <button
+                        aria-pressed={active}
+                        className={active ? "sidebar-card is-active" : "sidebar-card"}
+                        type="button"
+                        key={card.id}
+                        onClick={() => selectEcommerceMode(card.id)}
+                      >
                         <Icon className="sidebar-card__icon" aria-hidden="true" />
                         <span className="sidebar-card__title">{card.title}</span>
                         <span className="sidebar-card__desc">{card.desc}</span>
@@ -2814,18 +3100,71 @@ export function App() {
               <section className="sidebar-section">
                 <div className="sidebar-section__head">
                   <div>
-                    <p className="sidebar-section__eyebrow">推荐工作流</p>
-                    <h3>电商模板</h3>
+                    <p className="sidebar-section__eyebrow">上传图片</p>
+                    <h3>产品参考图</h3>
+                  </div>
+                  <ImageIcon className="size-4 text-amber-700" aria-hidden="true" />
+                </div>
+                <label className={ecommerceImage ? "ecommerce-upload has-image" : "ecommerce-upload"}>
+                  {ecommerceImage ? (
+                    <img alt="产品参考图预览" src={ecommerceImage.previewUrl} />
+                  ) : (
+                    <span className="ecommerce-upload__empty">
+                      <ImageIcon className="size-5" aria-hidden="true" />
+                      上传 1 张产品图
+                    </span>
+                  )}
+                  <input
+                    accept="image/png,image/jpeg,image/webp"
+                    type="file"
+                    onChange={(event) => void selectEcommerceImage(event.target.files?.[0])}
+                  />
+                </label>
+              </section>
+
+              <section className="sidebar-section">
+                <div className="sidebar-section__head">
+                  <div>
+                    <p className="sidebar-section__eyebrow">商品信息</p>
+                    <h3>生成依据</h3>
                   </div>
                   <Package className="size-4 text-amber-700" aria-hidden="true" />
                 </div>
-                <div className="sidebar-template-grid">
-                  {ecommerceTemplateCards.map((item) => (
-                    <button key={item.id} className="sidebar-template" type="button" onClick={() => applyEcommerceTemplate(item.id)}>
-                      <span className="sidebar-template__title">{item.label}</span>
-                      <span className="sidebar-template__desc">套用模板到画布生成</span>
-                    </button>
-                  ))}
+                <label className="block">
+                  <span className="control-label">商品标题</span>
+                  <input
+                    className="field-control"
+                    placeholder="例如：真丝方巾 / 便携榨汁杯"
+                    value={ecommerceTitle}
+                    onChange={(event) => setEcommerceTitle(event.target.value)}
+                  />
+                </label>
+                <label className="mt-3 block">
+                  <span className="control-label">商品描述</span>
+                  <textarea
+                    className="prompt-textarea mt-2 h-24 w-full resize-none rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm leading-6 text-neutral-950 outline-none transition focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100"
+                    placeholder="核心卖点、尺寸、包装、注意事项等"
+                    value={ecommerceDescription}
+                    onChange={(event) => setEcommerceDescription(event.target.value)}
+                  />
+                </label>
+                <div className="mt-3 grid grid-cols-2 gap-3">
+                  <label>
+                    <span className="control-label">目标人群</span>
+                    <input className="field-control" value={ecommerceTargetCustomer} onChange={(event) => setEcommerceTargetCustomer(event.target.value)} />
+                  </label>
+                  <label>
+                    <span className="control-label">使用场景</span>
+                    <input className="field-control" value={ecommerceUsageScene} onChange={(event) => setEcommerceUsageScene(event.target.value)} />
+                  </label>
+                  <label>
+                    <span className="control-label">材质</span>
+                    <input className="field-control" value={ecommerceMaterial} onChange={(event) => setEcommerceMaterial(event.target.value)} />
+                  </label>
+                  <label>
+                    <span className="control-label">颜色 / SKU</span>
+                    <input className="field-control" value={ecommerceColor} onChange={(event) => setEcommerceColor(event.target.value)} />
+                  </label>
                 </div>
               </section>
 
@@ -2833,29 +3172,109 @@ export function App() {
                 <div className="sidebar-section__head">
                   <div>
                     <p className="sidebar-section__eyebrow">平台与市场</p>
-                    <h3>跨境与国内电商</h3>
+                    <h3>输出目标</h3>
                   </div>
                   <Globe2 className="size-4 text-amber-700" aria-hidden="true" />
                 </div>
-                <div className="sidebar-chip-row">
-                  {ecommercePlatformHighlights.map((item) => (
-                    <span key={item.id} className="sidebar-chip">
-                      {item.label}
-                    </span>
-                  ))}
+                <div className="grid grid-cols-2 gap-3">
+                  <label>
+                    <span className="control-label">平台</span>
+                    <select className="field-control" value={ecommercePlatform} onChange={(event) => setEcommercePlatform(event.target.value as EcommercePlatform)}>
+                      {ECOMMERCE_PLATFORMS.map((item) => (
+                        <option key={item.id} value={item.id}>{item.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span className="control-label">市场</span>
+                    <select className="field-control" value={ecommerceMarket} onChange={(event) => setEcommerceMarket(event.target.value as EcommerceMarket)}>
+                      {ECOMMERCE_MARKETS.map((item) => (
+                        <option key={item.id} value={item.id}>{item.label}</option>
+                      ))}
+                    </select>
+                  </label>
                 </div>
-                <div className="sidebar-chip-row sidebar-chip-row--muted">
-                  {ecommerceMarketHighlights.map((item) => (
-                    <span key={item.id} className="sidebar-chip sidebar-chip--static">
-                      {item.label}
-                    </span>
-                  ))}
-                  {ecommerceLanguageHighlights.map((item) => (
-                    <span key={item.id} className="sidebar-chip sidebar-chip--static">
-                      {item.label}
-                    </span>
-                  ))}
+                {ecommerceMode === "text-translation" ? (
+                  <label className="mt-3 block">
+                    <span className="control-label">目标语言</span>
+                    <select className="field-control" value={ecommerceTextLanguage} onChange={(event) => setEcommerceTextLanguage(event.target.value as EcommerceTextLanguage)}>
+                      {ECOMMERCE_TEXT_LANGUAGES.filter((item) => item.id !== "none").map((item) => (
+                        <option key={item.id} value={item.id}>{item.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+              </section>
+
+              <section className="sidebar-section">
+                <div className="sidebar-section__head">
+                  <div>
+                    <p className="sidebar-section__eyebrow">生成场景</p>
+                    <h3>{ecommerceSceneIds.length} 个场景</h3>
+                  </div>
+                  <BadgeCheck className="size-4 text-emerald-600" aria-hidden="true" />
                 </div>
+                <div className="sidebar-template-grid">
+                  {ECOMMERCE_SCENE_TEMPLATES.filter((item) => item.mode === ecommerceMode).map((item) => {
+                    const active = ecommerceSceneIds.includes(item.id);
+                    return (
+                      <button
+                        key={item.id}
+                        className={active ? "sidebar-template is-active" : "sidebar-template"}
+                        type="button"
+                        aria-pressed={active}
+                        onClick={() => toggleEcommerceScene(item.id)}
+                      >
+                        <span className="sidebar-template__title">{item.label}</span>
+                        <span className="sidebar-template__desc">{active ? "已选择" : "点击加入"}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+
+              <section className="sidebar-section">
+                <div className="sidebar-section__head">
+                  <div>
+                    <p className="sidebar-section__eyebrow">输出设置</p>
+                    <h3>尺寸、张数与约束</h3>
+                  </div>
+                  <Square className="size-4 text-amber-700" aria-hidden="true" />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <label>
+                    <span className="control-label">输出尺寸</span>
+                    <select className="field-control" value={ecommerceSizePresetId} onChange={(event) => setEcommerceSizePresetId(event.target.value)}>
+                      {ecommerceSizePresets.map((item) => (
+                        <option key={item.id} value={item.id}>{sizePresetLabel(item)}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span className="control-label">每场景张数</span>
+                    <select className="field-control" value={ecommerceCount} onChange={(event) => setEcommerceCount(Number(event.target.value) as GenerationCount)}>
+                      {GENERATION_COUNTS.map((item) => (
+                        <option key={item} value={item}>{item} 张</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <label className="ecommerce-switch-row">
+                  <span>
+                    <strong>去水印 / Logo</strong>
+                    <small>清理平台标识、旧店铺水印和无关角标。</small>
+                  </span>
+                  <input checked={ecommerceRemoveWatermark} type="checkbox" onChange={(event) => setEcommerceRemoveWatermark(event.target.checked)} />
+                </label>
+                <label className="mt-3 block">
+                  <span className="control-label">补充方向</span>
+                  <textarea
+                    className="prompt-textarea mt-2 h-24 w-full resize-none rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm leading-6 text-neutral-950 outline-none transition focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100"
+                    placeholder="例如：保留原构图；模特不露脸；不要新增夸大宣传文字"
+                    value={ecommerceExtraDirection}
+                    onChange={(event) => setEcommerceExtraDirection(event.target.value)}
+                  />
+                </label>
               </section>
             </>
           ) : null}
@@ -3286,9 +3705,9 @@ export function App() {
 
         <div className="ai-panel-actions grid grid-cols-1 gap-3 border-t border-neutral-200 bg-white px-5 py-4">
           {sidebarTab === "plugins" ? (
-            <button className="primary-action" type="button" onClick={() => setSidebarTab("creative")}>
-              <Workflow className="size-4" aria-hidden="true" />
-              进入自主生图
+            <button className="primary-action" disabled={isEcommerceGenerating} type="button" onClick={() => void submitEcommerceGeneration()}>
+              {isEcommerceGenerating ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Workflow className="size-4" aria-hidden="true" />}
+              {isEcommerceGenerating ? "电商图生成中" : "生成电商图到画布"}
             </button>
           ) : (
             <button
