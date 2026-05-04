@@ -107,6 +107,16 @@ export async function getActiveImageModelConfigs(): Promise<ImageModelConfigEntr
     });
 }
 
+export async function getActiveImageModelConfigsForRequest(modelConfigId?: string): Promise<ImageModelConfigEntry[]> {
+  const models = await getActiveImageModelConfigs();
+  const requestedId = modelConfigId?.trim();
+  if (!requestedId) {
+    return models;
+  }
+
+  return models.filter((model) => model.id === requestedId);
+}
+
 export async function getConfiguredImageModelNames(): Promise<string[]> {
   const names = (await getResolvedImageModelConfigs()).filter((model) => model.enabled).map((model) => model.model);
   return names.length > 0 ? Array.from(new Set(names)) : [IMAGE_MODEL];

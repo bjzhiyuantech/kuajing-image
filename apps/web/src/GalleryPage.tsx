@@ -30,7 +30,7 @@ import { getStoredAuthToken } from "./authClient";
 interface GalleryPageProps {
   fetcher: typeof fetch;
   onDeleted: (outputId: string) => void;
-  onReuse: (item: GalleryImageItem) => void;
+  onReuse: (item: GalleryImageItem, modelConfigId?: string) => void;
 }
 
 interface GalleryActionHandlers {
@@ -38,6 +38,16 @@ interface GalleryActionHandlers {
   onDelete: (item: GalleryImageItem) => void;
   onDownload: (item: GalleryImageItem) => void;
   onReuse: (item: GalleryImageItem) => void;
+}
+
+interface GalleryModelOption {
+  id: string;
+  name: string;
+  provider: string;
+  providerLabel: string;
+  model: string;
+  enabled: boolean;
+  role: string;
 }
 
 const stylePresetLabels: Record<StylePresetId, string> = {
@@ -70,6 +80,8 @@ export function GalleryPage({ fetcher, onDeleted, onReuse }: GalleryPageProps) {
   const [expandedPrompts, setExpandedPrompts] = useState<Record<string, boolean>>({});
   const [selectedItem, setSelectedItem] = useState<GalleryImageItem | null>(null);
   const [pendingDeleteItem, setPendingDeleteItem] = useState<GalleryImageItem | null>(null);
+  const [pendingRetryItem, setPendingRetryItem] = useState<GalleryImageItem | null>(null);
+  const [modelOptions, setModelOptions] = useState<GalleryModelOption[]>([]);
   const [deletingOutputId, setDeletingOutputId] = useState<string | null>(null);
   const statusTimerRef = useRef<number | undefined>();
   const openedAssetIdRef = useRef<string | null>(null);
@@ -124,7 +136,29 @@ export function GalleryPage({ fetcher, onDeleted, onReuse }: GalleryPageProps) {
   }, []);
 
   useEffect(() => {
-    if (!selectedItem && !pendingDeleteItem) {
+    const controller = new AbortController();
+
+    async function loadModels(): Promise<void> {
+      try {
+        const response = await fetcher("/api/admin/image-models", { signal: controller.signal });
+        if (!response.ok) {
+          return;
+        }
+        const body = (await response.json()) as unknown;
+        if (!controller.signal.aborted) {
+          setModelOptions(parseGalleryModelOptions(body));
+        }
+      } catch {
+        // Non-admin users may not have access; they can still reuse with the default model.
+      }
+    }
+
+    void loadModels();
+    return () => controller.abort();
+  }, [fetcher]);
+
+  useEffect(() => {
+    if (!selectedItem && !pendingDeleteItem && !pendingRetryItem) {
       return;
     }
 
@@ -138,6 +172,10 @@ export function GalleryPage({ fetcher, onDeleted, onReuse }: GalleryPageProps) {
         setPendingDeleteItem(null);
         return;
       }
+      if (pendingRetryItem) {
+        setPendingRetryItem(null);
+        return;
+      }
 
       setSelectedItem(null);
     };
@@ -146,7 +184,7 @@ export function GalleryPage({ fetcher, onDeleted, onReuse }: GalleryPageProps) {
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [pendingDeleteItem, selectedItem]);
+  }, [pendingDeleteItem, pendingRetryItem, selectedItem]);
 
   useEffect(() => {
     return () => {
@@ -168,7 +206,7 @@ export function GalleryPage({ fetcher, onDeleted, onReuse }: GalleryPageProps) {
     onCopy: (item) => void copyPrompt(item),
     onDelete: requestDelete,
     onDownload: downloadItem,
-    onReuse
+    onReuse: requestRetry
   };
 
   function showStatus(message: string): void {
@@ -204,6 +242,22 @@ export function GalleryPage({ fetcher, onDeleted, onReuse }: GalleryPageProps) {
   function requestDelete(item: GalleryImageItem): void {
     setError("");
     setPendingDeleteItem(item);
+  }
+
+  function requestRetry(item: GalleryImageItem): void {
+    setError("");
+    const enabledModelOptions = modelOptions.filter((model) => model.enabled);
+    if (enabledModelOptions.length === 0) {
+      onReuse(item);
+      return;
+    }
+    setPendingRetryItem(item);
+  }
+
+  function confirmRetry(item: GalleryImageItem, modelConfigId: string): void {
+    setPendingRetryItem(null);
+    setSelectedItem(null);
+    onReuse(item, modelConfigId || undefined);
   }
 
   async function deleteItem(item: GalleryImageItem): Promise<void> {
@@ -323,7 +377,7 @@ export function GalleryPage({ fetcher, onDeleted, onReuse }: GalleryPageProps) {
           onCopy={() => void copyPrompt(selectedItem)}
           onDelete={() => requestDelete(selectedItem)}
           onDownload={() => downloadItem(selectedItem)}
-          onReuse={() => onReuse(selectedItem)}
+          onReuse={() => requestRetry(selectedItem)}
         />
       ) : null}
 
@@ -333,6 +387,15 @@ export function GalleryPage({ fetcher, onDeleted, onReuse }: GalleryPageProps) {
           item={pendingDeleteItem}
           onCancel={() => setPendingDeleteItem(null)}
           onConfirm={() => void deleteItem(pendingDeleteItem)}
+        />
+      ) : null}
+
+      {pendingRetryItem ? (
+        <RetryGalleryDialog
+          item={pendingRetryItem}
+          models={modelOptions}
+          onCancel={() => setPendingRetryItem(null)}
+          onConfirm={(modelConfigId) => confirmRetry(pendingRetryItem, modelConfigId)}
         />
       ) : null}
     </main>
@@ -392,6 +455,7 @@ function FeaturedGalleryItem({
         />
         <div className="gallery-feature__meta">
           <GalleryOwnerTag item={item} />
+          <GalleryModelTag item={item} />
           <span>
             <Clock3 className="size-3.5" aria-hidden="true" />
             {formatCreatedTime(item.createdAt)}
@@ -462,6 +526,7 @@ function GalleryCard({
         <div className="gallery-card__footer">
           <div className="gallery-card__footer-meta">
             <GalleryOwnerTag item={item} />
+            <GalleryModelTag item={item} />
             <span className="gallery-time-tag">
               <Clock3 className="size-3.5" aria-hidden="true" />
               {formatCreatedTime(item.createdAt)}
@@ -515,9 +580,9 @@ function GalleryIconActions({
         <Download className="size-4" aria-hidden="true" />
       </button>
       <button
-        aria-label={`复用提示词：${excerpt}`}
+        aria-label={`重新生成：${excerpt}`}
         className="gallery-icon-action"
-        title="复用到画布"
+        title="重新生成"
         type="button"
         onClick={() => onReuse(item)}
       >
@@ -568,6 +633,20 @@ function GalleryOwnerTag({ item }: { item: GalleryImageItem }) {
     <span className="gallery-owner-tag" title={owner}>
       <UserRound className="size-3.5" aria-hidden="true" />
       {owner}
+    </span>
+  );
+}
+
+function GalleryModelTag({ item }: { item: GalleryImageItem }) {
+  const model = modelLabel(item);
+  if (!model) {
+    return null;
+  }
+
+  return (
+    <span className="gallery-owner-tag gallery-model-tag" title={model}>
+      <Sparkles className="size-3.5" aria-hidden="true" />
+      {model}
     </span>
   );
 }
@@ -654,6 +733,7 @@ function GalleryDetailDialog({
           <aside className="gallery-modal__copy">
             <div className="gallery-modal__meta">
               <GalleryOwnerTag item={item} />
+              <GalleryModelTag item={item} />
               <span>
                 <Clock3 className="size-3.5" aria-hidden="true" />
                 {formatCreatedTime(item.createdAt)}
@@ -682,7 +762,7 @@ function GalleryDetailDialog({
           </button>
           <button className="secondary-action h-10" type="button" onClick={onReuse}>
             <RotateCcw className="size-4" aria-hidden="true" />
-            复用
+            重新生成
           </button>
           <button className="secondary-action h-10 text-red-700 hover:text-red-800" disabled={deleting} type="button" onClick={onDelete}>
             {deleting ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Trash2 className="size-4" aria-hidden="true" />}
@@ -730,6 +810,67 @@ function DeleteGalleryDialog({
           <button className="danger-action h-10" disabled={deleting} type="button" onClick={onConfirm}>
             {deleting ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Trash2 className="size-4" aria-hidden="true" />}
             确认移除
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RetryGalleryDialog({
+  item,
+  models,
+  onCancel,
+  onConfirm
+}: {
+  item: GalleryImageItem;
+  models: GalleryModelOption[];
+  onCancel: () => void;
+  onConfirm: (modelConfigId: string) => void;
+}) {
+  const enabledModels = models.filter((model) => model.enabled);
+  const [selectedModelId, setSelectedModelId] = useState(enabledModels[0]?.id ?? "");
+
+  return (
+    <div className="gallery-confirm-backdrop" data-testid="gallery-retry-dialog" role="presentation">
+      <div
+        aria-describedby="gallery-retry-description"
+        aria-labelledby="gallery-retry-title"
+        aria-modal="true"
+        className="gallery-confirm gallery-retry"
+        role="dialog"
+      >
+        <div className="gallery-confirm__icon">
+          <RotateCcw className="size-5" aria-hidden="true" />
+        </div>
+        <div className="gallery-confirm__copy">
+          <h2 id="gallery-retry-title">选择模型重新生成</h2>
+          <p id="gallery-retry-description">将使用原提示词和原尺寸重新生成“{promptExcerpt(item.prompt)}”。</p>
+          <div className="gallery-model-options">
+            {enabledModels.map((model) => (
+              <label className="gallery-model-option" key={model.id}>
+                <input
+                  checked={selectedModelId === model.id}
+                  name="galleryRetryModel"
+                  type="radio"
+                  value={model.id}
+                  onChange={(event) => setSelectedModelId(event.target.value)}
+                />
+                <span>
+                  <strong>{model.name}</strong>
+                  <em>{model.providerLabel} · {model.model} · {model.role === "primary" ? "主模型" : "备用模型"}</em>
+                </span>
+              </label>
+            ))}
+          </div>
+        </div>
+        <div className="gallery-confirm__actions">
+          <button className="secondary-action h-10" type="button" onClick={onCancel}>
+            取消
+          </button>
+          <button className="primary-action h-10" disabled={!selectedModelId} type="button" onClick={() => onConfirm(selectedModelId)}>
+            <RotateCcw className="size-4" aria-hidden="true" />
+            重新生成
           </button>
         </div>
       </div>
@@ -813,6 +954,34 @@ function ownerLabel(item: Pick<GalleryImageItem, "userDisplayName" | "userEmail"
     return `${displayName} · ${email}`;
   }
   return displayName || email || item.userId || "";
+}
+
+function modelLabel(item: Pick<GalleryImageItem, "model" | "modelDisplayName">): string {
+  return item.modelDisplayName?.trim() || item.model?.trim() || "";
+}
+
+function parseGalleryModelOptions(value: unknown): GalleryModelOption[] {
+  const source = isRecord(value) && Array.isArray(value.models) ? value.models : [];
+  return source.filter(isRecord).map((model, index) => {
+    const provider = stringFrom(model.provider);
+    return {
+      id: stringFrom(model.id) || `model-${index}`,
+      name: stringFrom(model.name) || stringFrom(model.model) || `模型 ${index + 1}`,
+      provider,
+      providerLabel: provider === "gemini" ? "Gemini" : "OpenAI 兼容",
+      model: stringFrom(model.model),
+      enabled: model.enabled !== false,
+      role: stringFrom(model.role) || "fallback"
+    };
+  });
+}
+
+function stringFrom(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function promptExcerpt(promptValue: string): string {

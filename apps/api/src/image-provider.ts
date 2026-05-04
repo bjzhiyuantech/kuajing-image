@@ -18,6 +18,7 @@ export interface ImageProviderInput {
   quality: ImageQuality;
   outputFormat: OutputFormat;
   count: number;
+  modelConfigId?: string;
 }
 
 export interface EditImageProviderInput extends ImageProviderInput {
@@ -33,6 +34,9 @@ export interface ProviderResult {
   model: string;
   size: string;
   images: ProviderImage[];
+  modelConfigId?: string;
+  modelProvider?: string;
+  modelDisplayName?: string;
 }
 
 export interface ImageProvider {

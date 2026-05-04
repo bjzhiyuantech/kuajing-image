@@ -48,6 +48,7 @@ import {
   type AdminUsersResponse,
   type SaveAlipayConfigRequest,
   type SaveBillingSettingsRequest,
+  type SaveInviteRewardSettingsRequest,
   type SaveWechatMiniAppConfigRequest,
   type EcommerceBatchGenerateRequest,
   type EcommerceBatchGenerateResponse,
@@ -95,6 +96,7 @@ import {
 } from "./image-provider.js";
 import {
   getActiveImageModelConfigs,
+  getActiveImageModelConfigsForRequest,
   getConfiguredImageModelNames,
   getImageModelConfig,
   saveImageModelConfig,
@@ -118,6 +120,12 @@ import {
 } from "./ecommerce-jobs.js";
 import { deleteAdminGalleryOutput, deleteGalleryOutput, getAdminGalleryImages, getGalleryImages, getProjectState, saveProjectSnapshot } from "./project-store.js";
 import { planExpiryFrom, resetExpiredUserPlans } from "./plan-expiration.js";
+import {
+  getInviteRewardSettings,
+  getInviteSummary,
+  listAdminReferralTransactions,
+  saveInviteRewardSettings
+} from "./referral-service.js";
 import { runtimePaths, serverConfig } from "./runtime.js";
 import { assets, ecommerceBatchJobs, subscriptionPlans, users, workspaceMembers, workspaces } from "./schema.js";
 import { getStorageConfig, saveStorageConfig, testStorageConfig } from "./storage-config.js";
@@ -291,7 +299,8 @@ app.post("/api/auth/wechat/miniapp/register", async (c) => {
       await registerWechatMiniAppUser({
         bindToken: payload.value.bindToken,
         displayName: parseOptionalString(payload.value.displayName),
-        email: parseOptionalString(payload.value.email)
+        email: parseOptionalString(payload.value.email),
+        inviteCode: parseOptionalString(payload.value.inviteCode)
       })
     );
   } catch (error) {
@@ -519,7 +528,14 @@ app.post("/api/images/generate", async (c) => {
   }
 
   try {
-    return c.json(await runTextToImageGenerationWithFallback(await requestTenant(c), parsed.value, await getActiveImageModelConfigs(), c.req.raw.signal));
+    return c.json(
+      await runTextToImageGenerationWithFallback(
+        await requestTenant(c),
+        parsed.value,
+        await getActiveImageModelConfigsForRequest(parsed.value.modelConfigId),
+        c.req.raw.signal
+      )
+    );
   } catch (error) {
     if (error instanceof ProviderError) {
       return providerErrorJson(c, error);
@@ -541,7 +557,14 @@ app.post("/api/images/edit", async (c) => {
   }
 
   try {
-    return c.json(await runReferenceImageGenerationWithFallback(await requestTenant(c), parsed.value, await getActiveImageModelConfigs(), c.req.raw.signal));
+    return c.json(
+      await runReferenceImageGenerationWithFallback(
+        await requestTenant(c),
+        parsed.value,
+        await getActiveImageModelConfigsForRequest(parsed.value.modelConfigId),
+        c.req.raw.signal
+      )
+    );
   } catch (error) {
     if (error instanceof ProviderError) {
       return providerErrorJson(c, error);
@@ -649,6 +672,11 @@ app.get("/api/billing/orders", async (c) => {
 
 app.get("/api/billing/summary", async (c) => {
   return c.json(await getBillingSummary(await requestTenant(c)));
+});
+
+app.get("/api/referral/summary", async (c) => {
+  const origin = new URL(c.req.url).origin;
+  return c.json(await getInviteSummary((await requestTenant(c)).userId, origin));
 });
 
 app.post("/api/billing/recharge", async (c) => {
@@ -761,6 +789,43 @@ app.put("/api/admin/billing/settings", async (c) => {
   }
 
   return c.json(await saveBillingSettings(parsed.value));
+});
+
+app.get("/api/admin/referral/settings", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return c.json(await getInviteRewardSettings());
+});
+
+app.put("/api/admin/referral/settings", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+
+  const parsed = parseInviteSettingsPayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  return c.json(await saveInviteRewardSettings(parsed.value));
+});
+
+app.get("/api/admin/referral/transactions", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return c.json(await listAdminReferralTransactions(parseListLimit(c.req.query("limit"))));
 });
 
 app.get("/api/admin/image-models", async (c) => {
@@ -1539,6 +1604,9 @@ async function createOrPromoteAdminUser(input: {
       quotaTotal: Number(defaultPlan?.imageQuota ?? 0),
       quotaUsed: 0,
       balanceCents: 0,
+      referralBalanceCents: 0,
+      inviteCode: undefined,
+      inviterUserId: undefined,
       storageQuotaBytes: Number(defaultPlan?.storageQuotaBytes ?? DEFAULT_ADMIN_STORAGE_QUOTA_BYTES),
       storageUsedBytes: 0,
       currency: defaultPlan?.currency ?? "CNY",
@@ -1735,7 +1803,7 @@ function parseListLimit(value: string | undefined): number {
 function parseAuthPayload(
   input: unknown,
   includeDisplayName: boolean
-): ParseResult<{ email: string; password: string; displayName?: string; emailCode: string }> {
+): ParseResult<{ email: string; password: string; displayName?: string; emailCode: string; inviteCode?: string }> {
   if (!isRecord(input)) {
     return {
       ok: false,
@@ -1758,7 +1826,55 @@ function parseAuthPayload(
       email,
       password,
       displayName: includeDisplayName ? stringValue(input.displayName)?.trim() : undefined,
-      emailCode: includeDisplayName ? stringValue(input.emailCode)?.trim() || "" : ""
+      emailCode: includeDisplayName ? stringValue(input.emailCode)?.trim() || "" : "",
+      inviteCode: includeDisplayName ? stringValue(input.inviteCode)?.trim() : undefined
+    }
+  };
+}
+
+function parseInviteSettingsPayload(input: unknown): ParseResult<SaveInviteRewardSettingsRequest> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_referral_settings", "邀请激励设置内容必须是 JSON 对象。")
+    };
+  }
+  if (typeof input.enabled !== "boolean") {
+    return {
+      ok: false,
+      error: errorResponse("invalid_referral_settings", "enabled 必须是布尔值。")
+    };
+  }
+  const numberFields = [
+    "baseRegisterCredits",
+    "inviterRegisterCredits",
+    "inviteeRegisterCredits",
+    "rechargeCashbackRateBps",
+    "planPurchaseCashbackRateBps",
+    "minCashbackOrderAmountCents"
+  ] as const;
+  const parsed: Record<string, number> = {};
+  for (const field of numberFields) {
+    const value = parseNonNegativeInteger(input[field]);
+    if (value === undefined) {
+      return {
+        ok: false,
+        error: errorResponse("invalid_referral_settings", "邀请激励数值必须是非负整数。")
+      };
+    }
+    parsed[field] = value;
+  }
+  return {
+    ok: true,
+    value: {
+      enabled: input.enabled,
+      baseRegisterCredits: parsed.baseRegisterCredits,
+      inviterRegisterCredits: parsed.inviterRegisterCredits,
+      inviteeRegisterCredits: parsed.inviteeRegisterCredits,
+      rechargeCashbackRateBps: parsed.rechargeCashbackRateBps,
+      planPurchaseCashbackRateBps: parsed.planPurchaseCashbackRateBps,
+      minCashbackOrderAmountCents: parsed.minCashbackOrderAmountCents,
+      currency: stringValue(input.currency)?.toUpperCase()
     }
   };
 }
@@ -2543,7 +2659,8 @@ function parseBaseImagePayload(input: unknown): ParseResult<ImageProviderInput> 
       sizeApiValue: resolvedSize.apiValue,
       quality: quality.value,
       outputFormat: outputFormat.value,
-      count: count.value
+      count: count.value,
+      modelConfigId: parseOptionalString(input.modelConfigId)
     }
   };
 }

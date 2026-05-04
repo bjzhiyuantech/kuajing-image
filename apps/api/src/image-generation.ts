@@ -17,7 +17,8 @@ import {
   type EditImageProviderInput,
   type ImageProvider,
   type ImageProviderInput,
-  type ProviderImage
+  type ProviderImage,
+  type ProviderResult
 } from "./image-provider.js";
 import { createConfiguredImageProvider } from "./image-provider.js";
 import type { ImageModelConfigEntry } from "./image-model-config.js";
@@ -51,6 +52,7 @@ interface BatchOutputResult {
   status: "succeeded" | "failed";
   asset?: GeneratedAsset;
   cloudStorage?: AssetCloudStorageRecord;
+  providerResult?: ProviderResult;
   error?: string;
 }
 
@@ -253,7 +255,8 @@ async function generateSingleOutput(
       id: outputId,
       status: "succeeded",
       asset: saved.asset,
-      cloudStorage: saved.cloudStorage
+      cloudStorage: saved.cloudStorage,
+      providerResult: result
     };
   } catch (error) {
     if (isAbortError(error) || signal?.aborted) {
@@ -275,6 +278,7 @@ function createFallbackImageProvider(configs: ImageModelConfigEntry[]): ImagePro
 
   const providers = configs.map((config) => ({
     label: `${config.name} (${config.model})`,
+    config,
     provider: createConfiguredImageProvider(config)
   }));
 
@@ -289,13 +293,22 @@ function createFallbackImageProvider(configs: ImageModelConfigEntry[]): ImagePro
 }
 
 async function runWithProviderFallback<T>(
-  providers: Array<{ label: string; provider: ImageProvider }>,
+  providers: Array<{ label: string; config: ImageModelConfigEntry; provider: ImageProvider }>,
   run: (provider: ImageProvider) => Promise<T>
 ): Promise<T> {
   const errors: string[] = [];
   for (const item of providers) {
     try {
-      return await run(item.provider);
+      const result = await run(item.provider);
+      if (isProviderResult(result)) {
+        return {
+          ...result,
+          modelConfigId: item.config.id,
+          modelProvider: item.config.provider,
+          modelDisplayName: item.config.name
+        } as T;
+      }
+      return result;
     } catch (error) {
       if (isAbortError(error)) {
         throw error;
@@ -305,6 +318,10 @@ async function runWithProviderFallback<T>(
   }
 
   throw new ProviderError("upstream_failure", `所有图像模型均生成失败。${errors.join("；")}`, 502);
+}
+
+function isProviderResult(value: unknown): value is ProviderResult {
+  return typeof value === "object" && value !== null && Array.isArray((value as ProviderResult).images);
 }
 
 async function editSingleOutput(
@@ -337,7 +354,8 @@ async function editSingleOutput(
       id: outputId,
       status: "succeeded",
       asset: saved.asset,
-      cloudStorage: saved.cloudStorage
+      cloudStorage: saved.cloudStorage,
+      providerResult: result
     };
   } catch (error) {
     if (isAbortError(error) || signal?.aborted) {
@@ -400,6 +418,7 @@ async function saveGenerationRecord(
   const failureCount = outputs.length - successCount;
   const status = resolveGenerationStatus(successCount, failureCount);
   const error = failureCount > 0 ? `${failureCount} 张图像生成失败。` : undefined;
+  const providerResult = firstSuccessfulProviderResult(outputs);
 
   await db.insert(generationRecords)
     .values({
@@ -418,6 +437,10 @@ async function saveGenerationRecord(
       count: input.count,
       status,
       error,
+      model: providerResult?.model ?? null,
+      modelConfigId: providerResult?.modelConfigId ?? null,
+      modelProvider: providerResult?.modelProvider ?? null,
+      modelDisplayName: providerResult?.modelDisplayName ?? null,
       referenceAssetId: input.referenceAssetId ?? null,
       createdAt
     });
@@ -471,10 +494,18 @@ async function saveGenerationRecord(
     count: input.count,
     status,
     error,
+    model: providerResult?.model,
+    modelConfigId: providerResult?.modelConfigId,
+    modelProvider: providerResult?.modelProvider,
+    modelDisplayName: providerResult?.modelDisplayName,
     referenceAssetId: input.referenceAssetId,
     createdAt,
     outputs: outputs.map(toGenerationOutput)
   };
+}
+
+function firstSuccessfulProviderResult(outputs: BatchOutputResult[]): ProviderResult | undefined {
+  return outputs.find((output) => output.status === "succeeded" && output.providerResult)?.providerResult;
 }
 
 function resolveGenerationStatus(successCount: number, failureCount: number): GenerationStatus {

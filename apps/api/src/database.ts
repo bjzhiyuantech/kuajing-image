@@ -21,7 +21,7 @@ const defaultSubscriptionPlans = [
     id: DEFAULT_PLAN_ID,
     name: "Free",
     description: "免费体验套餐",
-    imageQuota: 20,
+    imageQuota: 2,
     storageQuotaBytes: 1 * GIB,
     priceCents: 0,
     currency: "CNY",
@@ -131,12 +131,17 @@ async function createSchema(): Promise<void> {
       quota_total BIGINT NOT NULL DEFAULT 0,
       quota_used BIGINT NOT NULL DEFAULT 0,
       balance_cents BIGINT NOT NULL DEFAULT 0,
+      referral_balance_cents BIGINT NOT NULL DEFAULT 0,
+      invite_code VARCHAR(64),
+      inviter_user_id VARCHAR(64),
       storage_quota_bytes BIGINT NOT NULL DEFAULT 0,
       storage_used_bytes BIGINT NOT NULL DEFAULT 0,
       currency VARCHAR(16) NOT NULL DEFAULT 'CNY',
       created_at VARCHAR(32) NOT NULL,
       updated_at VARCHAR(32) NOT NULL,
       UNIQUE KEY users_email_unique_idx (email),
+      UNIQUE KEY users_invite_code_unique_idx (invite_code),
+      KEY users_inviter_user_id_idx (inviter_user_id),
       KEY users_plan_id_idx (plan_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
@@ -159,7 +164,6 @@ async function createSchema(): Promise<void> {
       CONSTRAINT wechat_accounts_user_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
-
   await pool.query(`
     CREATE TABLE IF NOT EXISTS system_settings (
       setting_key VARCHAR(128) PRIMARY KEY,
@@ -185,7 +189,6 @@ async function createSchema(): Promise<void> {
       KEY email_verification_codes_expires_at_idx (expires_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
-
   await pool.query(`
     CREATE TABLE IF NOT EXISTS workspaces (
       id VARCHAR(64) PRIMARY KEY,
@@ -287,6 +290,10 @@ async function createSchema(): Promise<void> {
       count INT NOT NULL,
       status VARCHAR(32) NOT NULL,
       error TEXT,
+      model VARCHAR(255),
+      model_config_id VARCHAR(64),
+      model_provider VARCHAR(64),
+      model_display_name VARCHAR(255),
       reference_asset_id VARCHAR(64),
       created_at VARCHAR(32) NOT NULL,
       KEY generation_jobs_workspace_created_at_idx (workspace_id, created_at),
@@ -296,6 +303,7 @@ async function createSchema(): Promise<void> {
       CONSTRAINT generation_jobs_reference_asset_fk FOREIGN KEY (reference_asset_id) REFERENCES assets(id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
+  await migrateGenerationJobsTable();
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS generation_outputs (
@@ -490,8 +498,8 @@ async function upsertTenantRows(input: {
 }): Promise<void> {
   await pool.query(
     `
-      INSERT INTO users (id, email, password_hash, display_name, role, plan_id, plan_expires_at, quota_total, quota_used, balance_cents, storage_quota_bytes, storage_used_bytes, currency, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO users (id, email, password_hash, display_name, role, plan_id, plan_expires_at, quota_total, quota_used, balance_cents, referral_balance_cents, invite_code, inviter_user_id, storage_quota_bytes, storage_used_bytes, currency, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
         email = VALUES(email),
         password_hash = IF(VALUES(password_hash) <> '', VALUES(password_hash), password_hash),
@@ -502,6 +510,9 @@ async function upsertTenantRows(input: {
         quota_total = IF(quota_total = 0, VALUES(quota_total), quota_total),
         quota_used = quota_used,
         balance_cents = balance_cents,
+        referral_balance_cents = referral_balance_cents,
+        invite_code = IF(invite_code IS NULL OR invite_code = '', VALUES(invite_code), invite_code),
+        inviter_user_id = inviter_user_id,
         storage_quota_bytes = IF(storage_quota_bytes = 0, VALUES(storage_quota_bytes), storage_quota_bytes),
         storage_used_bytes = storage_used_bytes,
         currency = IF(currency IS NULL OR currency = '', VALUES(currency), currency),
@@ -518,6 +529,9 @@ async function upsertTenantRows(input: {
       input.quotaTotal ?? defaultSubscriptionPlans[0].imageQuota,
       input.quotaUsed ?? 0,
       input.balanceCents ?? 0,
+      0,
+      inviteCodeFromUserId(input.userId),
+      null,
       input.storageQuotaBytes ?? defaultSubscriptionPlans[0].storageQuotaBytes,
       input.storageUsedBytes ?? 0,
       "CNY",
@@ -553,6 +567,10 @@ function stableId(prefix: string, value: string): string {
   return createHash("sha256").update(`${prefix}:${value}`).digest("hex");
 }
 
+function inviteCodeFromUserId(userId: string): string {
+  return createHash("sha256").update(`invite:${userId}`).digest("base64url").slice(0, 10).toUpperCase();
+}
+
 async function migrateUsersTable(): Promise<void> {
   await addColumnIfMissing("users", "password_hash", "VARCHAR(512) NOT NULL DEFAULT ''");
   await addColumnIfMissing("users", "role", "VARCHAR(32) NOT NULL DEFAULT 'user'");
@@ -561,12 +579,18 @@ async function migrateUsersTable(): Promise<void> {
   await addColumnIfMissing("users", "quota_total", "BIGINT NOT NULL DEFAULT 0");
   await addColumnIfMissing("users", "quota_used", "BIGINT NOT NULL DEFAULT 0");
   await addColumnIfMissing("users", "balance_cents", "BIGINT NOT NULL DEFAULT 0");
+  await addColumnIfMissing("users", "referral_balance_cents", "BIGINT NOT NULL DEFAULT 0");
+  await addColumnIfMissing("users", "invite_code", "VARCHAR(64)");
+  await addColumnIfMissing("users", "inviter_user_id", "VARCHAR(64)");
   await addColumnIfMissing("users", "storage_quota_bytes", "BIGINT NOT NULL DEFAULT 0");
   await addColumnIfMissing("users", "storage_used_bytes", "BIGINT NOT NULL DEFAULT 0");
   await addColumnIfMissing("users", "currency", "VARCHAR(16) NOT NULL DEFAULT 'CNY'");
   await makeUserEmailNullable();
   await normalizeDuplicateUserEmails();
+  await backfillInviteCodes();
   await addIndexIfMissing("users", "users_email_unique_idx", "UNIQUE KEY users_email_unique_idx (email)");
+  await addIndexIfMissing("users", "users_invite_code_unique_idx", "UNIQUE KEY users_invite_code_unique_idx (invite_code)");
+  await addIndexIfMissing("users", "users_inviter_user_id_idx", "KEY users_inviter_user_id_idx (inviter_user_id)");
   await addIndexIfMissing("users", "users_plan_id_idx", "KEY users_plan_id_idx (plan_id)");
   const defaultPlan = await getDefaultSubscriptionPlan();
   await pool.query(
@@ -584,6 +608,13 @@ async function migrateUsersTable(): Promise<void> {
       defaultSubscriptionPlans[0].imageQuota
     ]);
   }
+}
+
+async function migrateGenerationJobsTable(): Promise<void> {
+  await addColumnIfMissing("generation_jobs", "model", "VARCHAR(255)");
+  await addColumnIfMissing("generation_jobs", "model_config_id", "VARCHAR(64)");
+  await addColumnIfMissing("generation_jobs", "model_provider", "VARCHAR(64)");
+  await addColumnIfMissing("generation_jobs", "model_display_name", "VARCHAR(255)");
 }
 
 function defaultPlanExpiryFrom(base: Date): string {
@@ -662,6 +693,19 @@ async function seedDefaultSystemSettings(): Promise<void> {
   const now = new Date().toISOString();
   const defaults = [
     ["billing.imageUnitPrice", { imageUnitPriceCents: 0, currency: "CNY" }],
+    [
+      "referral.rewards",
+      {
+        enabled: true,
+        baseRegisterCredits: 2,
+        inviterRegisterCredits: 4,
+        inviteeRegisterCredits: 6,
+        rechargeCashbackRateBps: 500,
+        planPurchaseCashbackRateBps: 500,
+        minCashbackOrderAmountCents: 100,
+        currency: "CNY"
+      }
+    ],
     [
       "payment.alipay",
       {
@@ -821,6 +865,15 @@ async function normalizeDuplicateUserEmails(): Promise<void> {
     }
 
     await pool.query("UPDATE users SET email = NULL WHERE id = ?", [row.id]);
+  }
+}
+
+async function backfillInviteCodes(): Promise<void> {
+  const [rows] = await pool.query<RowDataPacket[]>("SELECT id FROM users WHERE invite_code IS NULL OR invite_code = ''");
+  for (const row of rows) {
+    if (typeof row.id === "string") {
+      await pool.query("UPDATE users SET invite_code = ? WHERE id = ?", [inviteCodeFromUserId(row.id), row.id]);
+    }
   }
 }
 

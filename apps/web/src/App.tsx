@@ -289,6 +289,7 @@ interface GenerationSubmitInput {
   quality: ImageQuality;
   outputFormat: OutputFormat;
   count: GenerationCount;
+  modelConfigId?: string;
 }
 
 interface GenerationReferenceInput {
@@ -2741,7 +2742,8 @@ export function App() {
         size: input.size,
         quality: input.quality,
         outputFormat: input.outputFormat,
-        count: input.count
+        count: input.count,
+        modelConfigId: input.modelConfigId
       };
 
       if (requestMode === "reference" && referenceForRequest) {
@@ -2954,7 +2956,7 @@ export function App() {
     setGenerationMessage("已打开原始资源下载。");
   }
 
-  function reuseGalleryImage(item: GalleryImageItem): void {
+  function reuseGalleryImage(item: GalleryImageItem, modelConfigId?: string): void {
     const nextPresetId = coerceStylePresetId(item.presetId);
     const nextSizePresetId = sizePresetIdForSize(item.size.width, item.size.height);
 
@@ -2992,6 +2994,27 @@ export function App() {
       setGenerationMode("reference");
       setReferenceSelection(resolveReferenceSelection(editor));
       setGenerationMessage("已把 Gallery 图片放到画布，并设为本次参考图。");
+
+      if (modelConfigId) {
+        void executeGeneration(
+          {
+            prompt: item.prompt,
+            presetId: nextPresetId,
+            sizePresetId: nextSizePresetId,
+            size: item.size,
+            quality: item.quality,
+            outputFormat: item.outputFormat,
+            count: 1,
+            modelConfigId
+          },
+          "reference",
+          async (signal) => ({
+            referenceImage: await readStoredReferenceImage(item.asset.id, signal),
+            referenceAssetId: item.asset.id
+          }),
+          item.asset.id
+        );
+      }
     });
 
     if (isMobileDrawer) {

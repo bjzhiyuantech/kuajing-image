@@ -135,6 +135,10 @@ export async function getGalleryImages(tenant: RequestTenant): Promise<GalleryRe
         },
         quality: generation.quality as ImageQuality,
         outputFormat: generation.outputFormat as OutputFormat,
+        model: generation.model ?? undefined,
+        modelConfigId: generation.modelConfigId ?? undefined,
+        modelProvider: generation.modelProvider ?? undefined,
+        modelDisplayName: generation.modelDisplayName ?? undefined,
         createdAt: output.createdAt,
         asset: generatedAsset
       }];
@@ -181,6 +185,10 @@ export async function getAdminGalleryImages(): Promise<GalleryResponse> {
         },
         quality: generation.quality as ImageQuality,
         outputFormat: generation.outputFormat as OutputFormat,
+        model: generation.model ?? undefined,
+        modelConfigId: generation.modelConfigId ?? undefined,
+        modelProvider: generation.modelProvider ?? undefined,
+        modelDisplayName: generation.modelDisplayName ?? undefined,
         createdAt: output.createdAt,
         asset: generatedAsset
       }];
@@ -326,6 +334,10 @@ async function readGenerationHistory(tenant: RequestTenant): Promise<ApiGenerati
         count: record.count,
         status: record.status as GenerationStatus,
         error: record.error ?? undefined,
+        model: record.model ?? undefined,
+        modelConfigId: record.modelConfigId ?? undefined,
+        modelProvider: record.modelProvider ?? undefined,
+        modelDisplayName: record.modelDisplayName ?? undefined,
         referenceAssetId: record.referenceAssetId ?? undefined,
         createdAt: record.createdAt,
         outputs: mappedOutputs
