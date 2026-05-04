@@ -3,12 +3,14 @@ import { resolve } from "node:path";
 
 const outputDir = process.argv[2] || "dist";
 const manifest = JSON.parse(readFileSync(resolve("manifest.json"), "utf8"));
+const extensionPackage = JSON.parse(readFileSync(resolve("package.json"), "utf8"));
 const apiBaseUrl = process.env.VITE_EXTENSION_API_BASE_URL || "https://imagen.neimou.com";
 const extensionName = process.env.VITE_EXTENSION_NAME || manifest.name;
 const buildTarget = process.env.EXTENSION_BUILD_TARGET || "local";
 
 manifest.name = extensionName;
 manifest.short_name = extensionName;
+manifest.version = extensionPackage.version || manifest.version;
 
 if (buildTarget === "dev") {
   manifest.description = `${manifest.description} Dev`;

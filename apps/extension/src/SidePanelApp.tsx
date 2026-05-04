@@ -55,6 +55,7 @@ import type { AuthUser, BatchFormState, BatchTask, ExtensionAuthState, PageConte
 const ACTIVE_BATCH_JOB_STORAGE_KEY = "activeBatchJob";
 const AUTH_STORAGE_KEY = "auth";
 const DEFAULT_API_BASE_URL = import.meta.env.VITE_EXTENSION_API_BASE_URL || "https://imagen.neimou.com";
+const UPDATE_DIALOG_DISMISSED_STORAGE_KEY = "dismissedExtensionUpdateDialog";
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const TEXT_TRANSLATION_SCENE_ID = "text-translation" as const;
 const TEXT_TRANSLATION_CONCURRENCY = 4;
@@ -1051,6 +1052,30 @@ export function SidePanelApp() {
     error: "",
     loading: false
   });
+  const [extensionUpdateDialogOpen, setExtensionUpdateDialogOpen] = useState(false);
+  const historyPlaceholderImage = useMemo(() => {
+    const svg = `
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" role="img" aria-label="生成中">
+        <defs>
+          <linearGradient id="bg" x1="24" y1="22" x2="216" y2="218" gradientUnits="userSpaceOnUse">
+            <stop offset="0" stop-color="#eef4f1"/>
+            <stop offset="1" stop-color="#e1ece7"/>
+          </linearGradient>
+          <linearGradient id="panel" x1="54" y1="58" x2="186" y2="182" gradientUnits="userSpaceOnUse">
+            <stop offset="0" stop-color="#ffffff"/>
+            <stop offset="1" stop-color="#f6fbf8"/>
+          </linearGradient>
+        </defs>
+        <rect width="240" height="240" rx="24" fill="url(#bg)"/>
+        <rect x="28" y="28" width="184" height="184" rx="22" fill="url(#panel)" stroke="#cfe0d9" stroke-width="3"/>
+        <path d="M120 78v22m0 40v22m-32-56h22m40 0h22m-18.5-31.5 15.5 15.5m-15.5 94 15.5-15.5m-94 0 15.5 15.5m0-94L62.5 93.5" fill="none" stroke="#18a678" stroke-linecap="round" stroke-width="8"/>
+        <circle cx="120" cy="120" r="26" fill="#dff4ec"/>
+        <path d="M108 120h24m-12-12v24" stroke="#18a678" stroke-linecap="round" stroke-width="7"/>
+        <text x="120" y="176" text-anchor="middle" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="22" font-weight="800" fill="#5d6b62">生成中</text>
+      </svg>
+    `;
+    return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+  }, []);
 
   const availableScenes = useMemo(
     () => ECOMMERCE_SCENE_TEMPLATES.filter((template) => template.mode === form.generationMode),
@@ -1154,6 +1179,18 @@ export function SidePanelApp() {
     }, UPDATE_CHECK_INTERVAL_MS);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    const update = extensionVersionState.update;
+    if (!update) {
+      setExtensionUpdateDialogOpen(false);
+      return;
+    }
+    const updateKey = `${update.target}:${update.version}`;
+    if (window.localStorage.getItem(UPDATE_DIALOG_DISMISSED_STORAGE_KEY) !== updateKey) {
+      setExtensionUpdateDialogOpen(true);
+    }
+  }, [extensionVersionState.update]);
 
   useEffect(() => {
     if (textTranslationViewOpen) {
@@ -1452,6 +1489,19 @@ export function SidePanelApp() {
     if (update.installHelpUrl) {
       await chrome.tabs.create({ url: absoluteAppUrl(update.installHelpUrl, apiBaseUrl()) });
     }
+  }
+
+  function dismissExtensionUpdateDialog(): void {
+    const update = extensionVersionState.update;
+    if (update) {
+      window.localStorage.setItem(UPDATE_DIALOG_DISMISSED_STORAGE_KEY, `${update.target}:${update.version}`);
+    }
+    setExtensionUpdateDialogOpen(false);
+  }
+
+  async function downloadExtensionUpdateFromDialog(): Promise<void> {
+    dismissExtensionUpdateDialog();
+    await upgradeExtension();
   }
 
   async function refreshMe(token = auth.token, baseUrl = apiBaseUrl()): Promise<AuthUser | null> {
@@ -1874,6 +1924,49 @@ export function SidePanelApp() {
             <button className="primary-button" disabled={editDialog.loading} type="button" onClick={() => void submitEditImage()}>
               {editDialog.loading ? <Loader2 className="spin" size={15} /> : <Wand2 size={15} />}
               重新生成
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function renderExtensionUpdateDialog(): JSX.Element | null {
+    const update = extensionVersionState.update;
+    if (!extensionUpdateDialogOpen || !update) {
+      return null;
+    }
+
+    return (
+      <div className="edit-modal" role="dialog" aria-modal="true" aria-labelledby="extension-update-title">
+        <div className="edit-modal-card update-dialog-card">
+          <div className="edit-modal-header">
+            <div>
+              <strong id="extension-update-title">发现插件新版本 v{update.version}</strong>
+              <span>当前版本 v{extensionVersionState.currentVersion}，建议下载新版压缩包后重新加载插件。</span>
+            </div>
+            <button className="mini-button icon-mini" type="button" onClick={dismissExtensionUpdateDialog}>
+              <X size={14} />
+            </button>
+          </div>
+          {update.releaseNotes && update.releaseNotes.length > 0 ? (
+            <ul className="version-notes update-dialog-notes">
+              {update.releaseNotes.map((note) => (
+                <li key={note}>{note}</li>
+              ))}
+            </ul>
+          ) : null}
+          <div className="update-dialog-meta">
+            <span>{extensionTarget() === "dev" ? "Dev" : "Prod"} 通道</span>
+            <span>{formatBytes(update.sizeBytes)}</span>
+          </div>
+          <div className="edit-modal-actions">
+            <button className="mini-button" type="button" onClick={dismissExtensionUpdateDialog}>
+              稍后
+            </button>
+            <button className="primary-button" type="button" onClick={() => void downloadExtensionUpdateFromDialog()}>
+              <Download size={15} />
+              下载升级包
             </button>
           </div>
         </div>
@@ -3588,6 +3681,8 @@ export function SidePanelApp() {
                   const total = job.totalScenes ?? job.records?.length ?? 0;
                   const progress = job.progress ?? (total > 0 ? Math.round((completed / total) * 100) : undefined);
                   const assets = job.records?.flatMap((record) => record.outputs.flatMap((output) => output.asset ? [output.asset] : [])) ?? [];
+                  const thumbnails = assets.slice(0, 4);
+                  const showPlaceholder = thumbnails.length === 0 && (job.status === "running" || job.status === "pending");
                   return (
                     <article
                       className="history-card"
@@ -3639,9 +3734,9 @@ export function SidePanelApp() {
                       ) : (
                         <span className="muted-line">暂无来源商品链接</span>
                       )}
-                      {assets.length > 0 ? (
+                      {thumbnails.length > 0 ? (
                         <div className="asset-list">
-                          {assets.map((asset, index) => (
+                          {thumbnails.map((asset, index) => (
                             <button
                               className="asset-thumb"
                               key={asset.id}
@@ -3655,6 +3750,12 @@ export function SidePanelApp() {
                               <img alt={`任务图片 ${index + 1}`} loading="lazy" src={assetPreviewUrl(asset, 192)} />
                             </button>
                           ))}
+                        </div>
+                      ) : showPlaceholder ? (
+                        <div className="asset-list">
+                          <div className="asset-thumb asset-thumb--placeholder" aria-hidden="true">
+                            <img alt="" src={historyPlaceholderImage} />
+                          </div>
                         </div>
                       ) : (
                         <span className="muted-line">暂无图片链接</span>
@@ -3737,6 +3838,7 @@ export function SidePanelApp() {
           </div>
         ) : null}
       </section>
+      {renderExtensionUpdateDialog()}
     </main>
   );
 }

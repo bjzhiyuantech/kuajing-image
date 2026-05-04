@@ -1337,6 +1337,28 @@ textarea:focus {
   width: 100%;
 }
 
+.update-dialog-card {
+  display: grid;
+  gap: 12px;
+}
+
+.update-dialog-notes {
+  background: #f7faf8;
+  border: 1px solid #e4ebe7;
+  border-radius: 8px;
+  margin: 0;
+  padding: 10px 10px 10px 28px;
+}
+
+.update-dialog-meta {
+  align-items: center;
+  color: #66766d;
+  display: flex;
+  font-size: 11px;
+  gap: 10px;
+  justify-content: space-between;
+}
+
 .quota-row {
   display: flex;
   justify-content: space-between;
@@ -1512,6 +1534,10 @@ textarea:focus {
   padding: 0;
 }
 
+.asset-thumb--placeholder {
+  cursor: default;
+}
+
 .asset-thumb:hover,
 .asset-thumb:focus-visible {
   border-color: #18a678;
@@ -1524,6 +1550,10 @@ textarea:focus {
   height: 100%;
   object-fit: cover;
   width: 100%;
+}
+
+.asset-thumb--placeholder img {
+  filter: saturate(0.92) contrast(0.98);
 }
 
 .stats-grid {
