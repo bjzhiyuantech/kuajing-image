@@ -195,6 +195,12 @@ const ecommerceModeCards = [
     desc: "按平台和类目生成整套 Listing Image Kit。"
   },
   {
+    id: "marketing-main",
+    icon: BadgeCheck,
+    title: "营销主图设计",
+    desc: "按产品、人群、场景、卖点和信任元素设计点击主图。"
+  },
+  {
     id: "text-translation",
     icon: Globe2,
     title: "文字翻译",
@@ -205,6 +211,7 @@ const ecommerceModeLabels: Record<EcommerceGenerationMode, string> = {
   enhance: "原图增强",
   creative: "场景创作",
   "category-kit": "品类套图",
+  "marketing-main": "营销主图设计",
   "text-translation": "文字翻译"
 };
 const ecommerceScenesByMode = {
@@ -222,6 +229,7 @@ const ecommerceScenesByMode = {
     "allegro-scarf-bag-styling",
     "allegro-scarf-lifestyle"
   ],
+  "marketing-main": ["marketing-main-hero", "marketing-main-people-scene", "marketing-main-benefit-hook", "marketing-main-trust-promo"],
   "text-translation": ["text-translation"]
 } satisfies Record<EcommerceGenerationMode, EcommerceSceneTemplateId[]>;
 const ecommerceSizePresetIds = new Set(["square-1k", "poster-landscape", "poster-portrait", "story-9-16"]);

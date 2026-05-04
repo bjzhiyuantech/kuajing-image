@@ -311,6 +311,12 @@ textarea:focus {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 }
 
+.three-col {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .scene-grid {
   display: grid;
   gap: 8px;
@@ -425,7 +431,8 @@ textarea:focus {
   font-weight: 700;
 }
 
-.category-kit-panel p {
+.category-kit-panel p,
+.marketing-main-panel p {
   color: #607168;
   font-size: 11px;
   line-height: 1.45;
@@ -459,6 +466,38 @@ textarea:focus {
   border: 1px solid #e4ebe7;
   border-radius: 6px;
   padding: 8px;
+}
+
+.methodology-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 10px 0;
+}
+
+.methodology-grid div {
+  background: #f7faf8;
+  border: 1px solid #e4ebe7;
+  border-radius: 7px;
+  padding: 8px;
+}
+
+.methodology-grid strong,
+.methodology-grid span {
+  display: block;
+}
+
+.methodology-grid strong {
+  color: #0d644f;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.methodology-grid span {
+  color: #607168;
+  font-size: 11px;
+  line-height: 1.35;
+  margin-top: 4px;
 }
 
 .kit-toggle-list {

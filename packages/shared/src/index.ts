@@ -29,7 +29,7 @@ export type EcommercePlatform =
   | "dewu"
   | "other";
 export type EcommerceMarket = "cn" | "us" | "uk" | "pl" | "eu" | "ca" | "au" | "jp" | "kr" | "sg" | "mx" | "br" | "global";
-export type EcommerceGenerationMode = "enhance" | "creative" | "category-kit" | "text-translation";
+export type EcommerceGenerationMode = "enhance" | "creative" | "category-kit" | "marketing-main" | "text-translation";
 export type EcommerceTextLanguage =
   | "none"
   | "zh-hans"
@@ -208,6 +208,38 @@ export const ECOMMERCE_SCENE_TEMPLATES = [
     defaultSizePresetId: "poster-portrait",
     prompt:
       "Create a promotional marketplace poster from the source product image. Keep the product exact and build a clean commercial layout with room for discount text, brand area, and short selling points. Do not redesign the product or add misleading claims."
+  },
+  {
+    id: "marketing-main-hero",
+    mode: "marketing-main",
+    label: "点击主图",
+    defaultSizePresetId: "square-1k",
+    prompt:
+      "Create a high-click domestic Chinese e-commerce marketing main image from 1 to 3 product reference images. Preserve the real product identity, color, material, shape, and key details. Build a search-result thumbnail composition with the product as the clearest hero, one strong reason to click, concise Simplified Chinese copy, and a clean commercial layout. Choose whether the product should be shown alone, worn, in use, brewed, plated, held, opened, or placed in a scene according to category and target customer. Avoid unsupported claims, fake certificates, fake official badges, fake platform badges, and unreadable text."
+  },
+  {
+    id: "marketing-main-people-scene",
+    mode: "marketing-main",
+    label: "人群场景主图",
+    defaultSizePresetId: "square-1k",
+    prompt:
+      "Create a domestic Chinese marketplace main image that combines the product with a credible target-customer and usage-scene expression when it improves click appeal. Apparel and shoes should usually be worn on a suitable model or body detail; tea, drinks, and food should usually show the prepared or consumed state plus the product package; gifts should show a clear gifting moment or recipient context. Keep the product truthful and visually dominant. Use short readable Simplified Chinese selling copy only when supported by the brief."
+  },
+  {
+    id: "marketing-main-benefit-hook",
+    mode: "marketing-main",
+    label: "卖点钩子主图",
+    defaultSizePresetId: "square-1k",
+    prompt:
+      "Create a high-converting Chinese e-commerce main image centered on the strongest purchase reason. Use one main hook, 2 to 3 short supporting points, and visual evidence such as material texture, before/after context, size comparison, usage result, comfort, freshness, gift value, convenience, or service promise only when supported by the product brief or visible reference. Keep copy concise, large, and readable in a small thumbnail."
+  },
+  {
+    id: "marketing-main-trust-promo",
+    mode: "marketing-main",
+    label: "信任促销主图",
+    defaultSizePresetId: "square-1k",
+    prompt:
+      "Create a domestic Chinese e-commerce marketing main image that adds credible trust and conversion elements around the product: service badges such as 包邮, 7天无理由, 现货速发, 正品保障, or 官方/旗舰店 only if the user explicitly provides them. Use one small corner badge or benefit chip when useful, never fake platform certification or official status. Product remains the hero, layout is clean, no clutter, no watermark."
   },
   {
     id: "text-translation",

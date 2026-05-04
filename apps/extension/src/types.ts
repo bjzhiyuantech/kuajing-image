@@ -78,6 +78,19 @@ export interface BatchFormState {
     text: string;
     placement: "top-left" | "top-right" | "bottom-left" | "bottom-right";
   };
+  marketingMain: {
+    category: string;
+    productExpression: string;
+    targetCustomer: string;
+    usageScene: string;
+    primaryHook: string;
+    supportPoints: string[];
+    trustBadges: string;
+    copyTone: "auto" | "direct" | "premium" | "gift" | "young" | "elder";
+    allowPeople: boolean;
+    allowPreparedState: boolean;
+    allowSceneProps: boolean;
+  };
 }
 
 export interface BatchTask {

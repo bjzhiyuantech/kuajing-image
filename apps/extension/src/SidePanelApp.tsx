@@ -216,6 +216,12 @@ const allegroScarfConversionScenes = [
 ] as const;
 
 const allegroScarfAdsScenes = [...allegroScarfConversionScenes, "allegro-scarf-ads-social"] as const;
+const marketingMainScenes = [
+  "marketing-main-hero",
+  "marketing-main-people-scene",
+  "marketing-main-benefit-hook",
+  "marketing-main-trust-promo"
+] as const;
 
 const categoryKitScenesByVersion: Record<CategoryKitVersion, EcommerceSceneTemplateId[]> = {
   compliance: [...allegroScarfComplianceScenes],
@@ -280,6 +286,19 @@ const defaultForm: BatchFormState = {
     logoFileName: "",
     text: "",
     placement: "top-right"
+  },
+  marketingMain: {
+    category: "",
+    productExpression: "",
+    targetCustomer: "",
+    usageScene: "",
+    primaryHook: "",
+    supportPoints: ["", "", ""],
+    trustBadges: "",
+    copyTone: "auto",
+    allowPeople: true,
+    allowPreparedState: true,
+    allowSceneProps: true
   }
 };
 
@@ -287,13 +306,15 @@ const defaultSceneIdsByMode: Record<EcommerceGenerationMode, EcommerceSceneTempl
   enhance: ["marketplace-main", "logo-benefit", "feature-benefit"],
   creative: ["lifestyle", "model-wear", "accessory-match"],
   "category-kit": [...allegroScarfConversionScenes],
+  "marketing-main": [...marketingMainScenes],
   "text-translation": [TEXT_TRANSLATION_SCENE_ID]
 };
 
 const generationModes: Array<{ id: EcommerceGenerationMode; label: string; hint: string }> = [
   { id: "enhance", label: "原图增强", hint: "保留商品原貌，生成卖点文字和电商排版。" },
   { id: "creative", label: "场景创作", hint: "依据主图生成生活方式、模特穿戴和搭配场景。" },
-  { id: "category-kit", label: "品类套图", hint: "按平台和类目生成整套 Listing Image Kit。" }
+  { id: "category-kit", label: "品类套图", hint: "按平台和类目生成整套 Listing Image Kit。" },
+  { id: "marketing-main", label: "营销主图设计", hint: "按产品、人群、场景、卖点和信任元素设计点击主图。" }
 ];
 
 const textTranslationMode = {
@@ -554,7 +575,7 @@ async function mergeReferenceImages(images: ReferenceImageInput[]): Promise<Refe
     return images[0];
   }
 
-  const loadedImages = await Promise.all(images.slice(0, 2).map((item) => imageFromUrl(item.dataUrl)));
+  const loadedImages = await Promise.all(images.slice(0, 3).map((item) => imageFromUrl(item.dataUrl)));
   const cellSize = 720;
   const gap = 18;
   const padding = 28;
@@ -582,7 +603,7 @@ async function mergeReferenceImages(images: ReferenceImageInput[]): Promise<Refe
 }
 
 async function referenceImageFromSources(urls: string[]): Promise<ReferenceImageInput | undefined> {
-  const trimmedUrls = urls.map((url) => url.trim()).filter(Boolean).slice(0, 2);
+  const trimmedUrls = urls.map((url) => url.trim()).filter(Boolean).slice(0, 3);
   if (trimmedUrls.length === 0) {
     return undefined;
   }
@@ -1114,6 +1135,7 @@ export function SidePanelApp() {
   const selectedReferenceImageUrl = form.referenceImageUrl.trim();
   const selectedReferenceImageUrls = form.referenceImageUrls.length > 0 ? form.referenceImageUrls : selectedReferenceImageUrl ? [selectedReferenceImageUrl] : [];
   const selectedReferenceImageUrlsKey = selectedReferenceImageUrls.join("|");
+  const maxReferenceImageCount = form.generationMode === "marketing-main" ? 3 : 2;
   const referenceImageOptions = useMemo(
     () => [
       ...uploadedReferenceImages.map((image) => ({ key: image.id, url: image.dataUrl, label: image.fileName, uploaded: true })),
@@ -2248,7 +2270,7 @@ export function SidePanelApp() {
       const exists = current.referenceImageUrls.includes(url);
       const nextUrls = exists
         ? current.referenceImageUrls.filter((item) => item !== url)
-        : [...current.referenceImageUrls, url].slice(-2);
+        : [...current.referenceImageUrls, url].slice(current.generationMode === "marketing-main" ? -3 : -2);
       return {
         ...current,
         referenceImageUrl: nextUrls[0] ?? "",
@@ -2316,9 +2338,111 @@ export function SidePanelApp() {
     });
   }
 
+  function inferMarketingMainExpression(category: string): string {
+    const value = category.trim().toLowerCase();
+    if (!value) {
+      return "Autonomously decide the strongest visual expression from the product category and reference images.";
+    }
+    if (/(服装|女装|男装|童装|连衣裙|衬衫|外套|内衣|apparel|clothing|dress|shirt|coat)/i.test(value)) {
+      return "Show the garment worn on a suitable model or body crop when possible; make fit, drape, fabric, and style instantly visible.";
+    }
+    if (/(鞋|靴|运动鞋|凉鞋|拖鞋|shoe|sneaker|boot|sandals?)/i.test(value)) {
+      return "Show the shoe or boot worn on foot, with a secondary clear product angle if useful; emphasize foot comfort, shape, sole, and outfit context.";
+    }
+    if (/(茶|茶叶|乌龙|普洱|绿茶|红茶|tea|oolong|pu.?erh|matcha)/i.test(value)) {
+      return "Show both the real package or loose tea and the brewed tea liquor; use a tea cup, gaiwan, glass cup, or gongfu tea vessel when it matches the product grade.";
+    }
+    if (/(食品|零食|饮料|咖啡|酒|food|snack|drink|coffee|wine)/i.test(value)) {
+      return "Show the edible or drinkable prepared state together with the package, so the taste, freshness, portion, and consumption scene are immediately understandable.";
+    }
+    if (/(礼品|礼盒|gift|present)/i.test(value)) {
+      return "Show a believable gifting scenario, recipient context, and packaging only when real packaging is provided or described.";
+    }
+    if (/(护肤|美妆|彩妆|香水|beauty|skincare|makeup|perfume)/i.test(value)) {
+      return "Show the product texture, application result, premium bottle or package, and target-user beauty routine without fake before-after medical claims.";
+    }
+    if (/(家居|收纳|家具|床品|home|furniture|storage|bedding)/i.test(value)) {
+      return "Show the product in a real home scenario with scale, placement, texture, and before-use clarity.";
+    }
+    return "Autonomously choose product-only, in-use, model-worn, prepared-state, detail, or scene expression according to what would make the category easiest to understand and most clickable.";
+  }
+
+  function marketingMainToneLabel(tone: BatchFormState["marketingMain"]["copyTone"]): string {
+    if (tone === "direct") return "direct value-focused domestic marketplace copy";
+    if (tone === "premium") return "premium, restrained, trustworthy copy";
+    if (tone === "gift") return "gift-oriented warm copy";
+    if (tone === "young") return "younger trend-aware copy";
+    if (tone === "elder") return "clear respectful copy suitable for older recipients or family gifting";
+    return "auto-select copy tone from target customer, platform, category, and scene";
+  }
+
+  function marketingMainDirection(marketingMain: BatchFormState["marketingMain"]): string {
+    const category = marketingMain.category.trim();
+    const expression = marketingMain.productExpression.trim() || inferMarketingMainExpression(category || form.product.title);
+    const supportPoints = marketingMain.supportPoints.map((point) => point.trim()).filter(Boolean);
+    const targetCustomer = marketingMain.targetCustomer.trim() || form.product.targetCustomer?.trim() || "infer from product title, price cues, category, and usage context";
+    const usageScene = marketingMain.usageScene.trim() || form.product.usageScene?.trim() || "infer the most clickable purchase or usage scenario";
+    const primaryHook = marketingMain.primaryHook.trim() || "infer one strongest buying reason from product title, description, visible reference, and selling points";
+    const trustBadges = marketingMain.trustBadges.trim() || "none provided; do not invent official, certification, platform, or service badges";
+    const peopleRule = marketingMain.allowPeople
+      ? "People, body parts, or model-worn presentation are allowed when category-appropriate; keep anatomy natural and product truthful."
+      : "Do not add people, faces, hands, or body parts; express usage through product, scene, props, and copy.";
+    const preparedRule = marketingMain.allowPreparedState
+      ? "Prepared or usage-result state is allowed when category-appropriate, such as brewed tea, plated food, opened package, texture swatch, worn shoes, or assembled product."
+      : "Do not show a prepared or transformed state unless it is already visible in the reference image.";
+    const sceneRule = marketingMain.allowSceneProps
+      ? "Scene props are allowed only to clarify customer, usage, season, gift, travel, party, home, commute, or outdoor context; do not let props steal attention."
+      : "Use a clean product-led composition with minimal or no scene props.";
+
+    return [
+      "Marketing main image methodology for domestic Chinese e-commerce:",
+      "Start by deciding how the product should be expressed: product itself, on-model/worn, in-use, prepared state, detail proof, packaging, gift state, or scene outcome.",
+      "Then define the target customer, usage or gifting scenario, one strongest click hook, visual proof, concise selling copy, and optional trust/service badges.",
+      "Element priority: product clarity first; then target customer fit; then scene and purchase occasion; then strongest selling point; then trust, promo, service, corner badge, package, or official mark only if explicitly supported.",
+      `Product category: ${category || "infer from title and reference image"}.`,
+      `Recommended product expression: ${expression}.`,
+      `Target customer: ${targetCustomer}.`,
+      `Usage / purchase scene: ${usageScene}.`,
+      `Primary click hook: ${primaryHook}.`,
+      supportPoints.length ? `Supporting selling points: ${supportPoints.join("; ")}.` : "Supporting selling points: infer 2-3 concise, non-exaggerated points only from provided product info and visible reference.",
+      `Trust / promo / service badges explicitly allowed: ${trustBadges}.`,
+      `Copy tone: ${marketingMainToneLabel(marketingMain.copyTone)}.`,
+      peopleRule,
+      preparedRule,
+      sceneRule,
+      "Thumbnail rule: design for search-feed click-through. The product must be recognizable at small size, text must be large and short, composition should have strong contrast and clear hierarchy.",
+      "Compliance rule: do not invent absolute claims, medical efficacy, ranking, fake official status, fake platform badge, fake certification, counterfeit logo, celebrity, or unsupported discount."
+    ].join("\n");
+  }
+
+  function updateMarketingMain(patch: Partial<BatchFormState["marketingMain"]>): void {
+    setForm((current) => ({
+      ...current,
+      marketingMain: {
+        ...current.marketingMain,
+        ...patch
+      }
+    }));
+  }
+
+  function updateMarketingSupportPoint(index: number, value: string): void {
+    setForm((current) => {
+      const supportPoints = [...current.marketingMain.supportPoints];
+      supportPoints[index] = value;
+      return {
+        ...current,
+        marketingMain: {
+          ...current.marketingMain,
+          supportPoints
+        }
+      };
+    });
+  }
+
   async function uploadReferenceImages(event: ChangeEvent<HTMLInputElement>): Promise<void> {
     try {
-      const files = Array.from(event.target.files ?? []).filter((file) => file.type.startsWith("image/")).slice(0, 2);
+      const maxReferenceImages = form.generationMode === "marketing-main" ? 3 : 2;
+      const files = Array.from(event.target.files ?? []).filter((file) => file.type.startsWith("image/")).slice(0, maxReferenceImages);
       event.target.value = "";
       if (files.length === 0) {
         return;
@@ -2338,7 +2462,7 @@ export function SidePanelApp() {
       );
       setUploadedReferenceImages((current) => [...uploadedImages, ...current].slice(0, 8));
       setForm((current) => {
-        const nextUrls = [...uploadedImages.map((image) => image.dataUrl), ...current.referenceImageUrls].slice(0, 2);
+        const nextUrls = [...uploadedImages.map((image) => image.dataUrl), ...current.referenceImageUrls].slice(0, maxReferenceImages);
         return {
           ...current,
           referenceImageUrl: nextUrls[0] ?? "",
@@ -2660,21 +2784,23 @@ export function SidePanelApp() {
       generationMode,
       sceneTemplateIds: defaultSceneIdsByMode[generationMode],
       platform: generationMode === "category-kit" ? "allegro" : current.platform,
-      market: generationMode === "category-kit" ? "pl" : current.market,
+      market: generationMode === "category-kit" ? "pl" : generationMode === "marketing-main" ? "cn" : current.market,
       sizeMode: generationMode === "category-kit" ? "preset" : current.sizeMode,
-      size: generationMode === "category-kit" ? { width: 2048, height: 2048 } : current.size,
+      size: generationMode === "category-kit" ? { width: 2048, height: 2048 } : generationMode === "marketing-main" ? { width: 1024, height: 1024 } : current.size,
       countPerScene: generationMode === "category-kit" ? 1 : current.countPerScene,
-      stylePresetId: generationMode === "enhance" || generationMode === "category-kit" || generationMode === "text-translation" ? "product" : "photoreal",
+      stylePresetId: generationMode === "enhance" || generationMode === "category-kit" || generationMode === "marketing-main" || generationMode === "text-translation" ? "product" : "photoreal",
       textLanguage:
         generationMode === "enhance"
           ? "none"
           : generationMode === "category-kit"
             ? "pl"
-            : generationMode === "text-translation"
-              ? current.textLanguage === "none"
-                ? "ko"
-                : current.textLanguage
-              : "none",
+            : generationMode === "marketing-main"
+              ? "zh-hans"
+              : generationMode === "text-translation"
+                ? current.textLanguage === "none"
+                  ? "ko"
+                  : current.textLanguage
+                : "none",
       allowTextRecreation: true,
       removeWatermarkAndLogo: generationMode === "enhance" ? current.removeWatermarkAndLogo : true
     }));
@@ -2685,6 +2811,8 @@ export function SidePanelApp() {
           ? "原图增强会优先保留商品原貌。"
           : generationMode === "category-kit"
             ? "品类套图会按 Allegro 丝巾类目生成整套上架图片。"
+            : generationMode === "marketing-main"
+              ? "营销主图会按产品表达、人群、场景、卖点和信任元素生成点击主图。"
             : generationMode === "text-translation"
               ? "文字翻译会逐张输出，每张图都会单独翻译并返回。"
             : "场景创作会依据主图重建营销场景。"
@@ -2703,13 +2831,17 @@ export function SidePanelApp() {
       setTask({ id: "validation", status: "failed", message: "请先填写商品标题。", records: [] });
       return;
     }
-    if ((form.generationMode === "enhance" || form.generationMode === "category-kit") && selectedReferenceImageUrls.length === 0) {
+    if ((form.generationMode === "enhance" || form.generationMode === "category-kit" || form.generationMode === "marketing-main") && selectedReferenceImageUrls.length === 0) {
       setTask({ id: "validation", status: "failed", message: "当前模式需要参考图 URL，请先读取商品页、选择候选图，或手动上传商品主图。", records: [] });
       return;
     }
 
     const taskId = createClientId();
-    const effectiveExtraDirection = [form.extraDirection.trim(), form.generationMode === "category-kit" ? categoryKitDirection(form.categoryKit) : ""]
+    const effectiveExtraDirection = [
+      form.extraDirection.trim(),
+      form.generationMode === "category-kit" ? categoryKitDirection(form.categoryKit) : "",
+      form.generationMode === "marketing-main" ? marketingMainDirection(form.marketingMain) : ""
+    ]
       .filter(Boolean)
       .join("\n\n");
     setBatchGenerationLocked(true);
@@ -3152,13 +3284,13 @@ export function SidePanelApp() {
               上传图片
               <input accept="image/*" multiple type="file" onChange={(event) => void uploadReferenceImages(event)} />
             </label>
-            <span>可选 1-2 张，第二张会作为不同角度参考。</span>
+            <span>{form.generationMode === "marketing-main" ? "可选 1-3 张，适合包装、细节、使用状态一起参考。" : "可选 1-2 张，第二张会作为不同角度参考。"}</span>
           </div>
           {referenceImageOptions.length > 0 ? (
             <div className="reference-image-picker" aria-label="商品主图候选">
               <div className="reference-image-picker-header">
                 <strong>从当前页图片选择参考图</strong>
-                <span>已选 {selectedReferenceImageUrls.length}/2 张，第三张会替换最早选择</span>
+                <span>已选 {selectedReferenceImageUrls.length}/{maxReferenceImageCount} 张，超出会替换最早选择</span>
               </div>
               <div className="reference-image-grid">
                 {referenceImageOptions.map((item, index) => (
@@ -3320,6 +3452,101 @@ export function SidePanelApp() {
                 <Wand2 size={15} />
                 {scene.label}
               </div>
+            ))}
+          </div>
+        </section>
+      ) : form.generationMode === "marketing-main" ? (
+        <section className="panel marketing-main-panel">
+          <div className="kit-heading">
+            <div>
+              <h2>营销主图方法论</h2>
+              <p>先判断产品如何表达，再定义人群、场景、点击理由和可信元素；留空项会自主判断改写。</p>
+            </div>
+            <span>{effectiveSelectedScenes.length} 版</span>
+          </div>
+          <div className="methodology-grid">
+            <div><strong>产品</strong><span>单品、穿戴、冲泡、食用、开箱、细节或包装。</span></div>
+            <div><strong>人群</strong><span>年轻女性、学生、老师、长辈、宝妈、商务人群等。</span></div>
+            <div><strong>场景</strong><span>送礼、通勤、旅行、聚会、居家、户外、节日等。</span></div>
+            <div><strong>卖点</strong><span>为什么现在点进来：材质、效果、舒适、礼品、服务。</span></div>
+          </div>
+          <div className="two-col">
+            <label>
+              <span>产品类目</span>
+              <input placeholder="例如 女装 / 茶叶 / 雪地靴 / 礼盒" value={form.marketingMain.category} onChange={(event) => updateMarketingMain({ category: event.target.value })} />
+            </label>
+            <label>
+              <span>文案语气</span>
+              <select value={form.marketingMain.copyTone} onChange={(event) => updateMarketingMain({ copyTone: event.target.value as BatchFormState["marketingMain"]["copyTone"] })}>
+                <option value="auto">自动判断</option>
+                <option value="direct">直接利益点</option>
+                <option value="premium">高级质感</option>
+                <option value="gift">送礼温暖</option>
+                <option value="young">年轻潮流</option>
+                <option value="elder">长辈友好</option>
+              </select>
+            </label>
+          </div>
+          <label>
+            <span>产品如何表达</span>
+            <textarea
+              placeholder="可留空自动判断。例如：服装穿在模特身上；茶要有泡好的茶汤和功夫碗；鞋靴穿脚上并展示鞋底。"
+              rows={3}
+              value={form.marketingMain.productExpression}
+              onChange={(event) => updateMarketingMain({ productExpression: event.target.value })}
+            />
+          </label>
+          <div className="two-col">
+            <label>
+              <span>目标人群</span>
+              <input placeholder="例如 年轻女性 / 老师 / 长辈 / 新手妈妈" value={form.marketingMain.targetCustomer} onChange={(event) => updateMarketingMain({ targetCustomer: event.target.value })} />
+            </label>
+            <label>
+              <span>核心场景</span>
+              <input placeholder="例如 送礼 / 外出旅游 / 聚会 / 通勤" value={form.marketingMain.usageScene} onChange={(event) => updateMarketingMain({ usageScene: event.target.value })} />
+            </label>
+          </div>
+          <label>
+            <span>主卖点 / 点击理由</span>
+            <input placeholder="一句话说明为什么买；留空则结合商品信息自动提炼" value={form.marketingMain.primaryHook} onChange={(event) => updateMarketingMain({ primaryHook: event.target.value })} />
+          </label>
+          <div className="three-col">
+            {form.marketingMain.supportPoints.map((point, index) => (
+              <label key={index}>
+                <span>辅助卖点 {index + 1}</span>
+                <input value={point} onChange={(event) => updateMarketingSupportPoint(index, event.target.value)} />
+              </label>
+            ))}
+          </div>
+          <label>
+            <span>角标 / 信任 / 服务元素</span>
+            <input placeholder="例如 官方旗舰店、包邮、7天无理由、现货速发；没有就留空，系统不会编造" value={form.marketingMain.trustBadges} onChange={(event) => updateMarketingMain({ trustBadges: event.target.value })} />
+          </label>
+          <div className="kit-toggle-list">
+            <label className="checkbox-row">
+              <input checked={form.marketingMain.allowPeople} type="checkbox" onChange={(event) => updateMarketingMain({ allowPeople: event.target.checked })} />
+              <span>允许出现人物、模特、手部或穿戴展示</span>
+            </label>
+            <label className="checkbox-row">
+              <input checked={form.marketingMain.allowPreparedState} type="checkbox" onChange={(event) => updateMarketingMain({ allowPreparedState: event.target.checked })} />
+              <span>允许展示冲泡、食用、开箱、穿脚、上身等使用状态</span>
+            </label>
+            <label className="checkbox-row">
+              <input checked={form.marketingMain.allowSceneProps} type="checkbox" onChange={(event) => updateMarketingMain({ allowSceneProps: event.target.checked })} />
+              <span>允许加入场景道具，但商品必须是第一视觉主体</span>
+            </label>
+          </div>
+          <div className="scene-grid kit-scene-grid">
+            {availableScenes.map((scene) => (
+              <button
+                className={form.sceneTemplateIds.includes(scene.id) ? "scene-button active" : "scene-button"}
+                key={scene.id}
+                type="button"
+                onClick={() => toggleScene(scene.id)}
+              >
+                <Wand2 size={15} />
+                {scene.label}
+              </button>
             ))}
           </div>
         </section>
