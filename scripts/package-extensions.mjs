@@ -4,6 +4,7 @@ import { basename, join, relative, resolve, sep } from "node:path";
 
 const rootDir = resolve(import.meta.dirname, "..");
 const outputDir = resolve(rootDir, process.argv[2] || "downloads");
+const requestedTarget = process.argv[3] || "all";
 const extensionDir = resolve(rootDir, "apps/extension");
 const extensionPackage = JSON.parse(readFileSync(resolve(extensionDir, "package.json"), "utf8"));
 const version = extensionPackage.version || "0.0.0";
@@ -27,6 +28,11 @@ const targets = [
     outputFile: resolve(outputDir, `kuajing-image-extension-prod-v${version}.zip`)
   }
 ];
+
+if (!["all", "dev", "prod"].includes(requestedTarget)) {
+  console.error("Usage: node scripts/package-extensions.mjs [outputDir] [all|dev|prod]");
+  process.exit(1);
+}
 
 const crcTable = new Uint32Array(256);
 for (let i = 0; i < 256; i += 1) {
@@ -147,7 +153,7 @@ function createZip(sourceDir, outputFile) {
   writeFileSync(outputFile, Buffer.concat([...localParts, ...centralParts, endRecord]));
 }
 
-for (const target of targets) {
+for (const target of targets.filter((target) => requestedTarget === "all" || target.name === requestedTarget)) {
   createZip(target.sourceDir, target.outputFile);
   const latestZipFile = resolve(outputDir, `kuajing-image-extension-${target.name}-latest.zip`);
   copyFileSync(target.outputFile, latestZipFile);

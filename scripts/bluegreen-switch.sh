@@ -9,13 +9,16 @@ UPSTREAM_FILE="${UPSTREAM_FILE:-deploy/nginx/active-upstream.conf}"
 DEV_UPSTREAM_FILE="${DEV_UPSTREAM_FILE:-deploy/nginx/dev-upstream.conf}"
 PUBLIC_PORT="${PUBLIC_PORT:-8787}"
 DEV_PUBLIC_PORT="${DEV_PUBLIC_PORT:-8790}"
+DOWNLOADS_DIR="${DOWNLOADS_DIR:-downloads}"
 
 mkdir -p "$(dirname "$UPSTREAM_FILE")" "$(dirname "$DEV_UPSTREAM_FILE")" "$(dirname "$ACTIVE_FILE")"
 
-if ! command -v docker >/dev/null 2>&1; then
-  echo "docker command was not found. Install Docker or add it to PATH." >&2
-  exit 1
-fi
+for command_name in docker corepack node; do
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    echo "$command_name command was not found. Install it or add it to PATH." >&2
+    exit 1
+  fi
+done
 
 if [ "${1:-}" = "" ]; then
   if [ -f "$ACTIVE_FILE" ]; then
@@ -45,31 +48,38 @@ case "$target" in
 esac
 dev_service="app-$dev_target"
 
-docker compose -f "$COMPOSE_FILE" up -d --build "$service"
-
-container_id="$(docker compose -f "$COMPOSE_FILE" ps -q "$service")"
-if [ "$container_id" = "" ]; then
-  echo "Could not find container for $service" >&2
-  exit 1
-fi
-
-echo "Waiting for $service to pass /api/health..."
-tries=60
-while [ "$tries" -gt 0 ]; do
-  health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id")"
-  if [ "$health" = "healthy" ] || [ "$health" = "none" ]; then
-    if docker compose -f "$COMPOSE_FILE" exec -T "$service" node -e "fetch('http://127.0.0.1:8787/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"; then
-      break
-    fi
+wait_for_service() {
+  wait_service="$1"
+  container_id="$(docker compose -f "$COMPOSE_FILE" ps -q "$wait_service")"
+  if [ "$container_id" = "" ]; then
+    echo "Could not find container for $wait_service" >&2
+    exit 1
   fi
-  tries=$((tries - 1))
-  sleep 2
-done
 
-if [ "$tries" -eq 0 ]; then
-  echo "$service did not become healthy. Traffic was not switched." >&2
+  echo "Waiting for $wait_service to pass /api/health..."
+  tries=60
+  while [ "$tries" -gt 0 ]; do
+    health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id")"
+    if [ "$health" = "healthy" ] || [ "$health" = "none" ]; then
+      if docker compose -f "$COMPOSE_FILE" exec -T "$wait_service" node -e "fetch('http://127.0.0.1:8787/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"; then
+        return 0
+      fi
+    fi
+    tries=$((tries - 1))
+    sleep 2
+  done
+
+  echo "$wait_service did not become healthy. Traffic was not switched." >&2
   exit 1
-fi
+}
+
+docker compose -f "$COMPOSE_FILE" up -d --build "$service"
+wait_for_service "$service"
+
+mkdir -p "$DOWNLOADS_DIR"
+echo "Building product extension bundle for the promoted environment..."
+corepack pnpm --filter @gpt-image-canvas/extension build:prod
+node scripts/package-extensions.mjs "$DOWNLOADS_DIR" prod
 
 cat > "$UPSTREAM_FILE" <<EOF
 upstream active_app {

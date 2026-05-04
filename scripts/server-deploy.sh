@@ -123,16 +123,9 @@ docker compose -f "$COMPOSE_FILE" exec -T nginx nginx -s reload
 
 mkdir -p "$DOWNLOADS_DIR"
 
-echo "Building dev and product extension bundles..."
+echo "Building dev extension bundle..."
 corepack pnpm --filter @gpt-image-canvas/extension build:dev
-corepack pnpm --filter @gpt-image-canvas/extension build:prod
-node scripts/package-extensions.mjs "$DOWNLOADS_DIR"
-
-echo "Rebuilding $service with the freshly packaged downloads..."
-docker compose -f "$COMPOSE_FILE" up -d --build "$service"
-wait_for_service "$service"
-docker compose -f "$COMPOSE_FILE" up -d nginx
-docker compose -f "$COMPOSE_FILE" exec -T nginx nginx -s reload
+node scripts/package-extensions.mjs "$DOWNLOADS_DIR" dev
 
 echo "Dev environment is $service on http://localhost:$DEV_PUBLIC_PORT"
 echo "Extension packages are in $DOWNLOADS_DIR/"
