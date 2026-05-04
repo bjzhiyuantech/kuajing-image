@@ -183,6 +183,13 @@ interface EditImageDialogState {
   loading: boolean;
 }
 
+interface QueuedJobDialogState {
+  jobId: string;
+  message: string;
+  totalScenes?: number;
+  completedScenes?: number;
+}
+
 interface UploadedReferenceImage {
   id: string;
   dataUrl: string;
@@ -1051,6 +1058,7 @@ export function SidePanelApp() {
   const [hiddenResultKeys, setHiddenResultKeys] = useState<Set<string>>(() => new Set());
   const [localResultRecords, setLocalResultRecords] = useState<GenerationRecord[]>([]);
   const [editDialog, setEditDialog] = useState<EditImageDialogState | null>(null);
+  const [queuedJobDialog, setQueuedJobDialog] = useState<QueuedJobDialogState | null>(null);
   const [uploadedReferenceImages, setUploadedReferenceImages] = useState<UploadedReferenceImage[]>([]);
   const [worksViewOpen, setWorksViewOpen] = useState(false);
   const [textTranslationViewOpen, setTextTranslationViewOpen] = useState(false);
@@ -1826,6 +1834,12 @@ export function SidePanelApp() {
     setToolPanelOpen(true);
   }
 
+  function openQueuedJobHistory(): void {
+    setQueuedJobDialog(null);
+    openTool("history");
+    window.requestAnimationFrame(() => window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" }));
+  }
+
   function toolTitle(tab: ToolTab): string {
     if (tab === "account") return "账户";
     if (tab === "billing") return "套餐与余额";
@@ -2002,6 +2016,46 @@ export function SidePanelApp() {
     );
   }
 
+  function renderQueuedJobDialog(): JSX.Element | null {
+    if (!queuedJobDialog) {
+      return null;
+    }
+
+    return (
+      <div className="edit-modal" role="dialog" aria-modal="true" aria-labelledby="queued-job-title">
+        <div className="edit-modal-card queued-job-dialog-card">
+          <div className="edit-modal-header">
+            <div>
+              <strong id="queued-job-title">任务已进入后端队列</strong>
+              <span>按钮已释放，可以继续提交下一组；服务端会继续生成当前任务。</span>
+            </div>
+            <button className="mini-button icon-mini" type="button" onClick={() => setQueuedJobDialog(null)}>
+              <X size={14} />
+            </button>
+          </div>
+          <div className="queued-job-summary">
+            <Loader2 className="spin" size={18} />
+            <div>
+              <strong>{queuedJobDialog.message}</strong>
+              <span>
+                {queuedJobDialog.completedScenes ?? 0}/{queuedJobDialog.totalScenes ?? effectiveSelectedScenes.length} 场景 · {queuedJobDialog.jobId}
+              </span>
+            </div>
+          </div>
+          <div className="edit-modal-actions">
+            <button className="mini-button" type="button" onClick={() => setQueuedJobDialog(null)}>
+              继续生成
+            </button>
+            <button className="primary-button" type="button" onClick={openQueuedJobHistory}>
+              <Clock3 size={15} />
+              查看历史任务
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   function openEditImageDialog(item: ResultImageItem): void {
     setEditDialog({
       item,
@@ -2090,6 +2144,21 @@ export function SidePanelApp() {
         void refreshHistory();
         void refreshStats();
       }
+    }
+  }
+
+  function handleQueuedBatchJob(body: EcommerceBatchGenerateResponse, token = auth.token): void {
+    applyBatchJob(body, token);
+    setBatchGenerationLocked(false);
+    setQueuedJobDialog({
+      jobId: body.jobId,
+      message: body.message || "批量任务已进入后端队列，服务端正在生成。",
+      totalScenes: body.totalScenes,
+      completedScenes: body.completedScenes
+    });
+    if (auth.token.trim() || token.trim()) {
+      void refreshHistory(true, token);
+      void refreshStats(true, token);
     }
   }
 
@@ -2702,7 +2771,7 @@ export function SidePanelApp() {
       });
 
       const body = (await parseResponseOrThrow(response)) as EcommerceBatchGenerateResponse;
-      applyBatchJob(body, token);
+      handleQueuedBatchJob(body, token);
     } catch (error) {
       setTask({
         id: taskId,
@@ -3867,6 +3936,7 @@ export function SidePanelApp() {
         ) : null}
       </section>
       {renderExtensionUpdateDialog()}
+      {renderQueuedJobDialog()}
     </main>
   );
 }

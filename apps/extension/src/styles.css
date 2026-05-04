@@ -1359,6 +1359,40 @@ textarea:focus {
   justify-content: space-between;
 }
 
+.queued-job-dialog-card {
+  display: grid;
+  gap: 12px;
+}
+
+.queued-job-summary {
+  align-items: flex-start;
+  background: #e7f0ff;
+  border: 1px solid #cfe0fb;
+  border-radius: 8px;
+  color: #1e5baa;
+  display: flex;
+  gap: 10px;
+  padding: 11px;
+}
+
+.queued-job-summary div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.queued-job-summary strong {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.queued-job-summary span {
+  color: #4f6f99;
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 .quota-row {
   display: flex;
   justify-content: space-between;
