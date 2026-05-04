@@ -1,6 +1,7 @@
 import type { PageContext } from "./types";
 
 const capturedResponseImageUrls = new Set<string>();
+const capturedProductAttributes = new Map<string, string>();
 let pageCaptureScriptInjected = false;
 
 function recordCapturedUrls(urls: string[]): void {
@@ -12,6 +13,16 @@ function recordCapturedUrls(urls: string[]): void {
   }
 }
 
+function recordCapturedAttributes(attributes: Array<{ label: string; value: string }>): void {
+  for (const attribute of attributes) {
+    const label = normalizeLabel(attribute.label);
+    const value = normalizeText(attribute.value);
+    if (label && value && isKnownPropertyLabel(label) && !capturedProductAttributes.has(label)) {
+      capturedProductAttributes.set(label, value);
+    }
+  }
+}
+
 function installPageCaptureListener(): void {
   window.addEventListener("message", (event) => {
     if (event.source !== window || !event.data || event.data.source !== "kuajing-image-page-hook") {
@@ -19,6 +30,9 @@ function installPageCaptureListener(): void {
     }
     if (event.data.type === "kuajing-image:captured-urls" && Array.isArray(event.data.urls)) {
       recordCapturedUrls(event.data.urls);
+    }
+    if (event.data.type === "kuajing-image:captured-urls" && Array.isArray(event.data.attributes)) {
+      recordCapturedAttributes(event.data.attributes);
     }
   });
 }
@@ -319,7 +333,66 @@ function textFromNode(node: Node | null): string {
 }
 
 function isPropertyHeading(text: string): boolean {
-  return /商品属性|产品属性|属性参数|规格参数/u.test(text);
+  return /商品属性|产品属性|属性参数|规格参数/u.test(text) && text.length <= 20;
+}
+
+function isNextPropertySectionHeading(text: string): boolean {
+  return /包装信息|商品详情|热门推荐|搭配组货|商品评价|资质证书/u.test(text) && text.length <= 30;
+}
+
+const PROPERTY_LABELS = new Set([
+  "类型",
+  "品牌",
+  "保健功能",
+  "适宜人群",
+  "注意事项",
+  "食用方法",
+  "商品名称",
+  "产品名称",
+  "是否进口",
+  "保质期",
+  "规格",
+  "厂址",
+  "健字号",
+  "厂名",
+  "主要原料",
+  "生产日期",
+  "产品标准号",
+  "不适宜人群",
+  "食用量",
+  "面料成分",
+  "面料名称",
+  "款式",
+  "工艺",
+  "风格",
+  "袖长",
+  "主面料成分2",
+  "图案",
+  "货号",
+  "版型",
+  "衣长",
+  "领型",
+  "袖型",
+  "流行元素",
+  "上市年份/季节",
+  "颜色",
+  "尺码",
+  "风格类型",
+  "门襟",
+  "主面料成分含量",
+  "跨境风格类型",
+  "是否跨境货源",
+  "主面料成分2含量",
+  "主要下游销售地区1",
+  "主要下游销售地区2",
+  "材质",
+  "颜色/SKU",
+  "颜色分类",
+  "SKU"
+]);
+
+function isKnownPropertyLabel(value: string): boolean {
+  return PROPERTY_LABELS.has(normalizeLabel(value));
 }
 
 function findPropertyContainer(doc: Document): HTMLElement | null {
@@ -337,6 +410,56 @@ function findPropertyContainer(doc: Document): HTMLElement | null {
   return null;
 }
 
+function leafTextElements(root: ParentNode): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>("th, td, li, span, p, div")).filter((element) => {
+    const text = normalizeText(element.textContent ?? "");
+    if (!text || text.length > 160) {
+      return false;
+    }
+    const childText = Array.from(element.children)
+      .map((child) => normalizeText(child.textContent ?? ""))
+      .filter(Boolean)
+      .join(" ");
+    return !childText || normalizeText(childText) !== text;
+  });
+}
+
+function collectSequentialPropertyPairs(doc: Document): Array<{ label: string; value: string }> {
+  const elements = leafTextElements(doc.body || doc.documentElement);
+  const headingIndex = elements.findIndex((element) => isPropertyHeading(normalizeText(element.textContent ?? "")));
+  if (headingIndex < 0) {
+    return [];
+  }
+
+  const tokens: string[] = [];
+  for (const element of elements.slice(headingIndex + 1)) {
+    const text = normalizeText(element.textContent ?? "");
+    if (!text) {
+      continue;
+    }
+    if (isNextPropertySectionHeading(text)) {
+      break;
+    }
+    tokens.push(text);
+  }
+
+  const pairs: Array<{ label: string; value: string }> = [];
+  for (let index = 0; index < tokens.length - 1; index += 1) {
+    const label = normalizeLabel(tokens[index]);
+    if (!isKnownPropertyLabel(label)) {
+      continue;
+    }
+    const value = tokens[index + 1];
+    if (!value || isKnownPropertyLabel(value) || isPropertyHeading(value)) {
+      continue;
+    }
+    pairs.push({ label, value });
+    index += 1;
+  }
+
+  return pairs;
+}
+
 function collectTablePairs(root: ParentNode): Array<{ label: string; value: string }> {
   const pairs: Array<{ label: string; value: string }> = [];
   const rows = Array.from(root.querySelectorAll("tr"));
@@ -350,7 +473,7 @@ function collectTablePairs(root: ParentNode): Array<{ label: string; value: stri
     for (let index = 0; index < cells.length - 1; index += 2) {
       const label = normalizeLabel(textFromNode(cells[index]));
       const value = textFromNode(cells[index + 1]);
-      if (label && value) {
+      if (label && value && (!PROPERTY_LABELS.size || isKnownPropertyLabel(label))) {
         pairs.push({ label, value });
       }
     }
@@ -369,9 +492,9 @@ function collectLabeledBlocks(root: ParentNode): Array<{ label: string; value: s
     if (!match) {
       continue;
     }
-    const label = compactText(match[1]);
+    const label = normalizeLabel(match[1]);
     const value = normalizeText(match[2]);
-    if (label && value) {
+    if (label && value && isKnownPropertyLabel(label)) {
       pairs.push({ label, value });
     }
   }
@@ -382,7 +505,12 @@ function collectLabeledBlocks(root: ParentNode): Array<{ label: string; value: s
 function extractPageAttributes(doc: Document): Array<{ label: string; value: string }> {
   const propertyContainer = findPropertyContainer(doc);
   const root: ParentNode = propertyContainer ?? doc;
-  const pairs = [...collectTablePairs(root), ...collectLabeledBlocks(root)];
+  const pairs = [
+    ...Array.from(capturedProductAttributes.entries()).map(([label, value]) => ({ label, value })),
+    ...collectSequentialPropertyPairs(doc),
+    ...collectTablePairs(root),
+    ...collectLabeledBlocks(root)
+  ];
   const seen = new Set<string>();
   const deduped: Array<{ label: string; value: string }> = [];
 
@@ -416,9 +544,15 @@ function mapPageProductContext(doc: Document): NonNullable<PageContext["product"
   };
 
   const title = readProductTitle(doc);
+  const description = attributes
+    .filter(({ label, value }) => isKnownPropertyLabel(label) && value && !/^(其他|无|否)$/u.test(value))
+    .slice(0, 12)
+    .map(({ label, value }) => `${label}: ${value}`)
+    .join("；");
 
   return {
     title,
+    description,
     brand: pick("品牌"),
     productName: pick("商品名称", "产品名称", "规格") || title,
     targetCustomer: pick("适宜人群", "不适宜人群"),
@@ -763,6 +897,7 @@ async function hydrateDetailImages(doc: Document): Promise<void> {
 
 async function pageContext(): Promise<PageContext> {
   injectPageCaptureScript();
+  await sleep(800);
   await hydrateDetailImages(document);
 
   const imageCandidates: ImageCandidate[] = [];
