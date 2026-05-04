@@ -19,6 +19,8 @@ import {
   type ImageProviderInput,
   type ProviderImage
 } from "./image-provider.js";
+import { createConfiguredImageProvider } from "./image-provider.js";
+import type { ImageModelConfigEntry } from "./image-model-config.js";
 import { buildAssetCdnPreviewUrls, buildAssetCdnUrl } from "./asset-cdn.js";
 import {
   type CloudAssetLocation,
@@ -120,6 +122,16 @@ export async function runTextToImageGeneration(
   };
 }
 
+export async function runTextToImageGenerationWithFallback(
+  tenant: RequestTenant,
+  input: ImageProviderInput,
+  providerConfigs: ImageModelConfigEntry[],
+  signal?: AbortSignal,
+  billing?: GenerationBillingOptions
+): Promise<GenerationResponse> {
+  return runTextToImageGeneration(tenant, input, createFallbackImageProvider(providerConfigs), signal, billing);
+}
+
 export async function runReferenceImageGeneration(
   tenant: RequestTenant,
   input: EditImageProviderInput,
@@ -147,6 +159,16 @@ export async function runReferenceImageGeneration(
   return {
     record
   };
+}
+
+export async function runReferenceImageGenerationWithFallback(
+  tenant: RequestTenant,
+  input: EditImageProviderInput,
+  providerConfigs: ImageModelConfigEntry[],
+  signal?: AbortSignal,
+  billing?: GenerationBillingOptions
+): Promise<GenerationResponse> {
+  return runReferenceImageGeneration(tenant, input, createFallbackImageProvider(providerConfigs), signal, billing);
 }
 
 export async function getStoredAssetFile(tenant: RequestTenant, assetId: string): Promise<StoredAssetFile | undefined> {
@@ -244,6 +266,45 @@ async function generateSingleOutput(
       error: errorToMessage(error)
     };
   }
+}
+
+function createFallbackImageProvider(configs: ImageModelConfigEntry[]): ImageProvider {
+  if (configs.length === 0) {
+    throw new ProviderError("missing_api_key", "未配置可用的图像模型，请在后台模型管理中添加 API Key。", 500);
+  }
+
+  const providers = configs.map((config) => ({
+    label: `${config.name} (${config.model})`,
+    provider: createConfiguredImageProvider(config)
+  }));
+
+  return {
+    async generate(input, signal) {
+      return runWithProviderFallback(providers, (provider) => provider.generate(input, signal));
+    },
+    async edit(input, signal) {
+      return runWithProviderFallback(providers, (provider) => provider.edit(input, signal));
+    }
+  };
+}
+
+async function runWithProviderFallback<T>(
+  providers: Array<{ label: string; provider: ImageProvider }>,
+  run: (provider: ImageProvider) => Promise<T>
+): Promise<T> {
+  const errors: string[] = [];
+  for (const item of providers) {
+    try {
+      return await run(item.provider);
+    } catch (error) {
+      if (isAbortError(error)) {
+        throw error;
+      }
+      errors.push(`${item.label}: ${errorToMessage(error)}`);
+    }
+  }
+
+  throw new ProviderError("upstream_failure", `所有图像模型均生成失败。${errors.join("；")}`, 502);
 }
 
 async function editSingleOutput(

@@ -56,6 +56,10 @@ export const authConfig = {
   adminDisplayName: emptyToUndefined(process.env.ADMIN_DISPLAY_NAME) ?? "Administrator"
 };
 
+export const modelConfig = {
+  encryptionKey: emptyToUndefined(process.env.MODEL_CONFIG_ENCRYPTION_KEY)
+};
+
 export const smtpRuntimeConfig = {
   enabled: process.env.SMTP_ENABLED === "true",
   host: emptyToUndefined(process.env.SMTP_HOST),

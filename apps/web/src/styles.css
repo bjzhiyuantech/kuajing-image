@@ -1379,6 +1379,26 @@ body {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.admin-form-grid--model {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.admin-model-list {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.admin-model-panel {
+  background: #fff;
+}
+
+.admin-model-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
 .admin-form-grid--four {
   grid-template-columns: minmax(12rem, 1.2fr) minmax(10rem, 1fr) minmax(12rem, 1fr) auto;
   align-items: end;

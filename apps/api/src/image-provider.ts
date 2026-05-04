@@ -7,6 +7,7 @@ import {
   type OutputFormat,
   type ReferenceImageInput
 } from "./contracts.js";
+import type { ImageModelConfigEntry } from "./image-model-config.js";
 
 export interface ImageProviderInput {
   originalPrompt: string;
@@ -52,6 +53,13 @@ export class ProviderError extends Error {
 }
 
 export interface OpenAIImageProviderConfig {
+  apiKey: string;
+  baseURL?: string;
+  model: string;
+  timeoutMs: number;
+}
+
+export interface GeminiImageProviderConfig {
   apiKey: string;
   baseURL?: string;
   model: string;
@@ -109,6 +117,24 @@ export function createOpenAIImageProvider(config: OpenAIImageProviderConfig): Im
   return new OpenAIImageProvider(config);
 }
 
+export function createConfiguredImageProvider(config: ImageModelConfigEntry): ImageProvider {
+  if (config.provider === "gemini") {
+    return new GeminiImageProvider({
+      apiKey: config.apiKey,
+      baseURL: config.baseUrl,
+      model: config.model,
+      timeoutMs: config.timeoutMs
+    });
+  }
+
+  return createOpenAIImageProvider({
+    apiKey: config.apiKey,
+    baseURL: config.baseUrl,
+    model: config.model,
+    timeoutMs: config.timeoutMs
+  });
+}
+
 class OpenAIImageProvider implements ImageProvider {
   private readonly client: OpenAI;
 
@@ -163,6 +189,62 @@ class OpenAIImageProvider implements ImageProvider {
   }
 }
 
+class GeminiImageProvider implements ImageProvider {
+  constructor(private readonly config: GeminiImageProviderConfig) {}
+
+  async generate(input: ImageProviderInput, signal?: AbortSignal): Promise<ProviderResult> {
+    return this.generateContent(input, undefined, signal);
+  }
+
+  async edit(input: EditImageProviderInput, signal?: AbortSignal): Promise<ProviderResult> {
+    return this.generateContent(input, input.referenceImage, signal);
+  }
+
+  private async generateContent(
+    input: ImageProviderInput,
+    referenceImage: ReferenceImageInput | undefined,
+    signal?: AbortSignal
+  ): Promise<ProviderResult> {
+    try {
+      const images: ProviderImage[] = [];
+      for (let index = 0; index < input.count; index += 1) {
+        const response = await fetch(this.endpointUrl(), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-goog-api-key": this.config.apiKey
+          },
+          body: JSON.stringify(geminiGenerateContentBody(input, referenceImage)),
+          signal: timeoutSignal(signal, this.config.timeoutMs)
+        });
+
+        if (!response.ok) {
+          throw new ProviderError("upstream_failure", await geminiErrorMessage(response), providerHttpStatus(response.status));
+        }
+
+        const image = geminiProviderImage(await response.json());
+        if (!image.b64Json) {
+          throw new ProviderError("unsupported_provider_behavior", "Gemini 图像服务没有返回 base64 图像数据。", 502);
+        }
+        images.push(image);
+      }
+
+      return {
+        model: this.config.model,
+        size: input.sizeApiValue,
+        images
+      };
+    } catch (error) {
+      throw toProviderError(error);
+    }
+  }
+
+  private endpointUrl(): string {
+    const baseURL = this.config.baseURL || "https://generativelanguage.googleapis.com/v1beta";
+    return `${baseURL.replace(/\/$/, "")}/models/${encodeURIComponent(this.config.model)}:generateContent`;
+  }
+}
+
 function imageGenerateRequestBody(body: FlexibleImageGenerateParams): ImageGenerateParamsNonStreaming {
   // The SDK's image size union can lag gpt-image-2's documented flexible-size support.
   return body as unknown as ImageGenerateParamsNonStreaming;
@@ -199,6 +281,88 @@ function toProviderError(error: unknown): Error {
 
 function providerHttpStatus(status: number | undefined): number {
   return typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 599 ? status : 502;
+}
+
+function geminiGenerateContentBody(input: ImageProviderInput, referenceImage: ReferenceImageInput | undefined): Record<string, unknown> {
+  const parts: Array<Record<string, unknown>> = [
+    {
+      text: [
+        input.prompt,
+        `Return exactly one generated image. Target size: ${input.sizeApiValue}. Output format: ${input.outputFormat}.`
+      ].join("\n")
+    }
+  ];
+  if (referenceImage) {
+    parts.push({
+      inline_data: {
+        mime_type: referenceImageMimeType(referenceImage),
+        data: referenceImage.dataUrl.split(",")[1] ?? referenceImage.dataUrl
+      }
+    });
+  }
+
+  return {
+    contents: [
+      {
+        role: "user",
+        parts
+      }
+    ],
+    generationConfig: {
+      responseModalities: ["IMAGE"]
+    }
+  };
+}
+
+function geminiProviderImage(body: unknown): ProviderImage {
+  const candidates = isRecord(body) && Array.isArray(body.candidates) ? body.candidates : [];
+  for (const candidate of candidates) {
+    const content = isRecord(candidate) && isRecord(candidate.content) ? candidate.content : undefined;
+    const parts = content && Array.isArray(content.parts) ? content.parts : [];
+    for (const part of parts) {
+      if (!isRecord(part)) {
+        continue;
+      }
+      const inlineData = isRecord(part.inlineData) ? part.inlineData : isRecord(part.inline_data) ? part.inline_data : undefined;
+      const data = typeof inlineData?.data === "string" ? inlineData.data : "";
+      if (data) {
+        return { b64Json: data };
+      }
+    }
+  }
+  return { b64Json: "" };
+}
+
+async function geminiErrorMessage(response: Response): Promise<string> {
+  try {
+    const body = await response.json();
+    if (isRecord(body) && isRecord(body.error) && typeof body.error.message === "string") {
+      return body.error.message;
+    }
+  } catch {
+    // Fall through to the generic upstream message.
+  }
+  return "Gemini 图像服务请求失败。";
+}
+
+function referenceImageMimeType(input: ReferenceImageInput): string {
+  const match = /^data:([^;,]+)[;,]/.exec(input.dataUrl);
+  return match?.[1] || "image/png";
+}
+
+function timeoutSignal(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal | undefined {
+  if (typeof AbortSignal.timeout !== "function") {
+    return signal;
+  }
+  const timeout = AbortSignal.timeout(timeoutMs);
+  if (!signal) {
+    return timeout;
+  }
+  return AbortSignal.any([signal, timeout]);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function parsePositiveInteger(value: string | undefined, fallback: number): number {

@@ -90,18 +90,23 @@ import {
 import { EmailError, getSmtpSettings, saveSmtpSettings, sendRegisterEmailCode } from "./email-service.js";
 import {
   ProviderError,
-  createOpenAIImageProvider,
-  getConfiguredImageModel,
-  getOpenAIImageProviderConfig,
   type EditImageProviderInput,
-  type ImageProviderInput,
-  type OpenAIImageProviderConfig
+  type ImageProviderInput
 } from "./image-provider.js";
+import {
+  getActiveImageModelConfigs,
+  getConfiguredImageModelNames,
+  getImageModelConfig,
+  saveImageModelConfig,
+  type ImageModelConfigEntry
+} from "./image-model-config.js";
 import {
   getStoredAssetFile,
   readStoredAsset,
   runReferenceImageGeneration,
+  runReferenceImageGenerationWithFallback,
   runTextToImageGeneration,
+  runTextToImageGenerationWithFallback,
   type ReservedGenerationCharge
 } from "./image-generation.js";
 import {
@@ -146,7 +151,7 @@ interface EcommerceBatchJob {
   jobId: string;
   tenant: RequestTenant;
   input: ResolvedEcommerceBatchGenerateRequest;
-  providerConfig: OpenAIImageProviderConfig;
+  providerConfigs: ImageModelConfigEntry[];
   totalScenes: number;
   completedScenes: number;
   records: EcommerceBatchGenerateResponse["records"];
@@ -184,11 +189,12 @@ app.get("/api/health", (c) =>
   })
 );
 
-app.get("/api/config", (c) => {
-  const configuredModel = getConfiguredImageModel();
+app.get("/api/config", async (c) => {
+  const models = await getConfiguredImageModelNames();
+  const configuredModel = models[0];
   const config: AppConfig = {
     model: configuredModel,
-    models: [configuredModel],
+    models,
     sizePresets: SIZE_PRESETS,
     stylePresets: STYLE_PRESETS,
     qualities: IMAGE_QUALITIES,
@@ -512,14 +518,8 @@ app.post("/api/images/generate", async (c) => {
     return c.json(parsed.error, 400);
   }
 
-  const providerConfig = getOpenAIImageProviderConfig();
-  if (!providerConfig.ok) {
-    return providerErrorJson(c, providerConfig.error);
-  }
-
   try {
-    const provider = createOpenAIImageProvider(providerConfig.config);
-    return c.json(await runTextToImageGeneration(await requestTenant(c), parsed.value, provider, c.req.raw.signal));
+    return c.json(await runTextToImageGenerationWithFallback(await requestTenant(c), parsed.value, await getActiveImageModelConfigs(), c.req.raw.signal));
   } catch (error) {
     if (error instanceof ProviderError) {
       return providerErrorJson(c, error);
@@ -540,14 +540,8 @@ app.post("/api/images/edit", async (c) => {
     return c.json(parsed.error, 400);
   }
 
-  const providerConfig = getOpenAIImageProviderConfig();
-  if (!providerConfig.ok) {
-    return providerErrorJson(c, providerConfig.error);
-  }
-
   try {
-    const provider = createOpenAIImageProvider(providerConfig.config);
-    return c.json(await runReferenceImageGeneration(await requestTenant(c), parsed.value, provider, c.req.raw.signal));
+    return c.json(await runReferenceImageGenerationWithFallback(await requestTenant(c), parsed.value, await getActiveImageModelConfigs(), c.req.raw.signal));
   } catch (error) {
     if (error instanceof ProviderError) {
       return providerErrorJson(c, error);
@@ -568,9 +562,9 @@ app.post("/api/ecommerce/images/batch-generate", async (c) => {
     return c.json(parsed.error, 400);
   }
 
-  const providerConfig = getOpenAIImageProviderConfig();
-  if (!providerConfig.ok) {
-    return providerErrorJson(c, providerConfig.error);
+  const providerConfigs = await getActiveImageModelConfigs();
+  if (providerConfigs.length === 0) {
+    return providerErrorJson(c, new ProviderError("missing_api_key", "未配置可用的图像模型，请在后台模型管理中添加 API Key。", 500));
   }
 
   const tenant = await requestTenant(c);
@@ -605,7 +599,7 @@ app.post("/api/ecommerce/images/batch-generate", async (c) => {
     jobId,
     tenant,
     input: parsed.value,
-    providerConfig: providerConfig.config,
+    providerConfigs,
     totalScenes: parsed.value.sceneTemplateIds.length,
     completedScenes: 0,
     records: []
@@ -767,6 +761,34 @@ app.put("/api/admin/billing/settings", async (c) => {
   }
 
   return c.json(await saveBillingSettings(parsed.value));
+});
+
+app.get("/api/admin/image-models", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return c.json(await getImageModelConfig());
+});
+
+app.put("/api/admin/image-models", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+
+  const parsed = parseImageModelConfigPayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  return c.json(await saveImageModelConfig(parsed.value));
 });
 
 app.get("/api/admin/payment/alipay", async (c) => {
@@ -1095,7 +1117,6 @@ async function runEcommerceBatchJob(jobId: string): Promise<void> {
       message: "服务端正在分批生成场景，页面可以离开后稍晚回来查看。"
     });
 
-    const provider = createOpenAIImageProvider(job.providerConfig);
     const records = new Array<EcommerceBatchGenerateResponse["records"][number] | undefined>(job.input.sceneTemplateIds.length);
 
     await mapWithConcurrency(
@@ -1124,14 +1145,14 @@ async function runEcommerceBatchJob(jobId: string): Promise<void> {
             count: job.input.countPerScene ?? 1
           };
           const response = job.input.referenceImage
-            ? await runReferenceImageGeneration(
+            ? await runReferenceImageGenerationWithFallback(
                 job.tenant,
                 { ...generationInput, referenceImage: job.input.referenceImage },
-                provider,
+                job.providerConfigs,
                 undefined,
                 { skipCharge: true }
               )
-            : await runTextToImageGeneration(job.tenant, generationInput, provider, undefined, { skipCharge: true });
+            : await runTextToImageGenerationWithFallback(job.tenant, generationInput, job.providerConfigs, undefined, { skipCharge: true });
           records[index] = response.record;
         } catch (error) {
           records[index] = failedEcommerceSceneRecord(job.input, sceneTemplateId, errorToMessage(error));
@@ -2101,6 +2122,62 @@ function parseBillingSettingsPayload(input: unknown): ParseResult<SaveBillingSet
     value: {
       imageUnitPriceCents,
       currency
+    }
+  };
+}
+
+function parseImageModelConfigPayload(input: unknown): ParseResult<{ models: Parameters<typeof saveImageModelConfig>[0]["models"] }> {
+  if (!isRecord(input) || !Array.isArray(input.models)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_image_models", "模型配置内容必须包含 models 数组。")
+    };
+  }
+
+  if (input.models.length > 20) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_image_models", "最多可配置 20 个图像模型。")
+    };
+  }
+
+  const models = input.models.map((item, index) => {
+    if (!isRecord(item)) {
+      return undefined;
+    }
+    const provider = item.provider === "gemini" ? "gemini" : item.provider === "openai-compatible" ? "openai-compatible" : undefined;
+    const name = parseLimitedString(item.name, 120);
+    const model = parseLimitedString(item.model, 255);
+    const role = item.role === "fallback" ? "fallback" : item.role === "primary" ? "primary" : undefined;
+    if (!provider || !name || !model || !role || typeof item.enabled !== "boolean") {
+      return undefined;
+    }
+    return {
+      id: parseLimitedString(item.id, 64),
+      name,
+      provider,
+      enabled: item.enabled,
+      role,
+      priority: parseNonNegativeInteger(item.priority) ?? index + 1,
+      apiKey: typeof item.apiKey === "string" ? item.apiKey : undefined,
+      preserveApiKey: typeof item.preserveApiKey === "boolean" ? item.preserveApiKey : undefined,
+      baseUrl: parseLimitedString(item.baseUrl, 512),
+      model,
+      timeoutMs: parseNonNegativeInteger(item.timeoutMs)
+    };
+  });
+
+  if (models.some((model) => !model)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_image_models", "模型名称、供应商、模型 ID、角色和启用状态不能为空。")
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      models: models as Parameters<typeof saveImageModelConfig>[0]["models"]
     }
   };
 }

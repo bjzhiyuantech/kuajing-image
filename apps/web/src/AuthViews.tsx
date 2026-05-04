@@ -7,6 +7,7 @@ import {
   CreditCard,
   Database,
   ExternalLink,
+  Layers3,
   HardDrive,
   ImageIcon,
   Loader2,
@@ -34,34 +35,74 @@ import type { AdminWechatMiniAppConfigResponse, MaskedSecret } from "@gpt-image-
 
 type AuthMode = "login" | "register";
 
-const homeValuePoints = [
+const audienceCards = [
   {
-    icon: ImageIcon,
-    title: "把商品素材变成可出单图片",
-    description: "用提示词或参考图生成主图、场景图、海报和长图，减少反复找图、抠图、改版的时间。"
+    title: "1688 工厂主",
+    subtitle: "不再等摄影棚和模特排期",
+    description: "一张白底商品图就能生成模特图、场景图和详情页素材，把拍摄成本、排期等待和反复补拍降下来。",
+    points: ["拍摄成本高", "模特不好请", "出图效率低"],
+    tone: "factory"
   },
   {
-    icon: Pencil,
-    title: "画布里完成构思和微调",
-    description: "生成结果直接落到专业画布，方便对比、拼版、重跑、下载，让设计过程不再散落在多个工具里。"
+    title: "跨境电商卖家",
+    subtitle: "工厂图一键变海外市场素材",
+    description: "把中文商品图、工厂实拍图改成更适合欧美、日韩、东南亚市场的场景图、卖点图和多语言海报。",
+    points: ["图片质量差", "文字翻译难", "场景不符合海外审美"],
+    tone: "global"
+  },
+  {
+    title: "国内电商运营",
+    subtitle: "文案、场景、尺寸快速重做到满意",
+    description: "围绕主图、详情页、活动图持续调整，快速重做构图、文案和尺寸，减少美工沟通和返工。",
+    points: ["文案效果不稳", "修图速度慢", "反复改到不满意"],
+    tone: "domestic"
+  }
+] as const;
+
+const sellingPoints = [
+  {
+    icon: Clock,
+    title: "无需模特，7x24 小时出图",
+    description: "服饰、箱包、美妆、家居都能生成真人使用和生活方式场景，不等排期，不受天气和场地限制。"
+  },
+  {
+    icon: RefreshCw,
+    title: "动态调整，直到满意为止",
+    description: "换背景、换模特、换角度、换文案、换尺寸，围绕同一商品连续迭代，不满意就继续改。"
+  },
+  {
+    icon: Package,
+    title: "一张图生成全平台素材",
+    description: "主图、场景图、详情图、海报图、社媒图一次性产出，适配店铺、独立站和内容渠道。"
   },
   {
     icon: Database,
-    title: "历史资产可找回、可复用",
-    description: "生成记录、提示词和项目状态跟随账户保存，常用素材可以沉淀成下一次上新的起点。"
-  },
-  {
-    icon: ShieldCheck,
-    title: "本地优先，也能接入云备份",
-    description: "支持本地运行数据和可选 OSS/COS 备份，适合团队管理电商图片素材和生成资产。"
+    title: "批量采集，翻译去水印不改布局",
+    description: "从国内电商平台批量获取图片，一键翻译、去水印并尽量保留原版布局，提高跨境铺货效率。"
   }
 ] as const;
 
 const installSteps = [
-  "注册或登录商图 AI 助手账户",
-  "安装浏览器插件并完成授权",
-  "在商品页、素材页或竞品页打开插件采集灵感",
-  "回到画布生成、整理并下载可用图片"
+  { title: "下载插件", description: "获取浏览器插件安装包" },
+  { title: "安装插件", description: "一键安装到常用浏览器" },
+  { title: "注册获得试用账号", description: "开通账号并完成授权" },
+  { title: "上传一张产品图", description: "白底图、实拍图都可开始" },
+  { title: "生成效果图", description: "主图、场景图、详情图同步产出" },
+  { title: "下载使用图片", description: "保存到本地或继续二次调整" }
+] as const;
+
+const modelChips = [
+  "GPT-Image",
+  "GPT-4o",
+  "Gemini",
+  "Claude",
+  "Flux",
+  "Stable Diffusion",
+  "Midjourney",
+  "Qwen Image",
+  "Seedream",
+  "Kling",
+  "Runway"
 ] as const;
 
 export function HomePage({
@@ -76,12 +117,14 @@ export function HomePage({
           <BrandMark />
           <div>
             <BrandName />
-            <p className="brand-tagline">{BRAND_TAGLINE}</p>
           </div>
         </a>
         <nav className="home-nav__links" aria-label="产品导航">
-          <a href="#value">产品能力</a>
+          <a href="#selling-points">产品卖点</a>
+          <a href="#audience">适用人群</a>
+          <a href="#models">模型能力</a>
           <a href="#install">安装插件</a>
+          <a href="#pricing">价格</a>
           <button type="button" onClick={() => onAuthNavigate("login")}>
             登录
           </button>
@@ -91,133 +134,197 @@ export function HomePage({
         </nav>
       </header>
 
+      {/* Hero Section */}
       <section className="home-hero" aria-labelledby="home-hero-title">
         <div className="home-hero__content">
           <p className="home-eyebrow">
             <Sparkles className="size-4" aria-hidden="true" />
-            面向电商卖家的 AI 图片工作台
+            AI 驱动的电商图片生产工作台
           </p>
-          <h1 id="home-hero-title">从网页灵感到商品图片，一条链路完成</h1>
+          <h1 id="home-hero-title">一张商品图，<br />生成全套电商场景素材</h1>
           <p className="home-hero__lead">
-            商图 AI 助手把浏览器插件、AI 画布、生成历史和素材管理放在一起，帮你更快完成商品主图、场景图、活动海报和内容素材。
+            不用请模特、不用反复找美工、不用高价买素材。<br />
+            上传一张产品图，快速生成主图、场景图、详情图、海报图和多语言平台素材。
           </p>
           <div className="home-hero__actions">
             <button className="home-button home-button--primary" type="button" onClick={() => onAuthNavigate("register")}>
-              免费开始使用
+              免费开始试用
               <ArrowRight className="size-4" aria-hidden="true" />
             </button>
             <a className="home-button home-button--secondary" href="#install">
-              查看插件安装
+              安装浏览器插件
             </a>
           </div>
           <div className="home-hero__proof" aria-label="核心优势">
             <span>
               <CheckCircle2 className="size-4" aria-hidden="true" />
-              支持文生图和参考图生成
+              无需模特
             </span>
             <span>
               <CheckCircle2 className="size-4" aria-hidden="true" />
-              画布、历史、图库统一管理
+              7x24 小时出图
             </span>
             <span>
               <CheckCircle2 className="size-4" aria-hidden="true" />
-              插件连接网页素材场景
+              动态调整到满意
             </span>
           </div>
         </div>
 
-        <div className="home-product" aria-label="产品界面预览">
-          <div className="home-product__bar">
-            <span />
-            <span />
-            <span />
-          </div>
-          <div className="home-product__body">
-            <div className="home-product__canvas">
-              <div className="home-product__image">
-                <ImageIcon className="size-7" aria-hidden="true" />
-                <span>商品场景图</span>
-              </div>
-              <div className="home-product__prompt">高端护肤品主图，清透水面，柔和反光，保留标题空间</div>
-            </div>
-            <aside className="home-product__panel">
-              <p>AI 生成</p>
-              <strong>4 张图正在生成</strong>
-              <span>参考图、尺寸、格式和质量可控</span>
-              <div className="home-product__progress" />
-            </aside>
-          </div>
+        <div className="home-hero__screenshot">
+          <img
+            src="/images/hero-screenshot.svg"
+            alt="商图 AI 助手工作台界面预览"
+            className="home-hero__img"
+          />
         </div>
       </section>
 
-      <section className="home-section" id="value" aria-labelledby="home-value-title">
-        <div className="home-section__header">
-          <p className="home-eyebrow">
-            <Package className="size-4" aria-hidden="true" />
-            用户价值
-          </p>
-          <h2 id="home-value-title">它不是只会出图，而是帮你把图片生产流程收起来</h2>
+      {/* Audience Section */}
+      <section className="home-section" id="audience" aria-labelledby="home-audience-title">
+        <div className="home-section__header home-section__header--center">
+          <h2 id="home-audience-title">不同卖家，同一个问题：图片生产太慢、太贵、太不稳定</h2>
         </div>
-        <div className="home-value-grid">
-          {homeValuePoints.map((item) => {
-            const Icon = item.icon;
-            return (
-              <article className="home-value-card" key={item.title}>
-                <span>
-                  <Icon className="size-5" aria-hidden="true" />
-                </span>
+        <div className="home-audience-grid">
+          {audienceCards.map((item) => (
+            <article className="home-audience-card" data-tone={item.tone} key={item.title}>
+              <div className="home-audience-card__text">
                 <h3>{item.title}</h3>
+                <strong>{item.subtitle}</strong>
                 <p>{item.description}</p>
+                <ul>
+                  {item.points.map((point) => (
+                    <li key={point}>{point}</li>
+                  ))}
+                </ul>
+              </div>
+              <div className="home-audience-card__visual">
+                <img
+                  src={`/images/audience-${item.tone}.svg`}
+                  alt={`${item.title}场景示意`}
+                  loading="lazy"
+                />
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      {/* Selling Points Section */}
+      <section className="home-section" id="selling-points" aria-labelledby="home-selling-title">
+        <div className="home-section__header home-section__header--center">
+          <h2 id="home-selling-title">把拍摄、翻译、修图和素材采购压缩成一次生成</h2>
+        </div>
+        <div className="home-selling-grid">
+          {sellingPoints.map((item, index) => {
+            const Icon = item.icon;
+            const imgNames = ["selling-model", "selling-iterate", "selling-platform", "selling-batch"];
+            return (
+              <article className="home-selling-card" key={item.title}>
+                <div className="home-selling-card__head">
+                  <span className="home-selling-card__icon">
+                    <Icon className="size-5" aria-hidden="true" />
+                  </span>
+                  <h3>{item.title}</h3>
+                </div>
+                <p>{item.description}</p>
+                <div className="home-selling-card__visual">
+                  <img
+                    src={`/images/${imgNames[index]}.svg`}
+                    alt={item.title}
+                    loading="lazy"
+                  />
+                </div>
               </article>
             );
           })}
         </div>
       </section>
 
+      {/* Install Steps Section */}
       <section className="home-section home-install" id="install" aria-labelledby="home-install-title">
-        <div className="home-section__header">
-          <p className="home-eyebrow">
-            <ExternalLink className="size-4" aria-hidden="true" />
-            插件安装
-          </p>
-          <h2 id="home-install-title">安装浏览器插件，把网页素材带回工作台</h2>
-          <p>插件负责连接你正在浏览的商品页、素材页和参考页；工作台负责生成、整理、保存和下载最终图片。</p>
+        <div className="home-section__header home-section__header--center">
+          <h2 id="home-install-title">从安装插件到下载图片，流程清清楚楚</h2>
         </div>
-        <div className="home-install__layout">
-          <ol className="home-steps">
-            {installSteps.map((step, index) => (
-              <li key={step}>
+        <ol className="home-steps">
+          {installSteps.map((step, index) => (
+            <li key={step.title}>
+              <div className="home-steps__number">
                 <span>{index + 1}</span>
-                <p>{step}</p>
-              </li>
-            ))}
-          </ol>
-          <div className="home-install__panel">
-            <Clock className="size-5" aria-hidden="true" />
-            <h3>建议先注册账户，再安装插件</h3>
-            <p>这样插件授权后可以直接同步到你的画布和图库，避免采集素材、生成记录和账户状态分散。</p>
-            <button className="home-button home-button--primary" type="button" onClick={() => onAuthNavigate("register")}>
-              注册并安装
-              <ArrowRight className="size-4" aria-hidden="true" />
-            </button>
-          </div>
+              </div>
+              <strong>{step.title}</strong>
+              <p>{step.description}</p>
+            </li>
+          ))}
+        </ol>
+        <div className="home-install__visual">
+          <img src="/images/install-flow.svg" alt="安装流程示意图" loading="lazy" />
         </div>
       </section>
 
-      <section className="home-cta" aria-labelledby="home-cta-title">
-        <div>
-          <h2 id="home-cta-title">准备好把下一批商品图做得更快一点了吗？</h2>
-          <p>注册后进入画布，安装插件，再从你的真实选品和素材页面开始生成。</p>
+      {/* Models Section */}
+      <section className="home-models" id="models" aria-labelledby="home-model-title">
+        <div className="home-models__content">
+          <p className="home-eyebrow home-eyebrow--dark">
+            <ShieldCheck className="size-4" aria-hidden="true" />
+            多模型能力底座 / 可接入模型生态
+          </p>
+          <h2 id="home-model-title">接入顶级视觉与语言模型能力</h2>
+          <p>根据任务自动组合生成、翻译、去水印、扩图、改图和文案能力，兼顾效果、速度与成本。</p>
+          <div className="home-models__chips" aria-label="模型列表">
+            {modelChips.map((model) => (
+              <span key={model}>{model}</span>
+            ))}
+          </div>
+          <p className="home-models__note">不同任务会智能调用不同模型组合，兼顾效果、速度与成本。</p>
         </div>
-        <div className="home-cta__actions">
-          <button className="home-button home-button--primary" type="button" onClick={() => onAuthNavigate("register")}>
-            创建账户
-          </button>
-          <button className="home-button home-button--ghost" type="button" onClick={() => onAuthNavigate("login")}>
-            已有账户登录
-          </button>
+        <div className="home-models__visual" aria-hidden="true">
+          <img src="/images/models-cube.svg" alt="" />
         </div>
       </section>
+
+      {/* CTA Section */}
+      <section className="home-cta" id="pricing" aria-labelledby="home-cta-title">
+        <div className="home-cta__text">
+          <h2 id="home-cta-title">开始把下一批商品图<br />做得更快、更稳</h2>
+          <ul className="home-cta__benefits">
+            <li>
+              <CheckCircle2 className="size-4" aria-hidden="true" />
+              免费试用，无需信用卡
+            </li>
+            <li>
+              <CheckCircle2 className="size-4" aria-hidden="true" />
+              先用一张商品图跑通效果
+            </li>
+            <li>
+              <CheckCircle2 className="size-4" aria-hidden="true" />
+              再决定是否批量生成
+            </li>
+          </ul>
+          <div className="home-cta__actions">
+            <button className="home-button home-button--primary" type="button" onClick={() => onAuthNavigate("register")}>
+              免费注册试用
+            </button>
+            <button className="home-button home-button--ghost" type="button" onClick={() => onAuthNavigate("login")}>
+              已有账户登录
+            </button>
+          </div>
+        </div>
+        <div className="home-cta__preview">
+          <img src="/images/cta-preview.svg" alt="产品预览" loading="lazy" />
+        </div>
+      </section>
+
+      {/* Footer */}
+      <footer className="home-footer">
+        <div className="home-footer__inner">
+          <div className="home-footer__brand">
+            <BrandMark />
+            <span>商图 AI 助手</span>
+          </div>
+          <p className="home-footer__copy">© 2024 商图AI助手. All rights reserved.</p>
+        </div>
+      </footer>
     </main>
   );
 }
@@ -762,6 +869,7 @@ export function AdminPage() {
   const [jobs, setJobs] = useState<AdminJobRow[]>([]);
   const [assets, setAssets] = useState<AdminAssetRow[]>([]);
   const [billingSettings, setBillingSettings] = useState<BillingSettingsFormState>(createBillingSettingsForm());
+  const [imageModels, setImageModels] = useState<ImageModelFormState[]>([]);
   const [alipaySettings, setAlipaySettings] = useState<AlipayFormState>(createAlipayForm());
   const [wechatMiniAppSettings, setWechatMiniAppSettings] = useState<WechatMiniAppFormState>(createWechatMiniAppForm());
   const [smtpSettings, setSmtpSettings] = useState<SmtpFormState>(createSmtpForm());
@@ -786,13 +894,14 @@ export function AdminPage() {
       setNotice("");
     }
     try {
-      const [statsResponse, usersResponse, jobsResponse, assetsResponse, plansResponse, billingResponse, alipayResponse, wechatResponse, smtpResponse, transactionsResponse] = await Promise.all([
+      const [statsResponse, usersResponse, jobsResponse, assetsResponse, plansResponse, billingResponse, imageModelsResponse, alipayResponse, wechatResponse, smtpResponse, transactionsResponse] = await Promise.all([
         authFetch("/api/admin/stats"),
         authFetch("/api/admin/users"),
         authFetch("/api/admin/ecommerce/jobs"),
         authFetch("/api/admin/assets"),
         authFetch("/api/admin/plans"),
         authFetch("/api/admin/billing/settings"),
+        authFetch("/api/admin/image-models"),
         authFetch("/api/admin/payment/alipay"),
         authFetch("/api/admin/auth/wechat/miniapp"),
         authFetch("/api/admin/email/smtp"),
@@ -815,6 +924,10 @@ export function AdminPage() {
       const parsedPlans = plansResponse.ok ? parsePlans(await plansResponse.json()) : [];
       if (billingResponse.ok) {
         setBillingSettings(parseBillingSettingsForm(await billingResponse.json()));
+      }
+      if (imageModelsResponse.ok) {
+        const parsedModels = parseImageModelForms(await imageModelsResponse.json());
+        setImageModels(parsedModels.length > 0 ? parsedModels : [createImageModelForm("gemini", 1)]);
       }
       if (alipayResponse.ok) {
         setAlipaySettings(parseAlipayForm(await alipayResponse.json()));
@@ -997,6 +1110,54 @@ export function AdminPage() {
     }
   }
 
+  async function saveImageModels(): Promise<void> {
+    setSavingBilling("image-models");
+    setError("");
+    setNotice("");
+    try {
+      const response = await authFetch("/api/admin/image-models", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          models: imageModels.map((model, index) => ({
+            id: model.id.startsWith("new-") ? undefined : model.id,
+            name: model.name,
+            provider: model.provider,
+            enabled: model.enabled,
+            role: model.role,
+            priority: Number.parseInt(model.priority, 10) || index + 1,
+            apiKey: model.apiKey,
+            preserveApiKey: !model.apiKey.trim() && model.apiKeySaved,
+            baseUrl: model.baseUrl,
+            model: model.model,
+            timeoutMs: Number.parseInt(model.timeoutSeconds, 10) > 0 ? Number.parseInt(model.timeoutSeconds, 10) * 1000 : undefined
+          }))
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "模型配置保存失败。"));
+      }
+      setNotice("图像模型配置已保存。");
+      setImageModels(parseImageModelForms(await response.json()));
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "模型配置保存失败。");
+    } finally {
+      setSavingBilling("");
+    }
+  }
+
+  function addImageModel(provider: ImageModelProvider = "gemini"): void {
+    setImageModels((models) => [...models, createImageModelForm(provider, models.length + 1)]);
+  }
+
+  function updateImageModel(id: string, patch: Partial<ImageModelFormState>): void {
+    setImageModels((models) => models.map((model) => (model.id === id ? { ...model, ...patch } : model)));
+  }
+
+  function removeImageModel(id: string): void {
+    setImageModels((models) => models.filter((model) => model.id !== id));
+  }
+
   async function saveAlipaySettings(): Promise<void> {
     setSavingBilling("alipay");
     setError("");
@@ -1134,6 +1295,68 @@ export function AdminPage() {
             </div>
           ))}
         </div>
+
+        <section className="admin-table-card admin-billing-card" aria-labelledby="image-models-title">
+          <div className="admin-table-card__title">
+            <Layers3 className="size-4" aria-hidden="true" />
+            <h2 id="image-models-title">图像模型管理</h2>
+          </div>
+          <div className="admin-model-list">
+            {imageModels.map((model, index) => (
+              <div className="admin-form-panel admin-model-panel" key={model.id}>
+                <div className="admin-form-panel__title-row">
+                  <div>
+                    <p className="settings-eyebrow">{model.role === "primary" ? "Primary" : "Fallback"}</p>
+                    <h3>{model.name || `图像模型 ${index + 1}`}</h3>
+                  </div>
+                  <label className="admin-switch">
+                    <input checked={model.enabled} type="checkbox" onChange={(event) => updateImageModel(model.id, { enabled: event.target.checked })} />
+                    <span>{model.enabled ? "启用" : "关闭"}</span>
+                  </label>
+                </div>
+                <div className="admin-form-grid admin-form-grid--model">
+                  <label><span>名称</span><input className="admin-input" value={model.name} onChange={(event) => updateImageModel(model.id, { name: event.target.value })} /></label>
+                  <label>
+                    <span>供应商</span>
+                    <select className="admin-input" value={model.provider} onChange={(event) => updateImageModel(model.id, providerDefaults(event.target.value as ImageModelProvider))}>
+                      <option value="gemini">Gemini</option>
+                      <option value="openai-compatible">OpenAI 兼容</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>角色</span>
+                    <select className="admin-input" value={model.role} onChange={(event) => updateImageModel(model.id, { role: event.target.value as ImageModelRole })}>
+                      <option value="primary">主模型</option>
+                      <option value="fallback">备用模型</option>
+                    </select>
+                  </label>
+                  <label><span>优先级</span><input className="admin-input" inputMode="numeric" value={model.priority} onChange={(event) => updateImageModel(model.id, { priority: event.target.value })} /></label>
+                  <label><span>模型 ID</span><input className="admin-input" value={model.model} onChange={(event) => updateImageModel(model.id, { model: event.target.value })} /></label>
+                  <label><span>Base URL</span><input className="admin-input" value={model.baseUrl} onChange={(event) => updateImageModel(model.id, { baseUrl: event.target.value })} placeholder={model.provider === "gemini" ? "默认 Google Gemini API" : "可选 OpenAI 兼容端点"} /></label>
+                  <label><span>超时秒数</span><input className="admin-input" inputMode="numeric" value={model.timeoutSeconds} onChange={(event) => updateImageModel(model.id, { timeoutSeconds: event.target.value })} /></label>
+                  <label><span>API Key {model.apiKeySaved ? "（已保存，留空不覆盖）" : ""}</span><input className="admin-input" type="password" value={model.apiKey} onChange={(event) => updateImageModel(model.id, { apiKey: event.target.value })} /></label>
+                </div>
+                <button className="secondary-action h-10" type="button" onClick={() => removeImageModel(model.id)}>
+                  移除模型
+                </button>
+              </div>
+            ))}
+          </div>
+          <div className="admin-model-actions">
+            <button className="secondary-action h-10" type="button" onClick={() => addImageModel("gemini")}>
+              <Plus className="size-4" aria-hidden="true" />
+              添加 Gemini
+            </button>
+            <button className="secondary-action h-10" type="button" onClick={() => addImageModel("openai-compatible")}>
+              <Plus className="size-4" aria-hidden="true" />
+              添加 OpenAI 兼容
+            </button>
+            <button className="primary-action h-10" disabled={savingBilling === "image-models"} type="button" onClick={() => void saveImageModels()}>
+              {savingBilling === "image-models" ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Save className="size-4" aria-hidden="true" />}
+              保存模型
+            </button>
+          </div>
+        </section>
 
         <section className="admin-table-card admin-billing-card" aria-labelledby="billing-config-title">
           <div className="admin-table-card__title">
@@ -1863,6 +2086,23 @@ interface BillingSettingsFormState {
   currency: string;
 }
 
+type ImageModelProvider = "openai-compatible" | "gemini";
+type ImageModelRole = "primary" | "fallback";
+
+interface ImageModelFormState {
+  id: string;
+  name: string;
+  provider: ImageModelProvider;
+  enabled: boolean;
+  role: ImageModelRole;
+  priority: string;
+  apiKey: string;
+  apiKeySaved: boolean;
+  baseUrl: string;
+  model: string;
+  timeoutSeconds: string;
+}
+
 interface AlipayFormState {
   enabled: boolean;
   appId: string;
@@ -2174,6 +2414,32 @@ function parseBillingSettingsForm(value: unknown): BillingSettingsFormState {
   };
 }
 
+function parseImageModelForms(value: unknown): ImageModelFormState[] {
+  return arrayFrom(value, ["models", "items"]).map((item, index) => {
+    const provider = stringFrom(item.provider) === "openai-compatible" ? "openai-compatible" : "gemini";
+    const role = stringFrom(item.role) === "fallback" ? "fallback" : "primary";
+    return {
+      id: stringFrom(item.id) || `new-${index}`,
+      name: stringFrom(item.name) || (provider === "gemini" ? "Gemini Nano Banana Pro" : "OpenAI Image"),
+      provider,
+      enabled: booleanFrom(item.enabled, true),
+      role,
+      priority: String(numberFrom(item.priority) ?? index + 1),
+      apiKey: "",
+      apiKeySaved: booleanFrom(item.apiKeySaved, false),
+      baseUrl: stringFrom(item.baseUrl ?? item.base_url),
+      model: stringFrom(item.model) || (provider === "gemini" ? "gemini-3-pro-image-preview" : "gpt-image-2"),
+      timeoutSeconds: String(Math.max(1, Math.round((numberFrom(item.timeoutMs ?? item.timeout_ms) ?? 1200000) / 1000)))
+    };
+  });
+}
+
+function providerDefaults(provider: ImageModelProvider): Partial<ImageModelFormState> {
+  return provider === "gemini"
+    ? { provider, name: "Gemini Nano Banana Pro", model: "gemini-3-pro-image-preview", baseUrl: "" }
+    : { provider, name: "OpenAI Image", model: "gpt-image-2" };
+}
+
 function parseAlipayForm(value: unknown): AlipayFormState {
   const alipay = firstRecord(value, "alipay") ?? (isRecord(value) ? value : {});
   const privateKey = isRecord(alipay.privateKey) ? alipay.privateKey : {};
@@ -2294,6 +2560,23 @@ function createBillingSettingsForm(): BillingSettingsFormState {
   return {
     imageUnitPrice: "0",
     currency: "CNY"
+  };
+}
+
+function createImageModelForm(provider: ImageModelProvider, index: number): ImageModelFormState {
+  const defaults = providerDefaults(provider);
+  return {
+    id: `new-${Date.now()}-${index}`,
+    name: defaults.name ?? "",
+    provider,
+    enabled: true,
+    role: index === 1 ? "primary" : "fallback",
+    priority: String(index),
+    apiKey: "",
+    apiKeySaved: false,
+    baseUrl: defaults.baseUrl ?? "",
+    model: defaults.model ?? "",
+    timeoutSeconds: "1200"
   };
 }
 
