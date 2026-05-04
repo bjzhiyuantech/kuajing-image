@@ -1662,7 +1662,7 @@ function TopNavigation({
             }}
           >
             <ImageIcon className="size-4" aria-hidden="true" />
-            Gallery
+            作品库
           </a>
           <a
             aria-current={route === "account" ? "page" : undefined}
