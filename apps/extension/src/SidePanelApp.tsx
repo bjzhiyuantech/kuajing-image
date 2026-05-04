@@ -345,6 +345,7 @@ const styleOptions: Array<{ id: StylePresetId; label: string }> = [
 
 const SOURCE_ASPECT_SIZE_OPTION = "source-aspect";
 const SOURCE_ASPECT_BASE_SIZE = 1024;
+const MAX_REFERENCE_IMAGE_COUNT = 3;
 const CHINESE_ECOMMERCE_PLATFORM_IDS = new Set<BatchFormState["platform"]>([
   "1688",
   "taobao",
@@ -1135,7 +1136,7 @@ export function SidePanelApp() {
   const selectedReferenceImageUrl = form.referenceImageUrl.trim();
   const selectedReferenceImageUrls = form.referenceImageUrls.length > 0 ? form.referenceImageUrls : selectedReferenceImageUrl ? [selectedReferenceImageUrl] : [];
   const selectedReferenceImageUrlsKey = selectedReferenceImageUrls.join("|");
-  const maxReferenceImageCount = form.generationMode === "marketing-main" ? 3 : 2;
+  const maxReferenceImageCount = MAX_REFERENCE_IMAGE_COUNT;
   const referenceImageOptions = useMemo(
     () => [
       ...uploadedReferenceImages.map((image) => ({ key: image.id, url: image.dataUrl, label: image.fileName, uploaded: true })),
@@ -2270,7 +2271,7 @@ export function SidePanelApp() {
       const exists = current.referenceImageUrls.includes(url);
       const nextUrls = exists
         ? current.referenceImageUrls.filter((item) => item !== url)
-        : [...current.referenceImageUrls, url].slice(current.generationMode === "marketing-main" ? -3 : -2);
+        : [...current.referenceImageUrls, url].slice(-MAX_REFERENCE_IMAGE_COUNT);
       return {
         ...current,
         referenceImageUrl: nextUrls[0] ?? "",
@@ -2441,7 +2442,7 @@ export function SidePanelApp() {
 
   async function uploadReferenceImages(event: ChangeEvent<HTMLInputElement>): Promise<void> {
     try {
-      const maxReferenceImages = form.generationMode === "marketing-main" ? 3 : 2;
+      const maxReferenceImages = MAX_REFERENCE_IMAGE_COUNT;
       const files = Array.from(event.target.files ?? []).filter((file) => file.type.startsWith("image/")).slice(0, maxReferenceImages);
       event.target.value = "";
       if (files.length === 0) {
@@ -3284,7 +3285,7 @@ export function SidePanelApp() {
               上传图片
               <input accept="image/*" multiple type="file" onChange={(event) => void uploadReferenceImages(event)} />
             </label>
-            <span>{form.generationMode === "marketing-main" ? "可选 1-3 张，适合包装、细节、使用状态一起参考。" : "可选 1-2 张，第二张会作为不同角度参考。"}</span>
+            <span>可选 1-3 张，作为不同角度的出图参考。</span>
           </div>
           {referenceImageOptions.length > 0 ? (
             <div className="reference-image-picker" aria-label="商品主图候选">
