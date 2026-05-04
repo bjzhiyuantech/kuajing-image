@@ -244,8 +244,14 @@ class GeminiImageProvider implements ImageProvider {
   }
 
   private endpointUrl(): string {
-    const baseURL = this.config.baseURL || "https://generativelanguage.googleapis.com/v1beta";
-    return `${baseURL.replace(/\/$/, "")}/models/${encodeURIComponent(this.config.model)}:generateContent`;
+    const baseURL = (this.config.baseURL || "https://generativelanguage.googleapis.com/v1beta").replace(/\/$/, "");
+    if (/:generateContent$/u.test(baseURL)) {
+      return baseURL;
+    }
+    if (/\/models\/[^/]+$/u.test(baseURL)) {
+      return `${baseURL}:generateContent`;
+    }
+    return `${baseURL}/models/${encodeURIComponent(this.config.model)}:generateContent`;
   }
 }
 
@@ -341,12 +347,14 @@ async function geminiErrorMessage(response: Response): Promise<string> {
   try {
     const body = await response.json();
     if (isRecord(body) && isRecord(body.error) && typeof body.error.message === "string") {
-      return body.error.message;
+      const status = typeof body.error.status === "string" ? body.error.status : "";
+      const code = typeof body.error.code === "number" ? body.error.code : response.status;
+      return status ? `Gemini ${code} ${status}: ${body.error.message}` : `Gemini ${code}: ${body.error.message}`;
     }
   } catch {
     // Fall through to the generic upstream message.
   }
-  return "Gemini 图像服务请求失败。";
+  return `Gemini 图像服务请求失败（HTTP ${response.status}）。`;
 }
 
 function referenceImageMimeType(input: ReferenceImageInput): string {
