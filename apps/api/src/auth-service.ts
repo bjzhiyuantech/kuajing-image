@@ -90,6 +90,7 @@ export async function registerUser(input: RegisterInput): Promise<AuthResponse> 
     await db.transaction(async (tx) => {
       await tx.insert(users).values({
         id: userId,
+        numericId: undefined,
         email,
         passwordHash: hashPassword(password),
         displayName,
@@ -135,6 +136,7 @@ export async function registerUser(input: RegisterInput): Promise<AuthResponse> 
   return buildAuthResponse({
     user: toAuthUser({
       id: userId,
+      numericId: 0,
       email,
       passwordHash: "",
       displayName,
@@ -312,6 +314,7 @@ export async function registerWechatMiniAppUser(input: WechatMiniAppRegisterRequ
   await db.transaction(async (tx) => {
     await tx.insert(users).values({
       id: userId,
+      numericId: undefined,
       email: email ?? null,
       passwordHash: "",
       displayName,
@@ -362,6 +365,7 @@ export async function registerWechatMiniAppUser(input: WechatMiniAppRegisterRequ
   return buildAuthResponse({
     user: toAuthUser({
       id: userId,
+      numericId: 0,
       email: email ?? null,
       passwordHash: "",
       displayName,

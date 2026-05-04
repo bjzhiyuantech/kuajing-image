@@ -1532,7 +1532,8 @@ async function getAdminUsers(): Promise<AdminUsersResponse> {
         plan: subscriptionPlans
       })
       .from(users)
-      .leftJoin(subscriptionPlans, eq(subscriptionPlans.id, users.planId)),
+      .leftJoin(subscriptionPlans, eq(subscriptionPlans.id, users.planId))
+      .orderBy(desc(users.numericId), desc(users.createdAt), desc(users.id)),
     db.select().from(workspaceMembers),
     db.select().from(assets)
   ]);
@@ -1595,6 +1596,7 @@ async function createOrPromoteAdminUser(input: {
   await db.transaction(async (tx) => {
     await tx.insert(users).values({
       id: userId,
+      numericId: undefined,
       email: input.email,
       passwordHash: hashPassword(input.password ?? ""),
       displayName,
@@ -1685,6 +1687,7 @@ function toAdminUserItem(
   estimatedStorageUsedBytes = 0
 ): AdminUsersResponse["users"][number] {
   return {
+    numericId: user.numericId ?? undefined,
     id: user.id,
     email: user.email ?? "",
     displayName: user.displayName,

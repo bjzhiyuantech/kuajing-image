@@ -1823,132 +1823,142 @@ export function AdminPage() {
               </thead>
               <tbody>
                 {users.length > 0 ? (
-                  users.slice(0, 20).map((user) => {
-                    const isExpanded = expandedUserId === user.id;
-                    const draft = userDrafts[user.id] ?? userToQuotaForm(user);
-                    return (
-                      <Fragment key={user.id}>
-                        <tr>
-                          <td>{user.email || "-"}</td>
-                          <td>{user.displayName || "-"}</td>
-                          <td>{roleLabel(user.role)}</td>
-                          <td>{user.planName || user.planId || "未设置"}{user.planExpiresAt ? ` · ${formatDateTime(user.planExpiresAt)}` : ""}</td>
-                          <td>{formatMoney(user.balanceCents ?? 0, "CNY")}</td>
-                          <td>{quotaLabel(user)}</td>
-                          <td>{storageLabel(user)}</td>
-                          <td>{formatDateTime(user.createdAt)}</td>
-                          <td>
-                            <button
-                              className="admin-icon-button"
-                              type="button"
-                              onClick={() => {
-                                setExpandedUserId(isExpanded ? "" : user.id);
-                                setUserDrafts((drafts) => ({ ...drafts, [user.id]: drafts[user.id] ?? userToQuotaForm(user) }));
-                              }}
-                            >
-                              <Pencil className="size-4" aria-hidden="true" />
-                              <span>{isExpanded ? "收起" : "管理"}</span>
-                            </button>
-                          </td>
-                        </tr>
-                        {isExpanded ? (
-                          <tr className="admin-expanded-row">
-                            <td colSpan={9}>
-                              <div className="admin-user-form">
-                                <label>
-                                  <span>套餐</span>
-                                  <select
-                                    className="admin-input"
-                                    value={draft.planId}
-                                    onChange={(event) =>
-                                      setUserDrafts((drafts) => ({ ...drafts, [user.id]: { ...draft, planId: event.target.value } }))
-                                    }
-                                  >
-                                    <option value="">未设置 / 重置</option>
-                                    {plans.map((plan) => (
-                                      <option key={plan.id} value={plan.id}>
-                                        {plan.name}
-                                      </option>
-                                    ))}
-                                  </select>
-                                </label>
-                                <label>
-                                  <span>账户余额</span>
-                                  <input
-                                    className="admin-input"
-                                    inputMode="decimal"
-                                    value={draft.balance}
-                                    onChange={(event) =>
-                                      setUserDrafts((drafts) => ({ ...drafts, [user.id]: { ...draft, balance: event.target.value } }))
-                                    }
-                                  />
-                                </label>
-                                <label>
-                                  <span>生图总额度</span>
-                                  <input
-                                    className="admin-input"
-                                    inputMode="numeric"
-                                    placeholder="留空按套餐"
-                                    value={draft.quotaTotal}
-                                    onChange={(event) =>
-                                      setUserDrafts((drafts) => ({ ...drafts, [user.id]: { ...draft, quotaTotal: event.target.value } }))
-                                    }
-                                  />
-                                </label>
-                                <label>
-                                  <span>生图已用</span>
-                                  <input
-                                    className="admin-input"
-                                    inputMode="numeric"
-                                    value={draft.quotaUsed}
-                                    onChange={(event) =>
-                                      setUserDrafts((drafts) => ({ ...drafts, [user.id]: { ...draft, quotaUsed: event.target.value } }))
-                                    }
-                                  />
-                                </label>
-                                <label>
-                                  <span>存储额度 GB</span>
-                                  <input
-                                    className="admin-input"
-                                    inputMode="decimal"
-                                    placeholder="留空按套餐"
-                                    value={draft.storageQuotaGb}
-                                    onChange={(event) =>
-                                      setUserDrafts((drafts) => ({ ...drafts, [user.id]: { ...draft, storageQuotaGb: event.target.value } }))
-                                    }
-                                  />
-                                </label>
-                                <label>
-                                  <span>存储已用 GB</span>
-                                  <input
-                                    className="admin-input"
-                                    inputMode="decimal"
-                                    value={draft.storageUsedGb}
-                                    onChange={(event) =>
-                                      setUserDrafts((drafts) => ({ ...drafts, [user.id]: { ...draft, storageUsedGb: event.target.value } }))
-                                    }
-                                  />
-                                </label>
-                                <div className="admin-user-form__actions">
-                                  <button
-                                    className="secondary-action h-10"
-                                    type="button"
-                                    onClick={() => setUserDrafts((drafts) => ({ ...drafts, [user.id]: resetUserQuotaForm(draft) }))}
-                                  >
-                                    重置覆盖
-                                  </button>
-                                  <button className="primary-action h-10" disabled={savingUserId === user.id} type="button" onClick={() => void saveUserQuota(user)}>
-                                    {savingUserId === user.id ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Save className="size-4" aria-hidden="true" />}
-                                    保存
-                                  </button>
-                                </div>
-                              </div>
+                  [...users]
+                    .sort((left, right) => {
+                      const leftNumericId = left.numericId ?? 0;
+                      const rightNumericId = right.numericId ?? 0;
+                      if (rightNumericId !== leftNumericId) {
+                        return rightNumericId - leftNumericId;
+                      }
+                      return right.createdAt.localeCompare(left.createdAt);
+                    })
+                    .slice(0, 20)
+                    .map((user) => {
+                      const isExpanded = expandedUserId === user.id;
+                      const draft = userDrafts[user.id] ?? userToQuotaForm(user);
+                      return (
+                        <Fragment key={user.id}>
+                          <tr>
+                            <td>{user.email || "-"}</td>
+                            <td>{user.displayName || "-"}</td>
+                            <td>{roleLabel(user.role)}</td>
+                            <td>{user.planName || user.planId || "未设置"}{user.planExpiresAt ? ` · ${formatDateTime(user.planExpiresAt)}` : ""}</td>
+                            <td>{formatMoney(user.balanceCents ?? 0, "CNY")}</td>
+                            <td>{quotaLabel(user)}</td>
+                            <td>{storageLabel(user)}</td>
+                            <td>{formatDateTime(user.createdAt)}</td>
+                            <td>
+                              <button
+                                className="admin-icon-button"
+                                type="button"
+                                onClick={() => {
+                                  setExpandedUserId(isExpanded ? "" : user.id);
+                                  setUserDrafts((drafts) => ({ ...drafts, [user.id]: drafts[user.id] ?? userToQuotaForm(user) }));
+                                }}
+                              >
+                                <Pencil className="size-4" aria-hidden="true" />
+                                <span>{isExpanded ? "收起" : "管理"}</span>
+                              </button>
                             </td>
                           </tr>
-                        ) : null}
-                      </Fragment>
-                    );
-                  })
+                          {isExpanded ? (
+                            <tr className="admin-expanded-row">
+                              <td colSpan={9}>
+                                <div className="admin-user-form">
+                                  <label>
+                                    <span>套餐</span>
+                                    <select
+                                      className="admin-input"
+                                      value={draft.planId}
+                                      onChange={(event) =>
+                                        setUserDrafts((drafts) => ({ ...drafts, [user.id]: { ...draft, planId: event.target.value } }))
+                                      }
+                                    >
+                                      <option value="">未设置 / 重置</option>
+                                      {plans.map((plan) => (
+                                        <option key={plan.id} value={plan.id}>
+                                          {plan.name}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </label>
+                                  <label>
+                                    <span>账户余额</span>
+                                    <input
+                                      className="admin-input"
+                                      inputMode="decimal"
+                                      value={draft.balance}
+                                      onChange={(event) =>
+                                        setUserDrafts((drafts) => ({ ...drafts, [user.id]: { ...draft, balance: event.target.value } }))
+                                      }
+                                    />
+                                  </label>
+                                  <label>
+                                    <span>生图总额度</span>
+                                    <input
+                                      className="admin-input"
+                                      inputMode="numeric"
+                                      placeholder="留空按套餐"
+                                      value={draft.quotaTotal}
+                                      onChange={(event) =>
+                                        setUserDrafts((drafts) => ({ ...drafts, [user.id]: { ...draft, quotaTotal: event.target.value } }))
+                                      }
+                                    />
+                                  </label>
+                                  <label>
+                                    <span>生图已用</span>
+                                    <input
+                                      className="admin-input"
+                                      inputMode="numeric"
+                                      value={draft.quotaUsed}
+                                      onChange={(event) =>
+                                        setUserDrafts((drafts) => ({ ...drafts, [user.id]: { ...draft, quotaUsed: event.target.value } }))
+                                      }
+                                    />
+                                  </label>
+                                  <label>
+                                    <span>存储额度 GB</span>
+                                    <input
+                                      className="admin-input"
+                                      inputMode="decimal"
+                                      placeholder="留空按套餐"
+                                      value={draft.storageQuotaGb}
+                                      onChange={(event) =>
+                                        setUserDrafts((drafts) => ({ ...drafts, [user.id]: { ...draft, storageQuotaGb: event.target.value } }))
+                                      }
+                                    />
+                                  </label>
+                                  <label>
+                                    <span>存储已用 GB</span>
+                                    <input
+                                      className="admin-input"
+                                      inputMode="decimal"
+                                      value={draft.storageUsedGb}
+                                      onChange={(event) =>
+                                        setUserDrafts((drafts) => ({ ...drafts, [user.id]: { ...draft, storageUsedGb: event.target.value } }))
+                                      }
+                                    />
+                                  </label>
+                                  <div className="admin-user-form__actions">
+                                    <button
+                                      className="secondary-action h-10"
+                                      type="button"
+                                      onClick={() => setUserDrafts((drafts) => ({ ...drafts, [user.id]: resetUserQuotaForm(draft) }))}
+                                    >
+                                      重置覆盖
+                                    </button>
+                                    <button className="primary-action h-10" disabled={savingUserId === user.id} type="button" onClick={() => void saveUserQuota(user)}>
+                                      {savingUserId === user.id ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Save className="size-4" aria-hidden="true" />}
+                                      保存
+                                    </button>
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+                          ) : null}
+                        </Fragment>
+                      );
+                    })
                 ) : (
                   <tr>
                     <td colSpan={9}>暂无用户</td>
@@ -2230,6 +2240,7 @@ interface BillingSettingsView {
 
 interface AdminUserRow {
   id: string;
+  numericId?: number;
   email: string;
   displayName: string;
   role: string;
@@ -2562,6 +2573,7 @@ function paymentUrlFrom(value: unknown): string {
 function parseUsers(value: unknown): AdminUserRow[] {
   return arrayFrom(value, ["users", "items"]).map((item, index) => ({
     id: stringFrom(item.id) || stringFrom(item.userId) || `user-${index}`,
+    numericId: numberFrom(item.numericId ?? item.numeric_id),
     email: stringFrom(item.email),
     displayName: stringFrom(item.displayName) || stringFrom(item.name),
     role: stringFrom(item.role) || "user",

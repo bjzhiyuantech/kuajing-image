@@ -9,6 +9,7 @@ export const users = mysqlTable(
   "users",
   {
     id: id("id").primaryKey(),
+    numericId: bigint("numeric_id", { mode: "number", unsigned: true }).notNull().default(0),
     email: shortText("email"),
     passwordHash: shortText("password_hash", 512).notNull(),
     displayName: shortText("display_name").notNull(),
@@ -28,6 +29,7 @@ export const users = mysqlTable(
     updatedAt: isoDate("updated_at").notNull()
   },
   (table) => ({
+    numericIdIdx: uniqueIndex("users_numeric_id_unique_idx").on(table.numericId),
     emailIdx: uniqueIndex("users_email_unique_idx").on(table.email),
     inviteCodeIdx: uniqueIndex("users_invite_code_unique_idx").on(table.inviteCode),
     inviterIdx: index("users_inviter_user_id_idx").on(table.inviterUserId),

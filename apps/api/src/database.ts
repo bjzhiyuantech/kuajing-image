@@ -122,6 +122,7 @@ async function createSchema(): Promise<void> {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id VARCHAR(64) PRIMARY KEY,
+      numeric_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
       email VARCHAR(255),
       password_hash VARCHAR(512) NOT NULL DEFAULT '',
       display_name VARCHAR(255) NOT NULL,
@@ -139,6 +140,7 @@ async function createSchema(): Promise<void> {
       currency VARCHAR(16) NOT NULL DEFAULT 'CNY',
       created_at VARCHAR(32) NOT NULL,
       updated_at VARCHAR(32) NOT NULL,
+      UNIQUE KEY users_numeric_id_unique_idx (numeric_id),
       UNIQUE KEY users_email_unique_idx (email),
       UNIQUE KEY users_invite_code_unique_idx (invite_code),
       KEY users_inviter_user_id_idx (inviter_user_id),
@@ -585,13 +587,17 @@ async function migrateUsersTable(): Promise<void> {
   await addColumnIfMissing("users", "storage_quota_bytes", "BIGINT NOT NULL DEFAULT 0");
   await addColumnIfMissing("users", "storage_used_bytes", "BIGINT NOT NULL DEFAULT 0");
   await addColumnIfMissing("users", "currency", "VARCHAR(16) NOT NULL DEFAULT 'CNY'");
+  await addColumnIfMissing("users", "numeric_id", "BIGINT UNSIGNED NOT NULL DEFAULT 0");
   await makeUserEmailNullable();
   await normalizeDuplicateUserEmails();
   await backfillInviteCodes();
+  await backfillUsersNumericId();
   await addIndexIfMissing("users", "users_email_unique_idx", "UNIQUE KEY users_email_unique_idx (email)");
   await addIndexIfMissing("users", "users_invite_code_unique_idx", "UNIQUE KEY users_invite_code_unique_idx (invite_code)");
   await addIndexIfMissing("users", "users_inviter_user_id_idx", "KEY users_inviter_user_id_idx (inviter_user_id)");
   await addIndexIfMissing("users", "users_plan_id_idx", "KEY users_plan_id_idx (plan_id)");
+  await addIndexIfMissing("users", "users_numeric_id_unique_idx", "UNIQUE KEY users_numeric_id_unique_idx (numeric_id)");
+  await pool.query("ALTER TABLE users MODIFY COLUMN numeric_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT");
   const defaultPlan = await getDefaultSubscriptionPlan();
   await pool.query(
     "UPDATE users SET plan_id = ?, quota_total = IF(quota_total = 0, ?, quota_total), storage_quota_bytes = IF(storage_quota_bytes = 0, ?, storage_quota_bytes) WHERE plan_id IS NULL OR plan_id = ''",
@@ -873,6 +879,27 @@ async function backfillInviteCodes(): Promise<void> {
   for (const row of rows) {
     if (typeof row.id === "string") {
       await pool.query("UPDATE users SET invite_code = ? WHERE id = ?", [inviteCodeFromUserId(row.id), row.id]);
+    }
+  }
+}
+
+async function backfillUsersNumericId(): Promise<void> {
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `
+      SELECT id, numeric_id
+      FROM users
+      WHERE numeric_id IS NULL OR numeric_id = 0
+      ORDER BY created_at, id
+    `
+  );
+  if (rows.length === 0) {
+    return;
+  }
+
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index];
+    if (typeof row.id === "string") {
+      await pool.query("UPDATE users SET numeric_id = ? WHERE id = ?", [index + 1, row.id]);
     }
   }
 }

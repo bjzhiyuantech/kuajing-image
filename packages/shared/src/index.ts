@@ -668,6 +668,7 @@ export interface Plan {
 
 export interface AuthUser {
   id: string;
+  numericId?: number;
   email: string;
   displayName: string;
   role: UserRole;
