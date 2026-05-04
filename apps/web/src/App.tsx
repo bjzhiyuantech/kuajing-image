@@ -891,6 +891,17 @@ function createImageShape(
   };
 }
 
+function isCanvasInsertableAsset(asset: GeneratedAsset): boolean {
+  return (
+    asset.id.trim().length > 0 &&
+    assetDisplayUrl(asset, GENERATED_ASSET_INITIAL_PREVIEW_WIDTH).trim().length > 0 &&
+    Number.isFinite(asset.width) &&
+    Number.isFinite(asset.height) &&
+    asset.width > 0 &&
+    asset.height > 0
+  );
+}
+
 function createCenteredImagePlacement(editor: Editor, asset: GeneratedAsset): GenerationPlaceholderPlacement {
   const imageSize = displaySize({
     width: asset.width,
@@ -928,6 +939,7 @@ function insertGalleryImageOnCanvas(editor: Editor, item: GalleryImageItem): TLS
 
 function replaceGenerationPlaceholders(editor: Editor, placeholderSet: ActiveGenerationPlaceholders, record: GenerationRecord): number {
   const assets: TLAsset[] = [];
+  const queuedAssetIds = new Set<TLAssetId>();
   const imageShapes: Array<Partial<TLImageShape> & { id: TLShapeId; type: "image" }> = [];
   const replacedPlaceholderIds: TLShapeId[] = [];
   const failedUpdates: Array<TLShapePartial<GenerationPlaceholderShape>> = [];
@@ -935,8 +947,26 @@ function replaceGenerationPlaceholders(editor: Editor, placeholderSet: ActiveGen
   placeholderSet.placements.forEach((placement, index) => {
     const output = record.outputs[index];
     if (output?.status === "succeeded" && output.asset) {
+      if (!isCanvasInsertableAsset(output.asset)) {
+        if (isGenerationPlaceholderShape(editor.getShape(placement.id))) {
+          failedUpdates.push({
+            id: placement.id,
+            type: GENERATION_PLACEHOLDER_TYPE,
+            props: {
+              status: "failed",
+              error: "生成图片资源异常，无法插入画布。"
+            }
+          });
+        }
+        return;
+      }
+
+      const assetId = createTldrawAssetId(output.asset.id);
       const resolvedPlacement = livePlacement(editor, placement);
-      assets.push(createImageAsset(output.asset));
+      if (!editor.getAsset(assetId) && !queuedAssetIds.has(assetId)) {
+        queuedAssetIds.add(assetId);
+        assets.push(createImageAsset(output.asset));
+      }
       imageShapes.push(createImageShape(output.asset, resolvedPlacement, record.prompt));
       if (isGenerationPlaceholderShape(editor.getShape(placement.id))) {
         replacedPlaceholderIds.push(placement.id);
