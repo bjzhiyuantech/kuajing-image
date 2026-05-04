@@ -2959,6 +2959,7 @@ export function App() {
   function reuseGalleryImage(item: GalleryImageItem, modelConfigId?: string): void {
     const nextPresetId = coerceStylePresetId(item.presetId);
     const nextSizePresetId = sizePresetIdForSize(item.size.width, item.size.height);
+    const shouldRetryWithModel = Boolean(modelConfigId);
 
     setPrompt(item.prompt);
     setStylePreset(nextPresetId);
@@ -2970,13 +2971,33 @@ export function App() {
     setCount(1);
     setGenerationError("");
     setGenerationWarning("");
+    setGenerationMode("text");
     navigateToRoute("canvas");
 
     window.requestAnimationFrame(() => {
       const editor = editorRef.current;
       if (!editor) {
-        setGenerationMode("text");
-        setGenerationMessage("已从 Gallery 填入生成参数。画布载入后可手动选择图片作为参考。");
+        setGenerationMessage(
+          shouldRetryWithModel ? "已提交重新生成任务，画布载入后可查看结果。" : "已从 Gallery 填入生成参数。"
+        );
+        return;
+      }
+
+      if (shouldRetryWithModel) {
+        setGenerationMessage("已按所选模型重新提交生成。");
+        void executeGeneration(
+          {
+            prompt: item.prompt,
+            presetId: nextPresetId,
+            sizePresetId: nextSizePresetId,
+            size: item.size,
+            quality: item.quality,
+            outputFormat: item.outputFormat,
+            count: 1,
+            modelConfigId
+          },
+          "text"
+        );
         return;
       }
 
@@ -2994,27 +3015,6 @@ export function App() {
       setGenerationMode("reference");
       setReferenceSelection(resolveReferenceSelection(editor));
       setGenerationMessage("已把 Gallery 图片放到画布，并设为本次参考图。");
-
-      if (modelConfigId) {
-        void executeGeneration(
-          {
-            prompt: item.prompt,
-            presetId: nextPresetId,
-            sizePresetId: nextSizePresetId,
-            size: item.size,
-            quality: item.quality,
-            outputFormat: item.outputFormat,
-            count: 1,
-            modelConfigId
-          },
-          "reference",
-          async (signal) => ({
-            referenceImage: await readStoredReferenceImage(item.asset.id, signal),
-            referenceAssetId: item.asset.id
-          }),
-          item.asset.id
-        );
-      }
     });
 
     if (isMobileDrawer) {
