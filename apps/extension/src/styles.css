@@ -1133,6 +1133,36 @@ textarea:focus {
   overflow-wrap: anywhere;
 }
 
+.phone-required-card {
+  align-items: center;
+  background: #ecfeff;
+  border: 1px solid #99f6e4;
+  border-radius: 8px;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  margin-top: 10px;
+  padding: 9px;
+}
+
+.phone-required-card strong,
+.phone-required-card span {
+  display: block;
+}
+
+.phone-required-card strong {
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.phone-required-card span {
+  color: #41645c;
+  font-size: 11px;
+  line-height: 1.35;
+  margin-top: 2px;
+}
+
 .account-meta {
   display: grid;
   gap: 8px;
@@ -1260,6 +1290,86 @@ textarea:focus {
 .tool-error {
   background: #fff4df;
   color: #8b5a00;
+}
+
+.phone-dialog-backdrop {
+  align-items: center;
+  background: rgb(15 23 42 / 0.45);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 14px;
+  position: fixed;
+  z-index: 100;
+}
+
+.phone-dialog {
+  background: #ffffff;
+  border: 1px solid #dfe6e2;
+  border-radius: 8px;
+  box-shadow: 0 22px 70px rgb(15 23 42 / 28%);
+  display: grid;
+  gap: 10px;
+  max-width: 360px;
+  padding: 14px;
+  width: 100%;
+}
+
+.phone-dialog-icon {
+  align-items: center;
+  background: #ecfeff;
+  border-radius: 8px;
+  color: #0f766e;
+  display: inline-flex;
+  height: 42px;
+  justify-content: center;
+  width: 42px;
+}
+
+.phone-dialog-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.phone-dialog-copy span {
+  color: #0f766e;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.phone-dialog-copy h2 {
+  color: #17201c;
+  font-size: 18px;
+  margin: 0;
+}
+
+.phone-dialog-copy p {
+  color: #66766d;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.phone-dialog label {
+  display: grid;
+  gap: 5px;
+}
+
+.phone-dialog label > span {
+  color: #66766d;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.phone-dialog input {
+  background: #ffffff;
+  border: 1px solid #ccd7d1;
+  border-radius: 7px;
+  color: #17201c;
+  min-height: 36px;
+  padding: 0 9px;
+  width: 100%;
 }
 
 .billing-balance-card {

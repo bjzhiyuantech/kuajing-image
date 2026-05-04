@@ -34,7 +34,7 @@ import {
 import type React from "react";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import QRCode from "qrcode";
-import { authFetch, readApiError, type AuthSession, type AuthUser } from "./authClient";
+import { PHONE_VERIFICATION_REQUIRED_CODE, PHONE_VERIFICATION_REQUIRED_MESSAGE, authFetch, readApiError, readApiErrorDetail, type AuthSession, type AuthUser } from "./authClient";
 import { BRAND_TAGLINE, BrandMark, BrandName } from "./Brand";
 import type { AdminWechatMiniAppConfigResponse, MaskedSecret } from "@gpt-image-canvas/shared";
 
@@ -631,6 +631,7 @@ export function AccountPage({
   const [bindSmsCode, setBindSmsCode] = useState("");
   const [bindPhoneError, setBindPhoneError] = useState("");
   const [bindPhoneNotice, setBindPhoneNotice] = useState("");
+  const [isPhoneDialogOpen, setIsPhoneDialogOpen] = useState(!user.phone);
   const [isSendingBindCode, setIsSendingBindCode] = useState(false);
   const [isBindingPhone, setIsBindingPhone] = useState(false);
   const [referralLoading, setReferralLoading] = useState(true);
@@ -667,7 +668,18 @@ export function AccountPage({
       quotaRemaining > 0
   );
 
+  useEffect(() => {
+    setIsPhoneDialogOpen(!user.phone);
+  }, [user.phone]);
+
   async function loadBilling({ preserveNotice = false, signal }: { preserveNotice?: boolean; signal?: AbortSignal } = {}): Promise<void> {
+    if (!user.phone) {
+      setBilling(createAccountBillingState(user));
+      setBillingLoading(false);
+      setBillingError("");
+      setIsPhoneDialogOpen(true);
+      return;
+    }
     setBillingLoading(true);
     setBillingError("");
     if (!preserveNotice) {
@@ -683,7 +695,12 @@ export function AccountPage({
       }
       const summaryResponse = summaryResult.value;
       if (!summaryResponse.ok) {
-        throw new Error(await readApiError(summaryResponse, "计费数据加载失败。"));
+        const detail = await readApiErrorDetail(summaryResponse, "计费数据加载失败。");
+        if (detail.code === PHONE_VERIFICATION_REQUIRED_CODE) {
+          setIsPhoneDialogOpen(true);
+          return;
+        }
+        throw new Error(detail.message);
       }
       const summaryBody = await summaryResponse.json();
       let ordersBody: unknown = {};
@@ -759,12 +776,24 @@ export function AccountPage({
   }, [inviteUrl]);
 
   async function loadReferral({ signal }: { signal?: AbortSignal } = {}): Promise<void> {
+    if (!user.phone) {
+      setReferral(createInviteSummaryState(user));
+      setReferralLoading(false);
+      setReferralError("");
+      setIsPhoneDialogOpen(true);
+      return;
+    }
     setReferralLoading(true);
     setReferralError("");
     try {
       const response = await authFetch("/api/referral/summary", { signal });
       if (!response.ok) {
-        throw new Error(await readApiError(response, "邀请信息加载失败。"));
+        const detail = await readApiErrorDetail(response, "邀请信息加载失败。");
+        if (detail.code === PHONE_VERIFICATION_REQUIRED_CODE) {
+          setIsPhoneDialogOpen(true);
+          return;
+        }
+        throw new Error(detail.message);
       }
       const body = await response.json();
       if (signal?.aborted) {
@@ -866,7 +895,12 @@ export function AccountPage({
         body: JSON.stringify({ amountCents, returnUrl: accountReturnUrl() })
       });
       if (!response.ok) {
-        throw new Error(await readApiError(response, "充值下单失败。"));
+        const detail = await readApiErrorDetail(response, "充值下单失败。");
+        if (detail.code === PHONE_VERIFICATION_REQUIRED_CODE) {
+          setIsPhoneDialogOpen(true);
+          return;
+        }
+        throw new Error(detail.message);
       }
       const body = await response.json();
       const paymentUrl = paymentUrlFrom(body);
@@ -903,7 +937,12 @@ export function AccountPage({
         body: JSON.stringify({ paymentMethod, returnUrl: accountReturnUrl() })
       });
       if (!response.ok) {
-        throw new Error(await readApiError(response, paymentMethod === "balance" ? "余额购买失败。" : "支付宝购买下单失败。"));
+        const detail = await readApiErrorDetail(response, paymentMethod === "balance" ? "余额购买失败。" : "支付宝购买下单失败。");
+        if (detail.code === PHONE_VERIFICATION_REQUIRED_CODE) {
+          setIsPhoneDialogOpen(true);
+          return;
+        }
+        throw new Error(detail.message);
       }
       const body = await response.json();
       const paymentUrl = paymentUrlFrom(body);
@@ -954,6 +993,7 @@ export function AccountPage({
       onUserUpdated?.(session.user);
       setBindPhoneNotice("手机号已验证。");
       setBindSmsCode("");
+      setIsPhoneDialogOpen(false);
     } catch (error) {
       setBindPhoneError(error instanceof Error ? error.message : "手机号验证失败。");
     } finally {
@@ -980,40 +1020,6 @@ export function AccountPage({
           <InfoTile label="当前套餐" value={currentPlanName} icon={<Package className="size-4" aria-hidden="true" />} />
           <InfoTile label="套餐到期" value={currentPlanExpiresAt ? formatDateTime(currentPlanExpiresAt) : "长期"} icon={<Clock className="size-4" aria-hidden="true" />} />
         </div>
-
-        {!user.phone ? (
-          <section className="admin-form-panel" aria-labelledby="bind-phone-title">
-            <div className="admin-form-panel__title-row">
-              <div>
-                <p className="settings-eyebrow">Phone Verification</p>
-                <h3 id="bind-phone-title">补全手机号验证</h3>
-              </div>
-            </div>
-            <div className="admin-form-grid admin-form-grid--two">
-              <label>
-                <span>手机号</span>
-                <input className="admin-input" inputMode="tel" value={bindPhone} onChange={(event) => setBindPhone(event.target.value)} />
-              </label>
-              <label>
-                <span>短信验证码</span>
-                <div className="auth-input auth-input--with-action">
-                  <ShieldCheck className="size-4" aria-hidden="true" />
-                  <input inputMode="numeric" maxLength={6} value={bindSmsCode} onChange={(event) => setBindSmsCode(event.target.value)} />
-                  <button className="auth-input__action" disabled={isSendingBindCode} type="button" onClick={() => void sendBindCode()}>
-                    {isSendingBindCode ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Send className="size-4" aria-hidden="true" />}
-                    发送
-                  </button>
-                </div>
-              </label>
-            </div>
-            {bindPhoneError ? <div className="auth-alert" role="alert"><AlertTriangle className="size-4" aria-hidden="true" /><p>{bindPhoneError}</p></div> : null}
-            {bindPhoneNotice ? <div className="admin-success" role="status"><CheckCircle2 className="size-4" aria-hidden="true" /><p>{bindPhoneNotice}</p></div> : null}
-            <button className="primary-action h-10" disabled={isBindingPhone} type="button" onClick={() => void submitBindPhone()}>
-              {isBindingPhone ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <ShieldCheck className="size-4" aria-hidden="true" />}
-              完成验证
-            </button>
-          </section>
-        ) : null}
 
         <section className="referral-campaign-panel" aria-labelledby="referral-campaign-title">
           <div className="referral-campaign-panel__copy">
@@ -1200,6 +1206,20 @@ export function AccountPage({
           onCopy={() => void copyInviteUrl()}
           onDownload={() => void downloadInvitePoster()}
           onRefresh={() => void loadReferral()}
+        />
+      ) : null}
+      {!user.phone && isPhoneDialogOpen ? (
+        <PhoneVerificationDialog
+          error={bindPhoneError}
+          isBinding={isBindingPhone}
+          isSendingCode={isSendingBindCode}
+          notice={bindPhoneNotice}
+          phone={bindPhone}
+          smsCode={bindSmsCode}
+          onPhoneChange={setBindPhone}
+          onSendCode={sendBindCode}
+          onSmsCodeChange={setBindSmsCode}
+          onSubmit={submitBindPhone}
         />
       ) : null}
     </main>
@@ -2678,6 +2698,68 @@ function InviteShareCard({
         <span>邀请码</span>
         <strong>{inviteCode || "生成中"}</strong>
       </div>
+    </div>
+  );
+}
+
+function PhoneVerificationDialog({
+  error,
+  isBinding,
+  isSendingCode,
+  notice,
+  phone,
+  smsCode,
+  onPhoneChange,
+  onSendCode,
+  onSmsCodeChange,
+  onSubmit
+}: {
+  error: string;
+  isBinding: boolean;
+  isSendingCode: boolean;
+  notice: string;
+  phone: string;
+  smsCode: string;
+  onPhoneChange: (value: string) => void;
+  onSendCode: () => void;
+  onSmsCodeChange: (value: string) => void;
+  onSubmit: () => void;
+}) {
+  return (
+    <div className="invite-dialog-backdrop phone-verification-backdrop" role="presentation">
+      <section aria-labelledby="phone-verification-title" aria-modal="true" className="phone-verification-dialog" role="dialog">
+        <div className="phone-verification-dialog__icon">
+          <Phone className="size-5" aria-hidden="true" />
+        </div>
+        <div className="phone-verification-dialog__copy">
+          <p className="settings-eyebrow">Phone Verification</p>
+          <h2 id="phone-verification-title">完善手机号</h2>
+          <p>{PHONE_VERIFICATION_REQUIRED_MESSAGE}</p>
+        </div>
+        <div className="phone-verification-dialog__form">
+          <label>
+            <span>手机号</span>
+            <input className="admin-input" inputMode="tel" value={phone} onChange={(event) => onPhoneChange(event.target.value)} />
+          </label>
+          <label>
+            <span>短信验证码</span>
+            <div className="auth-input auth-input--with-action">
+              <ShieldCheck className="size-4" aria-hidden="true" />
+              <input inputMode="numeric" maxLength={6} value={smsCode} onChange={(event) => onSmsCodeChange(event.target.value)} />
+              <button className="auth-input__action" disabled={isSendingCode} type="button" onClick={onSendCode}>
+                {isSendingCode ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Send className="size-4" aria-hidden="true" />}
+                发送
+              </button>
+            </div>
+          </label>
+        </div>
+        {error ? <div className="auth-alert" role="alert"><AlertTriangle className="size-4" aria-hidden="true" /><p>{error}</p></div> : null}
+        {notice ? <div className="admin-success" role="status"><CheckCircle2 className="size-4" aria-hidden="true" /><p>{notice}</p></div> : null}
+        <button className="primary-action h-11" disabled={isBinding} type="button" onClick={onSubmit}>
+          {isBinding ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <ShieldCheck className="size-4" aria-hidden="true" />}
+          完成验证
+        </button>
+      </section>
     </div>
   );
 }

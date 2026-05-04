@@ -36,6 +36,9 @@ export class UnauthorizedError extends Error {
   }
 }
 
+export const PHONE_VERIFICATION_REQUIRED_CODE = "phone_verification_required";
+export const PHONE_VERIFICATION_REQUIRED_MESSAGE = "为了更好提供服务，请完善手机号。";
+
 export function getStoredAuthToken(): string | null {
   return window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
 }
@@ -194,22 +197,29 @@ export async function fetchCurrentUser(): Promise<AuthUser> {
 }
 
 export async function readApiError(response: Response, fallback: string): Promise<string> {
+  return (await readApiErrorDetail(response, fallback)).message;
+}
+
+export async function readApiErrorDetail(response: Response, fallback: string): Promise<{ code?: string; message: string; status: number }> {
   try {
     const body = (await response.json()) as unknown;
     if (isRecord(body)) {
       const error = body.error;
+      if (isRecord(error) && error.code === PHONE_VERIFICATION_REQUIRED_CODE) {
+        return { code: PHONE_VERIFICATION_REQUIRED_CODE, message: PHONE_VERIFICATION_REQUIRED_MESSAGE, status: response.status };
+      }
       if (isRecord(error) && typeof error.message === "string") {
-        return `${error.message}（HTTP ${response.status}）`;
+        return { code: typeof error.code === "string" ? error.code : undefined, message: `${error.message}（HTTP ${response.status}）`, status: response.status };
       }
       if (typeof body.message === "string") {
-        return `${body.message}（HTTP ${response.status}）`;
+        return { message: `${body.message}（HTTP ${response.status}）`, status: response.status };
       }
     }
   } catch {
     // Fall through to the caller-facing fallback.
   }
 
-  return `${fallback}（HTTP ${response.status}）`;
+  return { message: `${fallback}（HTTP ${response.status}）`, status: response.status };
 }
 
 function parseAuthSession(value: unknown): AuthSession {

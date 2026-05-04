@@ -14,6 +14,7 @@ import {
   Loader2,
   LogOut,
   Package,
+  Phone,
   RefreshCw,
   Send,
   Settings,
@@ -59,6 +60,8 @@ const UPDATE_DIALOG_DISMISSED_STORAGE_KEY = "dismissedExtensionUpdateDialog";
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const TEXT_TRANSLATION_SCENE_ID = "text-translation" as const;
 const TEXT_TRANSLATION_CONCURRENCY = 4;
+const PHONE_VERIFICATION_REQUIRED_CODE = "phone_verification_required";
+const PHONE_VERIFICATION_REQUIRED_MESSAGE = "为了更好提供服务，请完善手机号。";
 const MOCK_BILLING_PLANS: BillingPlan[] = [
   {
     id: "starter",
@@ -1098,6 +1101,12 @@ export function SidePanelApp() {
   const [authCodeLoading, setAuthCodeLoading] = useState(false);
   const [authError, setAuthError] = useState("");
   const [authNotice, setAuthNotice] = useState("");
+  const [bindPhoneForm, setBindPhoneForm] = useState({ phone: "", smsCode: "" });
+  const [bindPhoneError, setBindPhoneError] = useState("");
+  const [bindPhoneNotice, setBindPhoneNotice] = useState("");
+  const [bindPhoneCodeLoading, setBindPhoneCodeLoading] = useState(false);
+  const [bindPhoneLoading, setBindPhoneLoading] = useState(false);
+  const [phoneDialogOpen, setPhoneDialogOpen] = useState(false);
   const [pendingAuthAction, setPendingAuthAction] = useState<PendingAuthAction | null>(null);
   const [form, setForm] = useState<BatchFormState>(defaultForm);
   const [pageContext, setPageContext] = useState<PageContext | null>(null);
@@ -1259,6 +1268,13 @@ export function SidePanelApp() {
     );
   }, [accountQuota.remaining, auth.user, billingState.data.currentPlan, billingState.data.currentPlanExpiresAt]);
   const currentPlanLabel = auth.token ? billingState.data.currentPlan?.name || auth.user?.planName || auth.user?.planId || "套餐" : "套餐";
+  const requiresPhoneVerification = Boolean(auth.token && auth.user && !auth.user.phone);
+
+  useEffect(() => {
+    if (requiresPhoneVerification) {
+      setPhoneDialogOpen(true);
+    }
+  }, [requiresPhoneVerification]);
 
   useEffect(() => {
     void chrome.storage.local.get([AUTH_STORAGE_KEY, ACTIVE_BATCH_JOB_STORAGE_KEY]).then((result) => {
@@ -1527,9 +1543,32 @@ export function SidePanelApp() {
       throw new Error("登录已过期，请重新登录。");
     }
     if (!response.ok) {
-      throw new Error(await response.text());
+      const detail = await parseApiError(response);
+      if (detail.code === PHONE_VERIFICATION_REQUIRED_CODE) {
+        setPhoneDialogOpen(true);
+      }
+      throw new Error(detail.message);
     }
     return response.json();
+  }
+
+  async function parseApiError(response: Response): Promise<{ code?: string; message: string }> {
+    try {
+      const body = (await response.json()) as unknown;
+      const root = asRecord(body);
+      const error = asRecord(root.error);
+      const code = firstString(error, ["code"]);
+      if (code === PHONE_VERIFICATION_REQUIRED_CODE) {
+        return { code, message: PHONE_VERIFICATION_REQUIRED_MESSAGE };
+      }
+      const message = firstString(error, ["message"]) ?? firstString(root, ["message"]);
+      if (message) {
+        return { code, message };
+      }
+    } catch {
+      // Fall through to a friendly generic message.
+    }
+    return { message: `请求失败，请稍后重试（HTTP ${response.status}）。` };
   }
 
   async function fetchAssetAsReferenceImage(asset: GeneratedAsset): Promise<ReferenceImageInput> {
@@ -1729,6 +1768,64 @@ export function SidePanelApp() {
     }
   }
 
+  async function sendBindPhoneCode(): Promise<void> {
+    setBindPhoneError("");
+    setBindPhoneNotice("");
+    if (!bindPhoneForm.phone.trim()) {
+      setBindPhoneError("请先输入手机号。");
+      return;
+    }
+    setBindPhoneCodeLoading(true);
+    try {
+      const response = await fetch(`${apiBaseUrl()}/api/auth/phone-code`, {
+        method: "POST",
+        headers: apiHeaders(true),
+        body: JSON.stringify({ phone: bindPhoneForm.phone.trim() })
+      });
+      await parseResponseOrThrow(response);
+      setBindPhoneNotice("验证码已发送，请查收短信。");
+    } catch (error) {
+      setBindPhoneError(error instanceof Error ? error.message : "验证码发送失败。");
+    } finally {
+      setBindPhoneCodeLoading(false);
+    }
+  }
+
+  async function submitBindPhone(): Promise<void> {
+    setBindPhoneError("");
+    setBindPhoneNotice("");
+    if (!bindPhoneForm.phone.trim() || !bindPhoneForm.smsCode.trim()) {
+      setBindPhoneError("请输入手机号和短信验证码。");
+      return;
+    }
+    setBindPhoneLoading(true);
+    try {
+      const response = await fetch(`${apiBaseUrl()}/api/auth/phone`, {
+        method: "POST",
+        headers: apiHeaders(true),
+        body: JSON.stringify({ phone: bindPhoneForm.phone.trim(), smsCode: bindPhoneForm.smsCode.trim() })
+      });
+      const body = await parseResponseOrThrow(response);
+      const user = normalizeUser(body);
+      if (user) {
+        const nextAuth = { token: auth.token, user };
+        setAuth(nextAuth);
+        await chrome.storage.local.set({ [AUTH_STORAGE_KEY]: nextAuth });
+      } else {
+        await refreshMe(auth.token);
+      }
+      setBindPhoneForm({ phone: "", smsCode: "" });
+      setBindPhoneNotice("手机号已完善。");
+      setPhoneDialogOpen(false);
+      void refreshBilling(true);
+      void refreshReferral(true);
+    } catch (error) {
+      setBindPhoneError(error instanceof Error ? error.message : "手机号验证失败。");
+    } finally {
+      setBindPhoneLoading(false);
+    }
+  }
+
   async function pollBatchJob(jobId: string, token = auth.token): Promise<void> {
     if (!token.trim() && !requireAuth("job")) {
       return;
@@ -1814,6 +1911,11 @@ export function SidePanelApp() {
     if (!token.trim() && !authAlreadyChecked && !requireAuth("billing")) {
       return;
     }
+    if (requiresPhoneVerification) {
+      setPhoneDialogOpen(true);
+      setBillingState((current) => ({ ...current, error: "", loading: false }));
+      return;
+    }
     setBillingState((current) => ({ ...current, error: "", loading: true }));
     try {
       const [summaryResult, ordersResult] = await Promise.allSettled([
@@ -1852,6 +1954,11 @@ export function SidePanelApp() {
 
   async function refreshReferral(authAlreadyChecked = false, token = auth.token): Promise<void> {
     if (!token.trim() && !authAlreadyChecked && !requireAuth("billing")) {
+      return;
+    }
+    if (requiresPhoneVerification) {
+      setPhoneDialogOpen(true);
+      setReferralState((current) => ({ ...current, error: "", loading: false }));
       return;
     }
     setReferralState((current) => ({ ...current, error: "", loading: true }));
@@ -3899,8 +4006,8 @@ export function SidePanelApp() {
                   <div className="account-card">
                     <div className="account-heading">
                       <div>
-                        <strong>{auth.user?.displayName || auth.user?.email || "已登录"}</strong>
-                        <span>{auth.user?.email || "正在同步账户信息"}</span>
+                        <strong>{auth.user?.displayName || auth.user?.email || auth.user?.phone || "已登录"}</strong>
+                        <span>{auth.user?.phone || auth.user?.email || "正在同步账户信息"}</span>
                       </div>
                       <button
                         className="mini-button"
@@ -3914,6 +4021,18 @@ export function SidePanelApp() {
                         退出
                       </button>
                     </div>
+                    {requiresPhoneVerification ? (
+                      <div className="phone-required-card">
+                        <div>
+                          <strong>完善手机号</strong>
+                          <span>{PHONE_VERIFICATION_REQUIRED_MESSAGE}</span>
+                        </div>
+                        <button className="mini-button" type="button" onClick={() => setPhoneDialogOpen(true)}>
+                          <Phone size={13} />
+                          去完善
+                        </button>
+                      </div>
+                    ) : null}
                     <div className="account-meta">
                       <div><span>当前套餐</span><strong>{billingState.data.currentPlan?.name || auth.user?.planName || auth.user?.planId || "未设置"}</strong></div>
                       <div><span>套餐到期</span><strong>{billingState.data.currentPlanExpiresAt || auth.user?.planExpiresAt ? formatDateTime(billingState.data.currentPlanExpiresAt || auth.user?.planExpiresAt) : "长期"}</strong></div>
@@ -4350,6 +4469,40 @@ export function SidePanelApp() {
           </div>
         ) : null}
       </section>
+      {requiresPhoneVerification && phoneDialogOpen ? (
+        <div className="phone-dialog-backdrop" role="presentation">
+          <section aria-labelledby="extension-phone-dialog-title" aria-modal="true" className="phone-dialog" role="dialog">
+            <div className="phone-dialog-icon">
+              <Phone size={20} />
+            </div>
+            <div className="phone-dialog-copy">
+              <span>Phone Verification</span>
+              <h2 id="extension-phone-dialog-title">完善手机号</h2>
+              <p>{PHONE_VERIFICATION_REQUIRED_MESSAGE}</p>
+            </div>
+            <label>
+              <span>手机号</span>
+              <input inputMode="tel" value={bindPhoneForm.phone} onChange={(event) => setBindPhoneForm({ ...bindPhoneForm, phone: event.target.value })} />
+            </label>
+            <label>
+              <span>短信验证码</span>
+              <div className="auth-code-row">
+                <input inputMode="numeric" maxLength={6} value={bindPhoneForm.smsCode} onChange={(event) => setBindPhoneForm({ ...bindPhoneForm, smsCode: event.target.value })} />
+                <button className="mini-button" disabled={bindPhoneCodeLoading} type="button" onClick={() => void sendBindPhoneCode()}>
+                  {bindPhoneCodeLoading ? <Loader2 className="spin" size={13} /> : <Send size={13} />}
+                  发送
+                </button>
+              </div>
+            </label>
+            {bindPhoneError ? <p className="tool-error">{bindPhoneError}</p> : null}
+            {bindPhoneNotice ? <p className="settings-note">{bindPhoneNotice}</p> : null}
+            <button className="primary-button auth-submit" disabled={bindPhoneLoading} type="button" onClick={() => void submitBindPhone()}>
+              {bindPhoneLoading ? <Loader2 className="spin" size={15} /> : <CheckCircle2 size={15} />}
+              完成验证
+            </button>
+          </section>
+        </div>
+      ) : null}
       {renderExtensionUpdateDialog()}
       {renderQueuedJobDialog()}
     </main>

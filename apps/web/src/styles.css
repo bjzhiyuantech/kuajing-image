@@ -1408,6 +1408,63 @@ body {
   gap: 0.55rem;
 }
 
+.phone-verification-backdrop {
+  background: rgb(15 23 42 / 0.52);
+}
+
+.phone-verification-dialog {
+  display: grid;
+  width: min(440px, 100%);
+  gap: 0.95rem;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 24px 70px rgb(15 23 42 / 0.28);
+  padding: 1.25rem;
+}
+
+.phone-verification-dialog__icon {
+  display: inline-flex;
+  width: 2.75rem;
+  height: 2.75rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: #ecfeff;
+  color: #0f766e;
+}
+
+.phone-verification-dialog__copy {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.phone-verification-dialog__copy h2 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 1.35rem;
+  font-weight: 900;
+}
+
+.phone-verification-dialog__copy p:last-child {
+  margin: 0;
+  color: #475569;
+  font-size: 0.92rem;
+  line-height: 1.55;
+}
+
+.phone-verification-dialog__form {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.phone-verification-dialog__form label {
+  display: grid;
+  gap: 0.4rem;
+  color: #334155;
+  font-size: 0.82rem;
+  font-weight: 850;
+}
+
 .info-tile,
 .quota-panel,
 .billing-panel,
