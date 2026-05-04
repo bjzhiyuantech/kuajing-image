@@ -18,6 +18,7 @@ import type {
 import { db } from "./database.js";
 import { verifyRegisterEmailCode } from "./email-service.js";
 import { ensureUserPlanCurrent } from "./plan-expiration.js";
+import { wechatMiniAppRuntimeConfig } from "./runtime.js";
 import { subscriptionPlans, users, wechatAccounts, workspaceMembers, workspaces } from "./schema.js";
 import { getSystemSetting, saveSystemSetting } from "./system-settings.js";
 
@@ -620,7 +621,18 @@ function maskSecret(value: string | undefined): string {
 }
 
 async function getRawWechatMiniAppConfig(): Promise<Record<string, unknown>> {
-  return parseRecord((await getSystemSetting(WECHAT_MINIAPP_SETTINGS_KEY))?.valueJson);
+  const saved = parseRecord((await getSystemSetting(WECHAT_MINIAPP_SETTINGS_KEY))?.valueJson);
+  if (saved.enabled === true || !wechatMiniAppRuntimeConfig.enabled) {
+    return saved;
+  }
+  return {
+    ...saved,
+    enabled: true,
+    appId: stringValue(saved.appId) ?? wechatMiniAppRuntimeConfig.appId ?? "",
+    appSecret: stringValue(saved.appSecret) ?? wechatMiniAppRuntimeConfig.appSecret ?? "",
+    allowBindExistingAccount: saved.allowBindExistingAccount !== false,
+    allowRegisterNewUser: saved.allowRegisterNewUser !== false
+  };
 }
 
 function toWechatMiniAppPublicConfig(value: Record<string, unknown>, updatedAt?: string): WechatMiniAppConfigResponse["wechatMiniApp"] {
