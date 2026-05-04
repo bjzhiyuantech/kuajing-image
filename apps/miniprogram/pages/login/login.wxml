@@ -24,6 +24,7 @@
   <view wx:if="{{loginMode === 'wechat'}}" class="login-panel">
     <view class="panel-title">微信登录</view>
     <view class="panel-copy">登录后可自动识别是否已绑定已有账号。</view>
+    <view wx:if="{{!wechatConfig || !wechatConfig.enabled}}" class="wechat-disabled">当前后端未开启微信小程序登录，稍后请到后台配置启用。</view>
     <button class="login-button" loading="{{loading}}" bindtap="onSubmit">微信一键登录</button>
 
     <view wx:if="{{needsBind}}" class="bind-panel">

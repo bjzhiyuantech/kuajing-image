@@ -56,6 +56,17 @@ export const authConfig = {
   adminDisplayName: emptyToUndefined(process.env.ADMIN_DISPLAY_NAME) ?? "Administrator"
 };
 
+export const smtpRuntimeConfig = {
+  enabled: process.env.SMTP_ENABLED === "true",
+  host: emptyToUndefined(process.env.SMTP_HOST),
+  port: parsePort(process.env.SMTP_PORT ?? "465"),
+  secure: process.env.SMTP_SECURE !== "false",
+  username: emptyToUndefined(process.env.SMTP_USERNAME),
+  password: emptyToUndefined(process.env.SMTP_PASSWORD),
+  fromName: emptyToUndefined(process.env.SMTP_FROM_NAME) ?? "商图 AI 助手",
+  fromEmail: emptyToUndefined(process.env.SMTP_FROM_EMAIL)
+};
+
 export const wechatMiniAppRuntimeConfig = {
   appId: emptyToUndefined(process.env.WECHAT_MINIAPP_APP_ID),
   appSecret: emptyToUndefined(process.env.WECHAT_MINIAPP_APP_SECRET),

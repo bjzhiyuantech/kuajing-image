@@ -30,6 +30,7 @@ import type React from "react";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { authFetch, readApiError, type AuthSession, type AuthUser } from "./authClient";
 import { BRAND_TAGLINE, BrandMark, BrandName } from "./Brand";
+import type { AdminWechatMiniAppConfigResponse, MaskedSecret } from "@gpt-image-canvas/shared";
 
 type AuthMode = "login" | "register";
 
@@ -762,6 +763,7 @@ export function AdminPage() {
   const [assets, setAssets] = useState<AdminAssetRow[]>([]);
   const [billingSettings, setBillingSettings] = useState<BillingSettingsFormState>(createBillingSettingsForm());
   const [alipaySettings, setAlipaySettings] = useState<AlipayFormState>(createAlipayForm());
+  const [wechatMiniAppSettings, setWechatMiniAppSettings] = useState<WechatMiniAppFormState>(createWechatMiniAppForm());
   const [smtpSettings, setSmtpSettings] = useState<SmtpFormState>(createSmtpForm());
   const [transactions, setTransactions] = useState<BillingTransactionRow[]>([]);
   const [planDrafts, setPlanDrafts] = useState<Record<string, PlanFormState>>({});
@@ -784,7 +786,7 @@ export function AdminPage() {
       setNotice("");
     }
     try {
-      const [statsResponse, usersResponse, jobsResponse, assetsResponse, plansResponse, billingResponse, alipayResponse, smtpResponse, transactionsResponse] = await Promise.all([
+      const [statsResponse, usersResponse, jobsResponse, assetsResponse, plansResponse, billingResponse, alipayResponse, wechatResponse, smtpResponse, transactionsResponse] = await Promise.all([
         authFetch("/api/admin/stats"),
         authFetch("/api/admin/users"),
         authFetch("/api/admin/ecommerce/jobs"),
@@ -792,6 +794,7 @@ export function AdminPage() {
         authFetch("/api/admin/plans"),
         authFetch("/api/admin/billing/settings"),
         authFetch("/api/admin/payment/alipay"),
+        authFetch("/api/admin/auth/wechat/miniapp"),
         authFetch("/api/admin/email/smtp"),
         authFetch("/api/admin/billing/transactions?limit=50")
       ]);
@@ -815,6 +818,9 @@ export function AdminPage() {
       }
       if (alipayResponse.ok) {
         setAlipaySettings(parseAlipayForm(await alipayResponse.json()));
+      }
+      if (wechatResponse.ok) {
+        setWechatMiniAppSettings(parseWechatMiniAppForm(await wechatResponse.json()));
       }
       if (smtpResponse.ok) {
         setSmtpSettings(parseSmtpForm(await smtpResponse.json()));
@@ -1024,6 +1030,35 @@ export function AdminPage() {
     }
   }
 
+  async function saveWechatMiniAppSettings(): Promise<void> {
+    setSavingBilling("wechat-miniapp");
+    setError("");
+    setNotice("");
+    try {
+      const response = await authFetch("/api/admin/auth/wechat/miniapp", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          enabled: wechatMiniAppSettings.enabled,
+          appId: wechatMiniAppSettings.appId,
+          appSecret: wechatMiniAppSettings.appSecret,
+          preserveAppSecret: !wechatMiniAppSettings.appSecret.trim() && wechatMiniAppSettings.appSecretSaved,
+          allowBindExistingAccount: wechatMiniAppSettings.allowBindExistingAccount,
+          allowRegisterNewUser: wechatMiniAppSettings.allowRegisterNewUser
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "微信小程序配置保存失败。"));
+      }
+      setNotice("微信小程序配置已保存。");
+      await loadAdminData({ preserveNotice: true });
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "微信小程序配置保存失败。");
+    } finally {
+      setSavingBilling("");
+    }
+  }
+
   async function saveSmtpSettings(): Promise<void> {
     setSavingBilling("smtp");
     setError("");
@@ -1202,6 +1237,67 @@ export function AdminPage() {
               <button className="secondary-action h-10" disabled={savingBilling === "smtp"} type="button" onClick={() => void saveSmtpSettings()}>
                 {savingBilling === "smtp" ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Mail className="size-4" aria-hidden="true" />}
                 保存 SMTP
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section className="admin-table-card admin-billing-card" aria-labelledby="wechat-config-title">
+          <div className="admin-table-card__title">
+            <ShieldCheck className="size-4" aria-hidden="true" />
+            <h2 id="wechat-config-title">微信小程序登录配置</h2>
+          </div>
+          <div className="admin-billing-grid">
+            <div className="admin-form-panel">
+              <div className="admin-form-panel__title-row">
+                <div>
+                  <p className="settings-eyebrow">Mini Program</p>
+                  <h3>微信一键登录</h3>
+                </div>
+                <label className="admin-switch">
+                  <input
+                    checked={wechatMiniAppSettings.enabled}
+                    type="checkbox"
+                    onChange={(event) => setWechatMiniAppSettings({ ...wechatMiniAppSettings, enabled: event.target.checked })}
+                  />
+                  <span>{wechatMiniAppSettings.enabled ? "启用" : "关闭"}</span>
+                </label>
+              </div>
+              <p className="admin-panel-note">启用后，小程序会通过这里配置的 App ID 和 Secret 做微信登录校验。</p>
+              <div className="admin-form-grid admin-form-grid--two">
+                <label>
+                  <span>App ID</span>
+                  <input className="admin-input" value={wechatMiniAppSettings.appId} onChange={(event) => setWechatMiniAppSettings({ ...wechatMiniAppSettings, appId: event.target.value })} />
+                </label>
+                <label>
+                  <span>App Secret {wechatMiniAppSettings.appSecretSaved ? "（已保存，留空不覆盖）" : ""}</span>
+                  <input
+                    className="admin-input"
+                    type="password"
+                    value={wechatMiniAppSettings.appSecret}
+                    onChange={(event) => setWechatMiniAppSettings({ ...wechatMiniAppSettings, appSecret: event.target.value })}
+                  />
+                </label>
+                <label className="admin-switch admin-switch--inline">
+                  <input
+                    checked={wechatMiniAppSettings.allowBindExistingAccount}
+                    type="checkbox"
+                    onChange={(event) => setWechatMiniAppSettings({ ...wechatMiniAppSettings, allowBindExistingAccount: event.target.checked })}
+                  />
+                  <span>允许绑定已有账号</span>
+                </label>
+                <label className="admin-switch admin-switch--inline">
+                  <input
+                    checked={wechatMiniAppSettings.allowRegisterNewUser}
+                    type="checkbox"
+                    onChange={(event) => setWechatMiniAppSettings({ ...wechatMiniAppSettings, allowRegisterNewUser: event.target.checked })}
+                  />
+                  <span>允许新用户注册</span>
+                </label>
+              </div>
+              <button className="secondary-action h-10" disabled={savingBilling === "wechat-miniapp"} type="button" onClick={() => void saveWechatMiniAppSettings()}>
+                {savingBilling === "wechat-miniapp" ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <ShieldCheck className="size-4" aria-hidden="true" />}
+                保存微信配置
               </button>
             </div>
           </div>
@@ -1780,6 +1876,15 @@ interface AlipayFormState {
   signType: string;
 }
 
+interface WechatMiniAppFormState {
+  enabled: boolean;
+  appId: string;
+  appSecret: string;
+  appSecretSaved: boolean;
+  allowBindExistingAccount: boolean;
+  allowRegisterNewUser: boolean;
+}
+
 interface SmtpFormState {
   enabled: boolean;
   host: string;
@@ -2087,6 +2192,19 @@ function parseAlipayForm(value: unknown): AlipayFormState {
   };
 }
 
+function parseWechatMiniAppForm(value: unknown): WechatMiniAppFormState {
+  const wechat = firstRecord(value, "wechatMiniApp") ?? (isRecord(value) ? value : {});
+  const appSecret = isRecord(wechat.appSecret) ? wechat.appSecret : {};
+  return {
+    enabled: booleanFrom(wechat.enabled, false),
+    appId: stringFrom(wechat.appId),
+    appSecret: "",
+    appSecretSaved: booleanFrom(appSecret.hasSecret, false),
+    allowBindExistingAccount: booleanFrom(wechat.allowBindExistingAccount, true),
+    allowRegisterNewUser: booleanFrom(wechat.allowRegisterNewUser, true)
+  };
+}
+
 function parseSmtpForm(value: unknown): SmtpFormState {
   const smtp = firstRecord(value, "smtp") ?? (isRecord(value) ? value : {});
   return {
@@ -2191,6 +2309,17 @@ function createAlipayForm(): AlipayFormState {
     returnUrl: "",
     gateway: "https://openapi.alipay.com/gateway.do",
     signType: "RSA2"
+  };
+}
+
+function createWechatMiniAppForm(): WechatMiniAppFormState {
+  return {
+    enabled: false,
+    appId: "",
+    appSecret: "",
+    appSecretSaved: false,
+    allowBindExistingAccount: true,
+    allowRegisterNewUser: true
   };
 }
 

@@ -24,9 +24,13 @@ Page({
   async loadWechatConfig() {
     try {
       const data = await api.getWechatMiniAppConfig();
-      this.setData({ wechatConfig: data.wechatMiniApp || null });
+      const wechatConfig = data.wechatMiniApp || null;
+      this.setData({
+        wechatConfig,
+        loginMode: wechatConfig && wechatConfig.enabled === true ? this.data.loginMode : "account"
+      });
     } catch (error) {
-      this.setData({ wechatConfig: null });
+      this.setData({ wechatConfig: null, loginMode: "account" });
     }
   },
 
@@ -53,6 +57,10 @@ Page({
 
   async onSubmit() {
     if (this.data.loginMode === "wechat") {
+      if (!this.data.wechatConfig || this.data.wechatConfig.enabled !== true) {
+        wx.showToast({ title: "微信登录暂未启用", icon: "none" });
+        return;
+      }
       await this.loginWithWechat();
       return;
     }

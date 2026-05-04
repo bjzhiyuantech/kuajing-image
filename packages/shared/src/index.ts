@@ -691,6 +691,16 @@ export interface SaveWechatMiniAppConfigRequest {
   allowRegisterNewUser?: boolean;
 }
 
+export interface WechatMiniAppConfigViewForm {
+  enabled: boolean;
+  appId: string;
+  appSecret: MaskedSecret;
+  appSecretSaved?: boolean;
+  allowBindExistingAccount: boolean;
+  allowRegisterNewUser: boolean;
+  updatedAt?: string;
+}
+
 export interface WechatMiniAppConfigResponse {
   wechatMiniApp: WechatMiniAppPublicConfig;
 }

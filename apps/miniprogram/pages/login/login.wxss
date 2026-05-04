@@ -173,6 +173,16 @@
   font-weight: 800;
 }
 
+.wechat-disabled {
+  margin-top: 18rpx;
+  padding: 18rpx 20rpx;
+  border-radius: 16rpx;
+  background: #fff7ed;
+  color: #b54708;
+  font-size: 24rpx;
+  line-height: 1.5;
+}
+
 .bind-card {
   margin-top: 22rpx;
   padding: 24rpx;

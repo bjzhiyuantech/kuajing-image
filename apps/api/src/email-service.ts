@@ -2,6 +2,7 @@ import { createHash, randomInt, randomUUID } from "node:crypto";
 import nodemailer from "nodemailer";
 import { and, desc, eq, lt } from "drizzle-orm";
 import { db } from "./database.js";
+import { smtpRuntimeConfig } from "./runtime.js";
 import { emailVerificationCodes, systemSettings, users } from "./schema.js";
 
 const SMTP_SETTINGS_KEY = "email.smtp";
@@ -221,15 +222,16 @@ async function findUserByEmail(email: string): Promise<(typeof users.$inferSelec
 
 function parseSmtpSettings(valueJson: string | undefined): SmtpSettings {
   const value = parseRecord(valueJson);
+  const hasSavedSettings = Object.keys(value).length > 0;
   return {
-    enabled: value.enabled === true,
-    host: stringValue(value.host) ?? "",
-    port: numberValue(value.port) ?? 465,
-    secure: value.secure !== false,
-    username: stringValue(value.username) ?? "",
-    password: stringValue(value.password),
-    fromName: stringValue(value.fromName) ?? "商图 AI 助手",
-    fromEmail: stringValue(value.fromEmail) ?? ""
+    enabled: hasSavedSettings ? value.enabled === true : smtpRuntimeConfig.enabled,
+    host: stringValue(value.host) ?? smtpRuntimeConfig.host ?? "",
+    port: numberValue(value.port) ?? smtpRuntimeConfig.port,
+    secure: hasSavedSettings ? value.secure !== false : smtpRuntimeConfig.secure,
+    username: stringValue(value.username) ?? smtpRuntimeConfig.username ?? "",
+    password: stringValue(value.password) ?? smtpRuntimeConfig.password,
+    fromName: stringValue(value.fromName) ?? smtpRuntimeConfig.fromName,
+    fromEmail: stringValue(value.fromEmail) ?? smtpRuntimeConfig.fromEmail ?? ""
   };
 }
 
