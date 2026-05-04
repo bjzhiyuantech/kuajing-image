@@ -212,7 +212,8 @@ class GeminiImageProvider implements ImageProvider {
     try {
       const images: ProviderImage[] = [];
       for (let index = 0; index < input.count; index += 1) {
-        const response = await fetch(this.endpointUrl(), {
+        const endpoint = this.endpointUrl();
+        const response = await fetch(endpoint, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -223,7 +224,14 @@ class GeminiImageProvider implements ImageProvider {
         });
 
         if (!response.ok) {
-          throw new ProviderError("upstream_failure", await geminiErrorMessage(response), providerHttpStatus(response.status));
+          const message = await geminiErrorMessage(response);
+          console.error("Gemini image request failed", {
+            endpoint,
+            model: this.config.model,
+            status: response.status,
+            message
+          });
+          throw new ProviderError("upstream_failure", message, providerHttpStatus(response.status));
         }
 
         const image = geminiProviderImage(await response.json());

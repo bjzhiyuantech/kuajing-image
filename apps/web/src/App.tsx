@@ -2763,7 +2763,14 @@ export function App() {
       });
 
       if (!response.ok) {
-        throw new Error(await readErrorMessage(response));
+        const message = await readErrorMessage(response);
+        console.error("Image generation request failed", {
+          endpoint: requestMode === "reference" ? "/api/images/edit" : "/api/images/generate",
+          status: response.status,
+          message,
+          requestBody
+        });
+        throw new Error(message);
       }
 
       const body = (await response.json()) as unknown;

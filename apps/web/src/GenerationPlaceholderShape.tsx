@@ -25,7 +25,7 @@ export type GenerationPlaceholderShape = TLShape<typeof GENERATION_PLACEHOLDER_T
 
 function conciseError(message: string): string {
   const trimmed = message.trim() || "生成失败，请重试。";
-  return trimmed.length > 46 ? `${trimmed.slice(0, 46)}...` : trimmed;
+  return trimmed.length > 180 ? `${trimmed.slice(0, 180)}...` : trimmed;
 }
 
 export class GenerationPlaceholderShapeUtil extends BaseBoxShapeUtil<GenerationPlaceholderShape> {
