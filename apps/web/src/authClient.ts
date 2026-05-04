@@ -107,13 +107,25 @@ export async function sendRegisterEmailCode(email: string): Promise<void> {
   }
 }
 
-export async function registerWithPassword(email: string, password: string, displayName: string, emailCode: string): Promise<AuthSession> {
+export async function registerWithPassword(
+  email: string,
+  password: string,
+  displayName: string,
+  emailCode: string,
+  inviteCode?: string
+): Promise<AuthSession> {
   const response = await fetch("/api/auth/register", {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({ email: email.trim(), password, displayName: displayName.trim(), emailCode: emailCode.trim() })
+    body: JSON.stringify({
+      email: email.trim(),
+      password,
+      displayName: displayName.trim(),
+      emailCode: emailCode.trim(),
+      inviteCode: inviteCode?.trim() || undefined
+    })
   });
 
   if (!response.ok) {

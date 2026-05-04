@@ -353,18 +353,27 @@ export function AuthScreen({
   onModeChange: (mode: AuthMode) => void;
   onAuthenticated: (session: AuthSession) => void;
   onLogin: (email: string, password: string) => Promise<AuthSession>;
-  onRegister: (email: string, password: string, displayName: string, emailCode: string) => Promise<AuthSession>;
+  onRegister: (email: string, password: string, displayName: string, emailCode: string, inviteCode?: string) => Promise<AuthSession>;
   onSendEmailCode: (email: string) => Promise<void>;
 }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [emailCode, setEmailCode] = useState("");
+  const [inviteCode, setInviteCode] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSendingCode, setIsSendingCode] = useState(false);
   const isRegister = mode === "register";
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("inviteCode") || params.get("invite") || params.get("ref") || "";
+    if (code) {
+      setInviteCode(code);
+    }
+  }, []);
 
   async function submitForm(event: React.FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -385,7 +394,7 @@ export function AuthScreen({
 
     setIsSubmitting(true);
     try {
-      const session = isRegister ? await onRegister(email, password, displayName, emailCode) : await onLogin(email, password);
+      const session = isRegister ? await onRegister(email, password, displayName, emailCode, inviteCode) : await onLogin(email, password);
       onAuthenticated(session);
     } catch (authError) {
       setError(authError instanceof Error ? authError.message : isRegister ? "注册失败。" : "登录失败。");
@@ -515,6 +524,22 @@ export function AuthScreen({
                   {isSendingCode ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Send className="size-4" aria-hidden="true" />}
                   发送
                 </button>
+              </div>
+            </label>
+          ) : null}
+
+          {isRegister ? (
+            <label className="auth-field">
+              <span>邀请码</span>
+              <div className="auth-input">
+                <UserPlus className="size-4" aria-hidden="true" />
+                <input
+                  autoComplete="off"
+                  name="inviteCode"
+                  placeholder="可选，来自邀请链接会自动带入"
+                  value={inviteCode}
+                  onChange={(event) => setInviteCode(event.target.value)}
+                />
               </div>
             </label>
           ) : null}
