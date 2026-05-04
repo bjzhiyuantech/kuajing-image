@@ -842,6 +842,7 @@ function livePlacement(editor: Editor, placement: GenerationPlaceholderPlacement
 function createImageAsset(asset: GeneratedAsset): TLAsset {
   initialCanvasPreviewWidths.set(asset.id, GENERATED_ASSET_INITIAL_PREVIEW_WIDTH);
   const displayUrl = assetDisplayUrl(asset, GENERATED_ASSET_INITIAL_PREVIEW_WIDTH);
+  const meta = createImageAssetMeta(asset);
 
   return {
     id: createTldrawAssetId(asset.id),
@@ -855,13 +856,35 @@ function createImageAsset(asset: GeneratedAsset): TLAsset {
       mimeType: asset.mimeType,
       isAnimated: false
     },
-    meta: {
-      localAssetId: asset.id,
-      sourceUrl: authenticatedAssetUrl(asset.url),
-      cdnUrl: asset.cdnUrl,
-      cdnPreviewUrls: asset.cdnPreviewUrls
-    }
+    meta
   };
+}
+
+function createImageAssetMeta(asset: GeneratedAsset): TLAsset["meta"] {
+  const meta: Record<string, string | Record<string, string>> = {
+    localAssetId: asset.id,
+    sourceUrl: authenticatedAssetUrl(asset.url)
+  };
+
+  if (asset.cdnUrl) {
+    meta.cdnUrl = asset.cdnUrl;
+  }
+
+  const cdnPreviewUrls = sanitizeStringRecord(asset.cdnPreviewUrls);
+  if (cdnPreviewUrls) {
+    meta.cdnPreviewUrls = cdnPreviewUrls;
+  }
+
+  return meta;
+}
+
+function sanitizeStringRecord(value: Record<string, string> | undefined): Record<string, string> | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const entries = Object.entries(value).filter((entry): entry is [string, string] => entry[0].trim().length > 0 && typeof entry[1] === "string" && entry[1].trim().length > 0);
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
 function createImageShape(
