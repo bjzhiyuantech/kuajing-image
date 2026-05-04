@@ -46,6 +46,13 @@ function compactText(value: string): string {
   return normalizeText(value).replace(/[：:]+$/u, "").trim();
 }
 
+function normalizeLabel(value: string): string {
+  return compactText(value)
+    .replace(/\s+/gu, "")
+    .replace(/[（(][^）)]*[）)]/gu, "")
+    .trim();
+}
+
 function absoluteUrl(value: string): string {
   try {
     return new URL(value, location.href).toString();
@@ -311,18 +318,37 @@ function textFromNode(node: Node | null): string {
   return normalizeText(node.textContent ?? "");
 }
 
-function collectTablePairs(doc: Document): Array<{ label: string; value: string }> {
+function isPropertyHeading(text: string): boolean {
+  return /商品属性|产品属性|属性参数|规格参数/u.test(text);
+}
+
+function findPropertyContainer(doc: Document): HTMLElement | null {
+  const candidates = Array.from(doc.querySelectorAll("h1, h2, h3, h4, h5, h6, strong, b, div, p, span"));
+  for (const node of candidates) {
+    const text = normalizeText(node.textContent ?? "");
+    if (!isPropertyHeading(text)) {
+      continue;
+    }
+    const container = node.closest("section, article, div, main") as HTMLElement | null;
+    if (container) {
+      return container;
+    }
+  }
+  return null;
+}
+
+function collectTablePairs(root: ParentNode): Array<{ label: string; value: string }> {
   const pairs: Array<{ label: string; value: string }> = [];
-  const rows = Array.from(doc.querySelectorAll("tr"));
+  const rows = Array.from(root.querySelectorAll("tr"));
 
   for (const row of rows) {
     const cells = Array.from(row.querySelectorAll("th, td"));
-    if (cells.length < 2 || cells.length % 2 !== 0) {
+    if (cells.length < 2) {
       continue;
     }
 
-    for (let index = 0; index < cells.length; index += 2) {
-      const label = compactText(textFromNode(cells[index]));
+    for (let index = 0; index < cells.length - 1; index += 2) {
+      const label = normalizeLabel(textFromNode(cells[index]));
       const value = textFromNode(cells[index + 1]);
       if (label && value) {
         pairs.push({ label, value });
@@ -333,9 +359,9 @@ function collectTablePairs(doc: Document): Array<{ label: string; value: string 
   return pairs;
 }
 
-function collectLabeledBlocks(doc: Document): Array<{ label: string; value: string }> {
+function collectLabeledBlocks(root: ParentNode): Array<{ label: string; value: string }> {
   const pairs: Array<{ label: string; value: string }> = [];
-  const nodes = Array.from(doc.querySelectorAll("li, dl, div, p, span"));
+  const nodes = Array.from(root.querySelectorAll("li, dl, div, p, span"));
 
   for (const node of nodes) {
     const text = normalizeText(node.textContent ?? "");
@@ -354,7 +380,9 @@ function collectLabeledBlocks(doc: Document): Array<{ label: string; value: stri
 }
 
 function extractPageAttributes(doc: Document): Array<{ label: string; value: string }> {
-  const pairs = [...collectTablePairs(doc), ...collectLabeledBlocks(doc)];
+  const propertyContainer = findPropertyContainer(doc);
+  const root: ParentNode = propertyContainer ?? doc;
+  const pairs = [...collectTablePairs(root), ...collectLabeledBlocks(root)];
   const seen = new Set<string>();
   const deduped: Array<{ label: string; value: string }> = [];
 
@@ -388,27 +416,15 @@ function mapPageProductContext(doc: Document): NonNullable<PageContext["product"
   };
 
   const title = readProductTitle(doc);
-  const description = [
-    pick("商品名称"),
-    pick("产品名称"),
-    pick("品牌"),
-    pick("类型"),
-    pick("保健功能"),
-    pick("食用方法"),
-    pick("注意事项")
-  ]
-    .filter(Boolean)
-    .join("；");
 
   return {
     title,
-    description,
     brand: pick("品牌"),
     productName: pick("商品名称", "产品名称", "规格") || title,
     targetCustomer: pick("适宜人群", "不适宜人群"),
-    usageScene: pick("食用方法", "适用场景", "使用场景"),
-    material: pick("主要原料", "材质"),
-    color: pick("颜色", "颜色/SKU", "色号", "SKU"),
+    usageScene: pick("使用场景", "适用场景", "食用方法"),
+    material: pick("主要原料", "面料名称", "材质"),
+    color: pick("颜色", "颜色/SKU", "色号", "颜色分类", "SKU"),
     attributes
   };
 }

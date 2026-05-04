@@ -2200,12 +2200,11 @@ export function SidePanelApp() {
         product: {
           ...current.product,
           title: context.title || current.product.title,
-          description: product.description || context.description || current.product.description,
+          description: product.description || current.product.description,
           targetCustomer: product.targetCustomer || current.product.targetCustomer,
           usageScene: product.usageScene || current.product.usageScene,
           material: product.material || current.product.material,
-          color: product.color || current.product.color,
-          brandTone: product.brand ? `${product.brand}, marketplace-ready` : current.product.brandTone
+          color: product.color || current.product.color
         },
         referenceImageUrl: context.imageUrls[0] || current.referenceImageUrl,
         referenceImageUrls: context.imageUrls[0] ? [context.imageUrls[0]] : current.referenceImageUrls
