@@ -148,6 +148,12 @@ interface ReferralSummary {
   inviteUrl?: string;
   invitedUserCount: number;
   successfulInviteCount: number;
+  invitees?: Array<{
+    userId: string;
+    email?: string;
+    displayName?: string;
+    createdAt: string;
+  }>;
   referralBalanceCents: number;
   currency: string;
   settings: {
@@ -1030,6 +1036,17 @@ function normalizeReferralSummary(payload: unknown): ReferralSummary {
     inviteUrl: firstString(invite, ["inviteUrl", "invite_url"]),
     invitedUserCount: firstNumber(invite, ["invitedUserCount", "invited_user_count"]) ?? 0,
     successfulInviteCount: firstNumber(invite, ["successfulInviteCount", "successful_invite_count"]) ?? 0,
+    invitees: Array.isArray(invite.invitees)
+      ? invite.invitees.map((item: unknown) => {
+          const entry = asRecord(item);
+          return {
+            userId: firstString(entry, ["userId", "user_id"]) ?? "",
+            email: firstString(entry, ["email"]),
+            displayName: firstString(entry, ["displayName", "display_name"]),
+            createdAt: firstString(entry, ["createdAt", "created_at"]) ?? ""
+          };
+        })
+      : undefined,
     referralBalanceCents: firstNumber(invite, ["referralBalanceCents", "referral_balance_cents"]) ?? 0,
     currency: firstString(invite, ["currency"]) || firstString(settings, ["currency"]) || "CNY",
     settings: {
@@ -3913,6 +3930,27 @@ export function SidePanelApp() {
                       <div>
                         <span>充值返现</span>
                         <strong>{((referralState.data?.settings.rechargeCashbackRateBps ?? 0) / 100).toFixed(0)}%</strong>
+                      </div>
+                    </div>
+                    <div className="invite-list">
+                      <div className="invite-list__head">
+                        <strong>我邀请的人</strong>
+                        <span>{formatCount(referralState.data?.invitedUserCount)} 人</span>
+                      </div>
+                      <div className="invite-list__body">
+                        {(referralState.data?.invitees || []).length > 0 ? (
+                          referralState.data!.invitees!.map((item) => (
+                            <div className="invite-list__item" key={item.userId}>
+                              <div className="invite-list__main">
+                                <strong>{item.displayName || item.email || item.userId}</strong>
+                                <span>{item.email || item.userId}</span>
+                              </div>
+                              <time>{formatDateTime(item.createdAt)}</time>
+                            </div>
+                          ))
+                        ) : (
+                          <p className="settings-note">暂无邀请记录。</p>
+                        )}
                       </div>
                     </div>
                     {referralAction ? <p className="settings-note">{referralAction}</p> : null}

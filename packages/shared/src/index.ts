@@ -727,6 +727,12 @@ export interface InviteSummary {
   inviteUrl?: string;
   invitedUserCount: number;
   successfulInviteCount: number;
+  invitees?: Array<{
+    userId: string;
+    email?: string;
+    displayName?: string;
+    createdAt: string;
+  }>;
   referralBalanceCents: number;
   currency: string;
   settings: InviteRewardSettings;

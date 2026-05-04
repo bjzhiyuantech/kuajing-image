@@ -69,7 +69,17 @@ export async function getInviteSummary(userId: string, origin?: string): Promise
   if (!user.inviteCode) {
     await db.update(users).set({ inviteCode, updatedAt: new Date().toISOString() }).where(eq(users.id, user.id));
   }
-  const [invitedRows, successfulRows, settingsResponse] = await Promise.all([
+  const [invitees, invitedCountRows, successfulRows, settingsResponse] = await Promise.all([
+    db
+      .select({
+        userId: users.id,
+        email: users.email,
+        displayName: users.displayName,
+        createdAt: users.createdAt
+      })
+      .from(users)
+      .where(eq(users.inviterUserId, user.id))
+      .orderBy(desc(users.createdAt)),
     db.select({ count: sql<number>`count(*)` }).from(users).where(eq(users.inviterUserId, user.id)),
     db
       .select({ count: sql<number>`count(distinct ${billingTransactions.createdByUserId})` })
@@ -81,8 +91,14 @@ export async function getInviteSummary(userId: string, origin?: string): Promise
     invite: {
       inviteCode,
       inviteUrl: origin ? inviteUrl(origin, inviteCode) : undefined,
-      invitedUserCount: Number(invitedRows[0]?.count ?? 0),
+      invitedUserCount: Number(invitedCountRows[0]?.count ?? 0),
       successfulInviteCount: Number(successfulRows[0]?.count ?? 0),
+      invitees: invitees.slice(0, 50).map((row) => ({
+        userId: row.userId,
+        email: row.email ?? undefined,
+        displayName: row.displayName ?? undefined,
+        createdAt: row.createdAt
+      })),
       referralBalanceCents: Number(user.referralBalanceCents ?? 0),
       currency: user.currency || settingsResponse.settings.currency,
       settings: settingsResponse.settings
