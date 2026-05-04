@@ -1,0 +1,61 @@
+.profile-name {
+  font-size: 34rpx;
+  font-weight: 700;
+}
+
+.profile-note {
+  margin-top: 10rpx;
+  color: #b54708;
+  font-size: 24rpx;
+}
+
+.field {
+  margin-top: 22rpx;
+}
+
+.field-label {
+  display: block;
+  margin-bottom: 10rpx;
+  color: #475467;
+  font-size: 22rpx;
+  font-weight: 700;
+}
+
+.login-input {
+  height: 90rpx;
+  border-radius: 16rpx;
+  background: #fff;
+  border: 1rpx solid #d0d5dd;
+  padding: 0 22rpx;
+  box-sizing: border-box;
+  font-size: 28rpx;
+}
+
+.secondary-button {
+  height: 90rpx;
+  margin-top: 24rpx;
+  border-radius: 16rpx;
+  background: #155eef;
+  color: #fff;
+  font-size: 28rpx;
+  font-weight: 700;
+}
+
+.metric-row {
+  display: flex;
+  gap: 18rpx;
+  margin-top: 22rpx;
+}
+
+.metric {
+  flex: 1;
+  padding: 22rpx;
+  border-radius: 14rpx;
+  background: #f8fafc;
+}
+
+.metric-value {
+  font-size: 34rpx;
+  font-weight: 800;
+  color: #101828;
+}

@@ -20,6 +20,7 @@ import type {
 import { db } from "./database.js";
 import { ensureUserPlanCurrent, planExpiryFrom } from "./plan-expiration.js";
 import { billingOrders, billingTransactions, subscriptionPlans, systemSettings, users } from "./schema.js";
+import { getSystemSetting, saveSystemSetting } from "./system-settings.js";
 
 const BILLING_SETTINGS_KEY = "billing.imageUnitPrice";
 const ALIPAY_SETTINGS_KEY = "payment.alipay";
@@ -742,26 +743,11 @@ function toBillingPlan(plan: typeof subscriptionPlans.$inferSelect): BillingPlan
 }
 
 async function getSetting(key: string): Promise<typeof systemSettings.$inferSelect | undefined> {
-  const [row] = await db.select().from(systemSettings).where(eq(systemSettings.key, key)).limit(1);
-  return row;
+  return getSystemSetting(key);
 }
 
 async function saveSetting(key: string, value: unknown): Promise<void> {
-  const now = new Date().toISOString();
-  await db
-    .insert(systemSettings)
-    .values({
-      key,
-      valueJson: JSON.stringify(value),
-      createdAt: now,
-      updatedAt: now
-    })
-    .onDuplicateKeyUpdate({
-      set: {
-        valueJson: JSON.stringify(value),
-        updatedAt: now
-      }
-    });
+  await saveSystemSetting(key, value);
 }
 
 function toAlipayConfigView(value: Record<string, unknown>, updatedAt?: string): AdminAlipayConfigResponse["alipay"] {

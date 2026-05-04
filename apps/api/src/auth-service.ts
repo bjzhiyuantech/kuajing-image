@@ -1,15 +1,32 @@
-import { createHash, randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { and, eq, or } from "drizzle-orm";
 import { hashPassword, requireJwtSecret, signJwt, verifyJwt, verifyPassword } from "./auth-crypto.js";
 import type { RequestTenant } from "./auth-context.js";
-import type { AuthMeResponse, AuthResponse, AuthUser, AuthWorkspace } from "./contracts.js";
+import type {
+  AdminWechatMiniAppConfigResponse,
+  AuthMeResponse,
+  AuthResponse,
+  AuthUser,
+  AuthWorkspace,
+  SaveWechatMiniAppConfigRequest,
+  UpdateAuthProfileRequest,
+  WechatMiniAppConfigResponse,
+  WechatMiniAppLoginRequest,
+  WechatMiniAppLoginResponse,
+  WechatMiniAppRegisterRequest
+} from "./contracts.js";
 import { db } from "./database.js";
+import { verifyRegisterEmailCode } from "./email-service.js";
 import { ensureUserPlanCurrent } from "./plan-expiration.js";
-import { subscriptionPlans, users, workspaceMembers, workspaces } from "./schema.js";
+import { subscriptionPlans, users, wechatAccounts, workspaceMembers, workspaces } from "./schema.js";
+import { getSystemSetting, saveSystemSetting } from "./system-settings.js";
 
 const DEFAULT_PLAN_ID = "free";
 const DEFAULT_PLAN_NAME = "Free";
 const DEFAULT_STORAGE_QUOTA_BYTES = 1024 * 1024 * 1024;
+const WECHAT_MINIAPP_SETTINGS_KEY = "auth.wechat.miniapp";
+const WECHAT_PROVIDER = "miniapp";
+const WECHAT_BIND_TOKEN_TTL_SECONDS = 10 * 60;
 
 export interface AuthSession {
   user: AuthUser;
@@ -21,11 +38,24 @@ export interface RegisterInput {
   email: string;
   password: string;
   displayName?: string;
+  emailCode: string;
 }
 
 export interface LoginInput {
   email: string;
   password: string;
+}
+
+interface WechatSession {
+  openid: string;
+  unionid?: string;
+}
+
+interface WechatBindTokenPayload {
+  openId: string;
+  unionId?: string;
+  iat: number;
+  exp: number;
 }
 
 export async function registerUser(input: RegisterInput): Promise<AuthResponse> {
@@ -40,6 +70,7 @@ export async function registerUser(input: RegisterInput): Promise<AuthResponse> 
   if (existing) {
     throw new AuthError("email_exists", "该邮箱已经注册。", 409);
   }
+  await verifyRegisterEmailCode(email, input.emailCode);
 
   const now = new Date().toISOString();
   const userId = randomUUID();
@@ -134,6 +165,203 @@ export async function loginUser(input: LoginInput): Promise<AuthResponse> {
   });
 }
 
+export async function updateAuthProfile(headers: Headers, input: UpdateAuthProfileRequest): Promise<AuthMeResponse> {
+  const session = await requireAuthSession(headers);
+  const now = new Date().toISOString();
+  const patch: Partial<typeof users.$inferInsert> = { updatedAt: now };
+
+  if (typeof input.displayName === "string" && input.displayName.trim()) {
+    patch.displayName = input.displayName.trim().slice(0, 255);
+  }
+  if (typeof input.email === "string" && input.email.trim()) {
+    const email = normalizeEmail(input.email);
+    validateEmail(email);
+    const existing = await findUserByEmail(email);
+    if (existing && existing.id !== session.user.id) {
+      throw new AuthError("email_exists", "该邮箱已经被其他账号绑定。", 409);
+    }
+    patch.email = email;
+  }
+  if (typeof input.password === "string" && input.password) {
+    validatePassword(input.password);
+    patch.passwordHash = hashPassword(input.password);
+  }
+
+  await db.update(users).set(patch).where(eq(users.id, session.user.id));
+  return toMeResponse(await requireAuthSession(new Headers({ authorization: `Bearer ${parseBearerToken(headers) ?? ""}` })));
+}
+
+export async function getWechatMiniAppConfig(): Promise<WechatMiniAppConfigResponse> {
+  return {
+    wechatMiniApp: toWechatMiniAppPublicConfig(await getRawWechatMiniAppConfig())
+  };
+}
+
+export async function getAdminWechatMiniAppConfig(): Promise<AdminWechatMiniAppConfigResponse> {
+  const row = await getSystemSetting(WECHAT_MINIAPP_SETTINGS_KEY);
+  const config = parseRecord(row?.valueJson);
+  return {
+    wechatMiniApp: {
+      ...toWechatMiniAppPublicConfig(config, row?.updatedAt),
+      appId: stringValue(config.appId) ?? "",
+      appSecret: {
+        hasSecret: Boolean(stringValue(config.appSecret)),
+        value: maskSecret(stringValue(config.appSecret))
+      }
+    }
+  };
+}
+
+export async function saveWechatMiniAppConfig(input: SaveWechatMiniAppConfigRequest): Promise<AdminWechatMiniAppConfigResponse> {
+  const existing = parseRecord((await getSystemSetting(WECHAT_MINIAPP_SETTINGS_KEY))?.valueJson);
+  const value = {
+    enabled: input.enabled === true,
+    appId: limitedString(input.appId, 255) ?? stringValue(existing.appId) ?? "",
+    appSecret: input.preserveAppSecret === true ? stringValue(existing.appSecret) ?? "" : limitedString(input.appSecret, 512) ?? "",
+    allowBindExistingAccount: input.allowBindExistingAccount !== false,
+    allowRegisterNewUser: input.allowRegisterNewUser !== false
+  };
+  if (value.enabled && (!value.appId || !value.appSecret)) {
+    throw new AuthError("invalid_wechat_config", "启用微信小程序登录时需要配置 appId 和 appSecret。", 400);
+  }
+  await saveSystemSetting(WECHAT_MINIAPP_SETTINGS_KEY, value);
+  return getAdminWechatMiniAppConfig();
+}
+
+export async function loginWithWechatMiniApp(input: WechatMiniAppLoginRequest): Promise<WechatMiniAppLoginResponse> {
+  requireJwtSecret();
+  const config = await getRawWechatMiniAppConfig();
+  ensureWechatMiniAppEnabled(config);
+  const session = await fetchWechatSession(input.code, config);
+  const account = await findWechatAccount(session);
+  if (account) {
+    const user = await findUserById(account.userId);
+    const workspace = user ? await findDefaultWorkspace(user.id) : undefined;
+    if (user && workspace) {
+      return {
+        status: "bound",
+        session: buildAuthResponse({ user: toAuthUser(user, await findPlanById(user.planId)), workspace })
+      };
+    }
+  }
+  return {
+    status: "needs_bind",
+    bindToken: signWechatBindToken(session),
+    allowBindExistingAccount: config.allowBindExistingAccount !== false,
+    allowRegisterNewUser: config.allowRegisterNewUser !== false
+  };
+}
+
+export async function bindWechatMiniAppToCurrentUser(headers: Headers, input: { bindToken: string }): Promise<AuthResponse> {
+  const session = await requireAuthSession(headers);
+  const wechat = verifyWechatBindToken(input.bindToken);
+  await linkWechatAccount(session.user.id, wechat);
+  return buildAuthResponse({ user: session.user, workspace: session.workspace });
+}
+
+export async function registerWechatMiniAppUser(input: WechatMiniAppRegisterRequest): Promise<AuthResponse> {
+  requireJwtSecret();
+  const config = await getRawWechatMiniAppConfig();
+  ensureWechatMiniAppEnabled(config);
+  if (config.allowRegisterNewUser === false) {
+    throw new AuthError("wechat_register_disabled", "暂未开启微信新用户注册。", 403);
+  }
+  const wechat = verifyWechatBindToken(input.bindToken);
+  const existing = await findWechatAccount(wechat);
+  if (existing) {
+    const user = await findUserById(existing.userId);
+    const workspace = user ? await findDefaultWorkspace(user.id) : undefined;
+    if (user && workspace) {
+      return buildAuthResponse({ user: toAuthUser(user, await findPlanById(user.planId)), workspace });
+    }
+  }
+
+  const email = input.email?.trim() ? normalizeEmail(input.email) : undefined;
+  if (email) {
+    validateEmail(email);
+    const existingEmailUser = await findUserByEmail(email);
+    if (existingEmailUser) {
+      throw new AuthError("email_exists", "该邮箱已经注册，请先登录后绑定微信。", 409);
+    }
+  }
+
+  const now = new Date().toISOString();
+  const userId = randomUUID();
+  const workspaceId = randomUUID();
+  const defaultPlan = await getDefaultPlan();
+  const displayName = input.displayName?.trim() || `微信用户${wechat.openId.slice(-4)}`;
+  await db.transaction(async (tx) => {
+    await tx.insert(users).values({
+      id: userId,
+      email: email ?? null,
+      passwordHash: "",
+      displayName,
+      role: "user",
+      planId: defaultPlan.id,
+      planExpiresAt: null,
+      quotaTotal: defaultPlan.imageQuota,
+      quotaUsed: 0,
+      balanceCents: 0,
+      storageQuotaBytes: defaultPlan.storageQuotaBytes,
+      storageUsedBytes: 0,
+      currency: "CNY",
+      createdAt: now,
+      updatedAt: now
+    });
+    await tx.insert(workspaces).values({
+      id: workspaceId,
+      name: `${displayName}'s Workspace`,
+      ownerUserId: userId,
+      createdAt: now,
+      updatedAt: now
+    });
+    await tx.insert(workspaceMembers).values({
+      id: workspaceMemberId(workspaceId, userId),
+      workspaceId,
+      userId,
+      role: "owner",
+      createdAt: now,
+      updatedAt: now
+    });
+    await tx.insert(wechatAccounts).values({
+      id: randomUUID(),
+      userId,
+      provider: WECHAT_PROVIDER,
+      openId: wechat.openId,
+      unionId: wechat.unionId,
+      nickname: displayName,
+      avatarUrl: null,
+      createdAt: now,
+      updatedAt: now
+    });
+  });
+
+  return buildAuthResponse({
+    user: toAuthUser({
+      id: userId,
+      email: email ?? null,
+      passwordHash: "",
+      displayName,
+      role: "user",
+      planId: defaultPlan.id,
+      planExpiresAt: null,
+      quotaTotal: defaultPlan.imageQuota,
+      quotaUsed: 0,
+      balanceCents: 0,
+      storageQuotaBytes: defaultPlan.storageQuotaBytes,
+      storageUsedBytes: 0,
+      currency: "CNY",
+      createdAt: now,
+      updatedAt: now
+    }, { name: defaultPlan.name }),
+    workspace: {
+      id: workspaceId,
+      name: `${displayName}'s Workspace`,
+      role: "owner"
+    }
+  });
+}
+
 export async function getAuthSession(headers: Headers): Promise<AuthSession | undefined> {
   const token = parseBearerToken(headers);
   if (!token) {
@@ -223,6 +451,49 @@ export class AuthError extends Error {
 async function findUserByEmail(email: string): Promise<(typeof users.$inferSelect) | undefined> {
   const [row] = await db.select().from(users).where(eq(users.email, email)).limit(1);
   return row;
+}
+
+async function findUserById(userId: string): Promise<(typeof users.$inferSelect) | undefined> {
+  const [row] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  return row;
+}
+
+async function findWechatAccount(input: Pick<WechatSession, "openid"> | { openId: string; unionId?: string }): Promise<typeof wechatAccounts.$inferSelect | undefined> {
+  const openId = "openid" in input ? input.openid : input.openId;
+  const unionId = "unionId" in input ? input.unionId : undefined;
+  const where = unionId
+    ? or(and(eq(wechatAccounts.provider, WECHAT_PROVIDER), eq(wechatAccounts.openId, openId)), and(eq(wechatAccounts.provider, WECHAT_PROVIDER), eq(wechatAccounts.unionId, unionId)))
+    : and(eq(wechatAccounts.provider, WECHAT_PROVIDER), eq(wechatAccounts.openId, openId));
+  const [row] = await db.select().from(wechatAccounts).where(where).limit(1);
+  return row;
+}
+
+async function linkWechatAccount(userId: string, input: WechatBindTokenPayload): Promise<void> {
+  const existing = await findWechatAccount(input);
+  if (existing && existing.userId !== userId) {
+    throw new AuthError("wechat_already_bound", "该微信账号已经绑定其他用户。", 409);
+  }
+  const now = new Date().toISOString();
+  await db
+    .insert(wechatAccounts)
+    .values({
+      id: existing?.id ?? randomUUID(),
+      userId,
+      provider: WECHAT_PROVIDER,
+      openId: input.openId,
+      unionId: input.unionId,
+      nickname: null,
+      avatarUrl: null,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now
+    })
+    .onDuplicateKeyUpdate({
+      set: {
+        userId,
+        unionId: input.unionId,
+        updatedAt: now
+      }
+    });
 }
 
 async function findPlanById(planId: string | null | undefined): Promise<(typeof subscriptionPlans.$inferSelect) | undefined> {
@@ -320,6 +591,125 @@ function validatePassword(password: string): void {
   if (password.length < 8) {
     throw new AuthError("weak_password", "密码至少需要 8 位。", 400);
   }
+}
+
+function parseRecord(value: string | undefined | null): Record<string, unknown> {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function limitedString(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed.slice(0, maxLength) : undefined;
+}
+
+function maskSecret(value: string | undefined): string {
+  if (!value) return "";
+  if (value.length <= 8) return "********";
+  return `${value.slice(0, 4)}********${value.slice(-4)}`;
+}
+
+async function getRawWechatMiniAppConfig(): Promise<Record<string, unknown>> {
+  return parseRecord((await getSystemSetting(WECHAT_MINIAPP_SETTINGS_KEY))?.valueJson);
+}
+
+function toWechatMiniAppPublicConfig(value: Record<string, unknown>, updatedAt?: string): WechatMiniAppConfigResponse["wechatMiniApp"] {
+  return {
+    enabled: value.enabled === true,
+    allowBindExistingAccount: value.allowBindExistingAccount !== false,
+    allowRegisterNewUser: value.allowRegisterNewUser !== false,
+    updatedAt
+  };
+}
+
+function ensureWechatMiniAppEnabled(config: Record<string, unknown>): void {
+  if (config.enabled !== true) {
+    throw new AuthError("wechat_disabled", "微信小程序登录暂未启用。", 403);
+  }
+  if (!stringValue(config.appId) || !stringValue(config.appSecret)) {
+    throw new AuthError("wechat_not_configured", "微信小程序登录配置不完整。", 500);
+  }
+}
+
+async function fetchWechatSession(code: string, config: Record<string, unknown>): Promise<WechatSession> {
+  const cleanCode = code.trim();
+  if (!cleanCode) {
+    throw new AuthError("invalid_wechat_code", "微信登录 code 不能为空。", 400);
+  }
+  const url = new URL("https://api.weixin.qq.com/sns/jscode2session");
+  url.searchParams.set("appid", stringValue(config.appId) ?? "");
+  url.searchParams.set("secret", stringValue(config.appSecret) ?? "");
+  url.searchParams.set("js_code", cleanCode);
+  url.searchParams.set("grant_type", "authorization_code");
+  const response = await fetch(url);
+  const body = (await response.json()) as unknown;
+  if (!response.ok || typeof body !== "object" || body === null) {
+    throw new AuthError("wechat_session_failed", "微信登录校验失败。", 502);
+  }
+  const data = body as Record<string, unknown>;
+  if (typeof data.errcode === "number" && data.errcode !== 0) {
+    throw new AuthError("wechat_session_failed", typeof data.errmsg === "string" ? data.errmsg : "微信登录校验失败。", 502);
+  }
+  if (typeof data.openid !== "string" || !data.openid) {
+    throw new AuthError("wechat_session_failed", "微信未返回 openid。", 502);
+  }
+  return {
+    openid: data.openid,
+    unionid: typeof data.unionid === "string" ? data.unionid : undefined
+  };
+}
+
+function signWechatBindToken(input: WechatSession): string {
+  const secret = requireJwtSecret();
+  const now = Math.floor(Date.now() / 1000);
+  const payload: WechatBindTokenPayload = {
+    openId: input.openid,
+    unionId: input.unionid,
+    iat: now,
+    exp: now + WECHAT_BIND_TOKEN_TTL_SECONDS
+  };
+  const encodedPayload = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  const signature = createHmac("sha256", secret).update(encodedPayload).digest("base64url");
+  return `${encodedPayload}.${signature}`;
+}
+
+function verifyWechatBindToken(token: string): WechatBindTokenPayload {
+  const secret = requireJwtSecret();
+  const [encodedPayload, signature] = token.split(".");
+  if (!encodedPayload || !signature) {
+    throw new AuthError("invalid_bind_token", "微信绑定凭证无效。", 401);
+  }
+  const expected = createHmac("sha256", secret).update(encodedPayload).digest("base64url");
+  if (!safeEqualString(signature, expected)) {
+    throw new AuthError("invalid_bind_token", "微信绑定凭证无效。", 401);
+  }
+  const parsed = JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8")) as unknown;
+  if (!isWechatBindTokenPayload(parsed) || parsed.exp <= Math.floor(Date.now() / 1000)) {
+    throw new AuthError("invalid_bind_token", "微信绑定凭证已过期，请重新授权。", 401);
+  }
+  return parsed;
+}
+
+function isWechatBindTokenPayload(value: unknown): value is WechatBindTokenPayload {
+  if (typeof value !== "object" || value === null) return false;
+  const payload = value as Partial<WechatBindTokenPayload>;
+  return typeof payload.openId === "string" && typeof payload.iat === "number" && typeof payload.exp === "number";
+}
+
+function safeEqualString(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
 }
 
 function workspaceMemberId(workspaceId: string, userId: string): string {

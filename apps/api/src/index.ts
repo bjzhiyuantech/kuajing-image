@@ -10,13 +10,20 @@ import { parsePreviewWidth, readStoredAssetPreview } from "./asset-preview.js";
 import { resolveRequestTenant, type RequestTenant } from "./auth-context.js";
 import {
   AuthError,
+  bindWechatMiniAppToCurrentUser,
+  getAdminWechatMiniAppConfig,
   getAuthSession,
   getAuthSessionFromToken,
+  getWechatMiniAppConfig,
   loginUser,
+  loginWithWechatMiniApp,
+  registerWechatMiniAppUser,
   registerUser,
   requireAdminSession,
   requireAuthSession,
+  saveWechatMiniAppConfig,
   toMeResponse,
+  updateAuthProfile,
   type AuthSession
 } from "./auth-service.js";
 import { hashPassword } from "./auth-crypto.js";
@@ -41,6 +48,7 @@ import {
   type AdminUsersResponse,
   type SaveAlipayConfigRequest,
   type SaveBillingSettingsRequest,
+  type SaveWechatMiniAppConfigRequest,
   type EcommerceBatchGenerateRequest,
   type EcommerceBatchGenerateResponse,
   type EcommerceJobListResponse,
@@ -79,6 +87,7 @@ import {
   saveAlipayConfig,
   saveBillingSettings
 } from "./billing.js";
+import { EmailError, getSmtpSettings, saveSmtpSettings, sendRegisterEmailCode } from "./email-service.js";
 import {
   ProviderError,
   createOpenAIImageProvider,
@@ -208,6 +217,24 @@ app.post("/api/auth/register", async (c) => {
   }
 });
 
+app.post("/api/auth/email-code", async (c) => {
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+
+  const parsed = parseEmailCodePayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  try {
+    return c.json(await sendRegisterEmailCode(parsed.value.email));
+  } catch (error) {
+    return emailErrorJson(c, error);
+  }
+});
+
 app.post("/api/auth/login", async (c) => {
   const payload = await readJson(c.req.raw);
   if (!payload.ok) {
@@ -226,9 +253,85 @@ app.post("/api/auth/login", async (c) => {
   }
 });
 
+app.get("/api/auth/wechat/miniapp/config", async (c) => {
+  return c.json(await getWechatMiniAppConfig());
+});
+
+app.post("/api/auth/wechat/miniapp/login", async (c) => {
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+  if (!isRecord(payload.value) || typeof payload.value.code !== "string") {
+    return c.json(errorResponse("invalid_request", "请提供微信登录 code。"), 400);
+  }
+  try {
+    return c.json(await loginWithWechatMiniApp({ code: payload.value.code }));
+  } catch (error) {
+    return authErrorJson(c, error);
+  }
+});
+
+app.post("/api/auth/wechat/miniapp/register", async (c) => {
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+  if (!isRecord(payload.value) || typeof payload.value.bindToken !== "string") {
+    return c.json(errorResponse("invalid_request", "请提供微信绑定凭证。"), 400);
+  }
+  try {
+    return c.json(
+      await registerWechatMiniAppUser({
+        bindToken: payload.value.bindToken,
+        displayName: parseOptionalString(payload.value.displayName),
+        email: parseOptionalString(payload.value.email)
+      })
+    );
+  } catch (error) {
+    return authErrorJson(c, error);
+  }
+});
+
 app.get("/api/auth/me", async (c) => {
   try {
     return c.json(toMeResponse(await requireAuthSession(c.req.raw.headers)));
+  } catch (error) {
+    return authErrorJson(c, error);
+  }
+});
+
+app.put("/api/auth/me", async (c) => {
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+  if (!isRecord(payload.value)) {
+    return c.json(errorResponse("invalid_request", "请求内容必须是 JSON 对象。"), 400);
+  }
+  try {
+    return c.json(
+      await updateAuthProfile(c.req.raw.headers, {
+        displayName: parseOptionalString(payload.value.displayName),
+        email: parseOptionalString(payload.value.email),
+        password: parseOptionalString(payload.value.password)
+      })
+    );
+  } catch (error) {
+    return authErrorJson(c, error);
+  }
+});
+
+app.post("/api/auth/wechat/miniapp/bind", async (c) => {
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+  if (!isRecord(payload.value) || typeof payload.value.bindToken !== "string") {
+    return c.json(errorResponse("invalid_request", "请提供微信绑定凭证。"), 400);
+  }
+  try {
+    return c.json(await bindWechatMiniAppToCurrentUser(c.req.raw.headers, { bindToken: payload.value.bindToken }));
   } catch (error) {
     return authErrorJson(c, error);
   }
@@ -692,6 +795,66 @@ app.put("/api/admin/payment/alipay", async (c) => {
   }
 
   return c.json(await saveAlipayConfig(parsed.value));
+});
+
+app.get("/api/admin/email/smtp", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return c.json(await getSmtpSettings());
+});
+
+app.put("/api/admin/email/smtp", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+
+  const parsed = parseSmtpSettingsPayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  try {
+    return c.json(await saveSmtpSettings(parsed.value));
+  } catch (error) {
+    return emailErrorJson(c, error);
+  }
+});
+
+app.get("/api/admin/auth/wechat/miniapp", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return c.json(await getAdminWechatMiniAppConfig());
+});
+
+app.put("/api/admin/auth/wechat/miniapp", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+
+  const parsed = parseWechatMiniAppConfigPayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  return c.json(await saveWechatMiniAppConfig(parsed.value));
 });
 
 app.get("/api/admin/billing/transactions", async (c) => {
@@ -1210,9 +1373,20 @@ function authErrorJson(c: Context, error: unknown): Response {
   if (error instanceof AuthError) {
     return c.json(errorResponse(error.code, error.message), error.status as 400 | 401 | 403 | 404 | 409 | 500);
   }
+  if (error instanceof EmailError) {
+    return c.json(errorResponse(error.code, error.message), error.status as 400 | 409 | 429 | 500 | 503);
+  }
 
   if (error instanceof Error && error.message.includes("JWT_SECRET")) {
     return c.json(errorResponse("auth_not_configured", "服务端未配置 JWT_SECRET。"), 500);
+  }
+
+  throw error;
+}
+
+function emailErrorJson(c: Context, error: unknown): Response {
+  if (error instanceof EmailError) {
+    return c.json(errorResponse(error.code, error.message), error.status as 400 | 409 | 429 | 500 | 503);
   }
 
   throw error;
@@ -1473,7 +1647,7 @@ async function getAdminEcommerceJobs(limit?: number): Promise<EcommerceJobListRe
     jobs: rows.map(({ job, user }) => ({
       jobId: job.id,
       userId: job.createdByUserId,
-      userEmail: user?.email,
+      userEmail: user?.email ?? undefined,
       userDisplayName: user?.displayName,
       workspaceId: job.workspaceId,
       status: job.status as EcommerceBatchGenerateResponse["status"],
@@ -1507,7 +1681,7 @@ async function getAdminAssets(limit: number): Promise<AdminAssetsResponse> {
     assets: rows.map(({ asset, user }) => ({
       id: asset.id,
       userId: asset.createdByUserId,
-      userEmail: user?.email,
+      userEmail: user?.email ?? undefined,
       workspaceId: asset.workspaceId,
       fileName: asset.fileName,
       mimeType: asset.mimeType,
@@ -1540,7 +1714,7 @@ function parseListLimit(value: string | undefined): number {
 function parseAuthPayload(
   input: unknown,
   includeDisplayName: boolean
-): ParseResult<{ email: string; password: string; displayName?: string }> {
+): ParseResult<{ email: string; password: string; displayName?: string; emailCode: string }> {
   if (!isRecord(input)) {
     return {
       ok: false,
@@ -1562,9 +1736,29 @@ function parseAuthPayload(
     value: {
       email,
       password,
-      displayName: includeDisplayName ? stringValue(input.displayName)?.trim() : undefined
+      displayName: includeDisplayName ? stringValue(input.displayName)?.trim() : undefined,
+      emailCode: includeDisplayName ? stringValue(input.emailCode)?.trim() || "" : ""
     }
   };
+}
+
+function parseEmailCodePayload(input: unknown): ParseResult<{ email: string }> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_request", "请求内容必须是 JSON 对象。")
+    };
+  }
+
+  const email = stringValue(input.email)?.trim();
+  if (!email) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_email", "请输入邮箱。")
+    };
+  }
+
+  return { ok: true, value: { email } };
 }
 
 function parsePlanPayload(input: unknown, requireName: boolean): ParseResult<PlanMutation> {
@@ -1939,6 +2133,83 @@ function parseAlipayConfigPayload(input: unknown): ParseResult<SaveAlipayConfigR
       returnUrl: stringValue(input.returnUrl),
       gateway: stringValue(input.gateway),
       signType: stringValue(input.signType)
+    }
+  };
+}
+
+function parseWechatMiniAppConfigPayload(input: unknown): ParseResult<SaveWechatMiniAppConfigRequest> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_wechat_config", "微信小程序配置内容必须是 JSON 对象。")
+    };
+  }
+
+  if (typeof input.enabled !== "boolean") {
+    return {
+      ok: false,
+      error: errorResponse("invalid_wechat_config", "enabled 必须是布尔值。")
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      enabled: input.enabled,
+      appId: stringValue(input.appId),
+      appSecret: stringValue(input.appSecret),
+      preserveAppSecret: input.preserveAppSecret === true,
+      allowBindExistingAccount: input.allowBindExistingAccount !== false,
+      allowRegisterNewUser: input.allowRegisterNewUser !== false
+    }
+  };
+}
+
+function parseSmtpSettingsPayload(input: unknown): ParseResult<{
+  enabled: boolean;
+  host?: string;
+  port?: number;
+  secure?: boolean;
+  username?: string;
+  password?: string;
+  preservePassword?: boolean;
+  fromName?: string;
+  fromEmail?: string;
+}> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_smtp_config", "SMTP 配置内容必须是 JSON 对象。")
+    };
+  }
+
+  if (typeof input.enabled !== "boolean") {
+    return {
+      ok: false,
+      error: errorResponse("invalid_smtp_config", "enabled 必须是布尔值。")
+    };
+  }
+
+  const port = Object.hasOwn(input, "port") ? parseNonNegativeInteger(input.port) : undefined;
+  if (Object.hasOwn(input, "port") && (!port || port > 65535)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_smtp_config", "SMTP 端口必须是 1-65535 的整数。")
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      enabled: input.enabled,
+      host: stringValue(input.host),
+      port,
+      secure: typeof input.secure === "boolean" ? input.secure : undefined,
+      username: stringValue(input.username),
+      password: stringValue(input.password),
+      preservePassword: input.preservePassword === true,
+      fromName: stringValue(input.fromName),
+      fromEmail: stringValue(input.fromEmail)
     }
   };
 }

@@ -56,6 +56,12 @@ export const authConfig = {
   adminDisplayName: emptyToUndefined(process.env.ADMIN_DISPLAY_NAME) ?? "Administrator"
 };
 
+export const wechatMiniAppRuntimeConfig = {
+  appId: emptyToUndefined(process.env.WECHAT_MINIAPP_APP_ID),
+  appSecret: emptyToUndefined(process.env.WECHAT_MINIAPP_APP_SECRET),
+  enabled: process.env.WECHAT_MINIAPP_ENABLED === "true"
+};
+
 export function ensureRuntimeStorage(): void {
   mkdirSync(runtimePaths.dataDir, { recursive: true });
   mkdirSync(runtimePaths.assetsDir, { recursive: true });

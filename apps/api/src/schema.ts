@@ -9,7 +9,7 @@ export const users = mysqlTable(
   "users",
   {
     id: id("id").primaryKey(),
-    email: shortText("email").notNull(),
+    email: shortText("email"),
     passwordHash: shortText("password_hash", 512).notNull(),
     displayName: shortText("display_name").notNull(),
     role: shortText("role", 32).notNull(),
@@ -30,12 +30,53 @@ export const users = mysqlTable(
   })
 );
 
+export const wechatAccounts = mysqlTable(
+  "wechat_accounts",
+  {
+    id: id("id").primaryKey(),
+    userId: id("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    provider: shortText("provider", 32).notNull(),
+    openId: shortText("open_id", 255).notNull(),
+    unionId: shortText("union_id", 255),
+    nickname: shortText("nickname"),
+    avatarUrl: text("avatar_url"),
+    createdAt: isoDate("created_at").notNull(),
+    updatedAt: isoDate("updated_at").notNull()
+  },
+  (table) => ({
+    providerOpenIdIdx: uniqueIndex("wechat_accounts_provider_open_id_idx").on(table.provider, table.openId),
+    providerUnionIdIdx: uniqueIndex("wechat_accounts_provider_union_id_idx").on(table.provider, table.unionId),
+    userProviderIdx: uniqueIndex("wechat_accounts_user_provider_idx").on(table.userId, table.provider)
+  })
+);
+
 export const systemSettings = mysqlTable("system_settings", {
   key: varchar("setting_key", { length: 128 }).primaryKey(),
   valueJson: longtext("value_json").notNull(),
   createdAt: isoDate("created_at").notNull(),
   updatedAt: isoDate("updated_at").notNull()
 });
+
+export const emailVerificationCodes = mysqlTable(
+  "email_verification_codes",
+  {
+    id: id("id").primaryKey(),
+    email: shortText("email").notNull(),
+    purpose: shortText("purpose", 32).notNull(),
+    codeHash: shortText("code_hash", 128).notNull(),
+    expiresAt: isoDate("expires_at").notNull(),
+    consumedAt: isoDate("consumed_at"),
+    attemptCount: int("attempt_count").notNull(),
+    sentAt: isoDate("sent_at").notNull(),
+    createdAt: isoDate("created_at").notNull()
+  },
+  (table) => ({
+    emailPurposeIdx: index("email_verification_codes_email_purpose_idx").on(table.email, table.purpose),
+    expiresAtIdx: index("email_verification_codes_expires_at_idx").on(table.expiresAt)
+  })
+);
 
 export const subscriptionPlans = mysqlTable(
   "subscription_plans",

@@ -660,6 +660,67 @@ export interface AuthMeResponse {
   workspace: AuthWorkspace;
 }
 
+export interface UpdateAuthProfileRequest {
+  displayName?: string;
+  email?: string;
+  password?: string;
+}
+
+export interface WechatMiniAppPublicConfig {
+  enabled: boolean;
+  allowBindExistingAccount: boolean;
+  allowRegisterNewUser: boolean;
+  updatedAt?: string;
+}
+
+export interface WechatMiniAppConfigView extends WechatMiniAppPublicConfig {
+  appId: string;
+  appSecret: MaskedSecret;
+}
+
+export interface AdminWechatMiniAppConfigResponse {
+  wechatMiniApp: WechatMiniAppConfigView;
+}
+
+export interface SaveWechatMiniAppConfigRequest {
+  enabled: boolean;
+  appId?: string;
+  appSecret?: string;
+  preserveAppSecret?: boolean;
+  allowBindExistingAccount?: boolean;
+  allowRegisterNewUser?: boolean;
+}
+
+export interface WechatMiniAppConfigResponse {
+  wechatMiniApp: WechatMiniAppPublicConfig;
+}
+
+export interface WechatMiniAppLoginRequest {
+  code: string;
+}
+
+export type WechatMiniAppLoginResponse =
+  | {
+      status: "bound";
+      session: AuthResponse;
+    }
+  | {
+      status: "needs_bind";
+      bindToken: string;
+      allowBindExistingAccount: boolean;
+      allowRegisterNewUser: boolean;
+    };
+
+export interface WechatMiniAppBindRequest {
+  bindToken: string;
+}
+
+export interface WechatMiniAppRegisterRequest {
+  bindToken: string;
+  displayName?: string;
+  email?: string;
+}
+
 export interface AdminStatsResponse {
   userCount: number;
   assetCount: number;

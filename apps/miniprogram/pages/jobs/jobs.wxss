@@ -1,0 +1,271 @@
+.jobs-page {
+  min-height: 100vh;
+  padding: 28rpx 28rpx 50rpx;
+  box-sizing: border-box;
+  background: #f6f8fb;
+}
+
+.jobs-hero {
+  min-height: 210rpx;
+  padding: 34rpx;
+  border-radius: 34rpx;
+  box-sizing: border-box;
+  background: linear-gradient(135deg, #101828, #154b83);
+  color: #ffffff;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20rpx;
+  box-shadow: 0 22rpx 58rpx rgba(16, 24, 40, 0.15);
+}
+
+.eyebrow {
+  color: #84adff;
+  font-size: 20rpx;
+  font-weight: 900;
+}
+
+.page-title {
+  margin-top: 14rpx;
+  font-size: 44rpx;
+  line-height: 1.15;
+  font-weight: 900;
+}
+
+.page-copy {
+  width: 460rpx;
+  margin-top: 14rpx;
+  color: #d6e4ff;
+  font-size: 25rpx;
+  line-height: 1.5;
+}
+
+.refresh-button {
+  width: 128rpx;
+  height: 68rpx;
+  margin: 0;
+  border-radius: 999rpx;
+  background: #ffffff;
+  color: #155eef;
+  font-size: 25rpx;
+  font-weight: 850;
+}
+
+.empty-card,
+.album-card {
+  margin-top: 24rpx;
+  padding: 28rpx;
+  border-radius: 28rpx;
+  background: #ffffff;
+  border: 1rpx solid #edf0f5;
+  box-shadow: 0 12rpx 34rpx rgba(16, 24, 40, 0.05);
+}
+
+.empty-title {
+  color: #101828;
+  font-size: 32rpx;
+  font-weight: 850;
+}
+
+.empty-copy {
+  margin-top: 10rpx;
+  color: #667085;
+  font-size: 25rpx;
+  line-height: 1.45;
+}
+
+.login-button {
+  width: 220rpx;
+  height: 78rpx;
+  margin: 26rpx 0 0;
+  border-radius: 20rpx;
+  background: #155eef;
+  color: #ffffff;
+  font-size: 28rpx;
+  font-weight: 850;
+}
+
+.album-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20rpx;
+}
+
+.album-title {
+  color: #101828;
+  font-size: 32rpx;
+  font-weight: 850;
+}
+
+.album-meta {
+  margin-top: 8rpx;
+  color: #667085;
+  font-size: 24rpx;
+}
+
+.status-chip {
+  flex: none;
+  padding: 9rpx 16rpx;
+  border-radius: 999rpx;
+  color: #344054;
+  background: #f2f4f7;
+  font-size: 22rpx;
+  font-weight: 850;
+}
+
+.status-chip.succeeded {
+  color: #027a48;
+  background: #ecfdf3;
+}
+
+.status-chip.running,
+.status-chip.pending {
+  color: #175cd3;
+  background: #eff8ff;
+}
+
+.status-chip.failed {
+  color: #b42318;
+  background: #fef3f2;
+}
+
+.progress-track {
+  height: 10rpx;
+  margin-top: 20rpx;
+  border-radius: 999rpx;
+  overflow: hidden;
+  background: #eef2f6;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: #155eef;
+}
+
+.album-scroll {
+  width: 100%;
+  white-space: nowrap;
+  margin-top: 22rpx;
+}
+
+.album-image {
+  display: inline-block;
+  width: 208rpx;
+  height: 208rpx;
+  margin-right: 16rpx;
+  border-radius: 22rpx;
+  background: #f2f4f7;
+  vertical-align: top;
+}
+
+.album-placeholder {
+  height: 208rpx;
+  margin-top: 22rpx;
+  border-radius: 22rpx;
+  background: #f8fafc;
+  border: 1rpx dashed #cfd8e5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #667085;
+  font-size: 25rpx;
+  font-weight: 700;
+}
+
+.album-placeholder.large {
+  height: 520rpx;
+}
+
+.placeholder-icon {
+  color: #155eef;
+  font-size: 54rpx;
+  line-height: 1;
+  margin-bottom: 8rpx;
+}
+
+.album-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 20rpx;
+  color: #667085;
+  font-size: 23rpx;
+}
+
+.album-foot view:last-child {
+  color: #155eef;
+  font-weight: 800;
+}
+
+.gallery-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(16, 24, 40, 0.46);
+  display: flex;
+  align-items: flex-end;
+}
+
+.gallery-panel {
+  width: 100%;
+  max-height: 82vh;
+  border-radius: 34rpx 34rpx 0 0;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.gallery-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 20rpx;
+  padding: 30rpx 30rpx 22rpx;
+  border-bottom: 1rpx solid #edf0f5;
+}
+
+.gallery-title {
+  color: #101828;
+  font-size: 32rpx;
+  font-weight: 850;
+}
+
+.gallery-copy {
+  margin-top: 8rpx;
+  color: #667085;
+  font-size: 24rpx;
+  line-height: 1.42;
+}
+
+.gallery-close {
+  flex: none;
+  width: 58rpx;
+  height: 58rpx;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #344054;
+  background: #f2f4f7;
+  font-size: 40rpx;
+}
+
+.gallery-body {
+  max-height: 64vh;
+  padding: 24rpx;
+  box-sizing: border-box;
+}
+
+.gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 18rpx;
+}
+
+.gallery-image {
+  width: 100%;
+  height: 330rpx;
+  border-radius: 24rpx;
+  background: #f2f4f7;
+}

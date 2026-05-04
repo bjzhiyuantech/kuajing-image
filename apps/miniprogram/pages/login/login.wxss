@@ -1,0 +1,189 @@
+.login-page {
+  padding: 0 36rpx 40rpx;
+  background: linear-gradient(180deg, #f4f8ff 0%, #f8fafc 40%, #f9fafb 100%);
+}
+
+.hero-shell {
+  margin-top: 24rpx;
+  padding: 36rpx 32rpx 30rpx;
+  border-radius: 32rpx;
+  background: #ffffff;
+  box-shadow: 0 20rpx 60rpx rgba(15, 23, 42, 0.08);
+}
+
+.brand-row {
+  display: flex;
+  align-items: center;
+}
+
+.brand-mark {
+  width: 84rpx;
+  height: 84rpx;
+  border-radius: 22rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  background: linear-gradient(135deg, #155eef 0%, #6d5efc 100%);
+  font-size: 24rpx;
+  font-weight: 800;
+}
+
+.brand-copy {
+  margin-left: 20rpx;
+}
+
+.brand-title {
+  color: #0f172a;
+  font-size: 40rpx;
+  font-weight: 900;
+}
+
+.brand-subtitle {
+  color: #475467;
+  font-size: 24rpx;
+  margin-top: 4rpx;
+}
+
+.hero-copy {
+  margin-top: 24rpx;
+  color: #667085;
+  font-size: 28rpx;
+  line-height: 1.6;
+}
+
+.hero-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12rpx;
+  margin-top: 24rpx;
+}
+
+.hero-tags text {
+  padding: 10rpx 16rpx;
+  border-radius: 999rpx;
+  background: #eef4ff;
+  color: #155eef;
+  font-size: 22rpx;
+  font-weight: 700;
+}
+
+.mode-switch {
+  display: flex;
+  gap: 16rpx;
+  margin-top: 28rpx;
+}
+
+.mode-item {
+  flex: 1;
+  text-align: center;
+  padding: 20rpx 0;
+  border-radius: 18rpx;
+  background: #ffffff;
+  color: #475467;
+  font-size: 26rpx;
+  font-weight: 700;
+  box-shadow: 0 10rpx 30rpx rgba(15, 23, 42, 0.05);
+}
+
+.mode-item.active {
+  color: #155eef;
+  background: #eaf1ff;
+}
+
+.login-panel {
+  margin-top: 24rpx;
+  padding: 32rpx;
+  border-radius: 30rpx;
+  background: #ffffff;
+  box-shadow: 0 20rpx 60rpx rgba(15, 23, 42, 0.08);
+}
+
+.panel-title {
+  font-size: 36rpx;
+  line-height: 1.2;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.panel-copy, .bind-copy {
+  margin-top: 8rpx;
+  color: #667085;
+  font-size: 24rpx;
+  line-height: 1.5;
+}
+
+.field {
+  margin-top: 22rpx;
+}
+
+.field-label {
+  display: block;
+  margin-bottom: 10rpx;
+  color: #344054;
+  font-size: 22rpx;
+  font-weight: 700;
+}
+
+.login-input {
+  height: 92rpx;
+  border-radius: 18rpx;
+  background: #f8fafc;
+  border: 1rpx solid #d9e2ec;
+  padding: 0 24rpx;
+  box-sizing: border-box;
+  font-size: 28rpx;
+}
+
+.login-button,
+.secondary-button,
+.primary-outline-button {
+  height: 92rpx;
+  margin-top: 28rpx;
+  border-radius: 18rpx;
+  font-size: 30rpx;
+  font-weight: 800;
+}
+
+.login-button {
+  background: linear-gradient(135deg, #155eef 0%, #0f4dd8 100%);
+  color: #ffffff;
+}
+
+.secondary-button {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+
+.primary-outline-button {
+  background: #ffffff;
+  color: #155eef;
+  border: 1rpx solid #bfd3ff;
+}
+
+.bind-panel {
+  margin-top: 28rpx;
+  padding-top: 24rpx;
+  border-top: 1rpx solid #e5e7eb;
+}
+
+.bind-title {
+  color: #0f172a;
+  font-size: 30rpx;
+  font-weight: 800;
+}
+
+.bind-card {
+  margin-top: 22rpx;
+  padding: 24rpx;
+  border-radius: 22rpx;
+  background: #f8fafc;
+}
+
+.switch-link {
+  padding-top: 26rpx;
+  text-align: center;
+  color: #155eef;
+  font-size: 26rpx;
+  font-weight: 700;
+}

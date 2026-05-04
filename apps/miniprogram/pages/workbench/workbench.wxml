@@ -1,0 +1,203 @@
+<view class="create-page">
+  <view class="create-hero">
+    <view>
+      <view class="eyebrow">CREATE WORKFLOW</view>
+      <view class="page-title">创建商品图任务</view>
+      <view class="page-copy">先选择生成方式，再上传产品图和商品信息。提交任务时再登录并扣减会员额度。</view>
+    </view>
+  </view>
+
+  <view class="panel">
+    <view class="panel-title">生成方式</view>
+    <view class="mode-grid">
+      <view wx:for="{{modes}}" wx:key="id" class="mode-card {{item.active ? 'active' : ''}}" bindtap="selectMode" data-id="{{item.id}}">
+        <view class="mode-icon">{{item.icon}}</view>
+        <view>
+          <view class="mode-title">{{item.title}}</view>
+          <view class="mode-desc">{{item.desc}}</view>
+        </view>
+      </view>
+    </view>
+  </view>
+
+  <view class="panel">
+    <view class="panel-head">
+      <view>
+        <view class="panel-title">上传图片</view>
+        <view class="panel-sub">支持 1-3 张产品图。当前会按每张图分别创建一组任务。</view>
+      </view>
+      <view class="count-badge">{{images.length}}/3</view>
+    </view>
+    <view class="image-grid">
+      <block wx:for="{{images}}" wx:key="path">
+        <view class="image-wrap">
+          <image class="preview" src="{{item.path}}" mode="aspectFill" />
+          <view class="remove-image" bindtap="removeImage" data-index="{{index}}">×</view>
+        </view>
+      </block>
+      <view wx:if="{{images.length < 3}}" class="add-image" bindtap="chooseImages">
+        <view class="add-plus">+</view>
+        <view>上传图片</view>
+      </view>
+    </view>
+  </view>
+
+  <view class="panel">
+    <view class="panel-head">
+      <view>
+        <view class="panel-title">商品信息</view>
+        <view class="panel-sub">信息越完整，场景图和文案越稳定。</view>
+      </view>
+      <view class="template-actions">
+        <view class="mini-action" bindtap="applyTemplate">套用</view>
+        <view class="mini-action primary" bindtap="saveTemplate">保存</view>
+      </view>
+    </view>
+
+    <view class="field">
+      <text class="field-label">商品标题</text>
+      <input class="form-input" value="{{title}}" data-field="title" bindinput="onInput" placeholder="例如：真丝方巾 / 便携榨汁杯" />
+    </view>
+    <view class="field">
+      <text class="field-label">商品描述</text>
+      <textarea class="form-textarea" value="{{description}}" data-field="description" bindinput="onInput" placeholder="核心卖点、尺寸、包装、注意事项等" />
+    </view>
+    <view class="two-fields">
+      <view class="field">
+        <text class="field-label">目标人群</text>
+        <input class="form-input" value="{{targetCustomer}}" data-field="targetCustomer" bindinput="onInput" placeholder="通勤女性 / 户外人群" />
+      </view>
+      <view class="field">
+        <text class="field-label">使用场景</text>
+        <input class="form-input" value="{{usageScene}}" data-field="usageScene" bindinput="onInput" placeholder="办公室 / 旅行 / 礼品" />
+      </view>
+    </view>
+    <view class="two-fields">
+      <view class="field">
+        <text class="field-label">材质</text>
+        <input class="form-input" value="{{material}}" data-field="material" bindinput="onInput" placeholder="真丝 / 棉 / 不锈钢" />
+      </view>
+      <view class="field">
+        <text class="field-label">颜色 / SKU</text>
+        <input class="form-input" value="{{color}}" data-field="color" bindinput="onInput" placeholder="米白 / 蓝色花纹" />
+      </view>
+    </view>
+  </view>
+
+  <view class="panel">
+    <view class="panel-title">平台与市场</view>
+    <view class="two-fields">
+      <view class="field">
+        <text class="field-label">平台</text>
+        <picker range="{{platformLabels}}" value="{{platformIndex}}" bindchange="onPlatformChange">
+          <view class="select-box">{{platformLabels[platformIndex]}}</view>
+        </picker>
+      </view>
+      <view class="field">
+        <text class="field-label">市场</text>
+        <picker range="{{marketLabels}}" value="{{marketIndex}}" bindchange="onMarketChange">
+          <view class="select-box">{{marketLabels[marketIndex]}}</view>
+        </picker>
+      </view>
+    </view>
+    <view wx:if="{{mode === 'text-translation'}}" class="field">
+      <text class="field-label">目标语言</text>
+      <picker range="{{languageLabels}}" value="{{languageIndex}}" bindchange="onLanguageChange">
+        <view class="select-box">{{languageLabels[languageIndex]}}</view>
+      </picker>
+    </view>
+  </view>
+
+  <view class="panel">
+    <view class="panel-head">
+      <view>
+        <view class="panel-title">生成场景</view>
+        <view class="panel-sub">{{modeDesc}}</view>
+      </view>
+    </view>
+    <view wx:if="{{mode === 'category-kit'}}" class="category-kit-card">
+      <view class="kit-top">
+        <view>
+          <view class="kit-label">当前品类方案</view>
+          <view class="kit-title">{{selectedCategoryTitle}}套图生产</view>
+        </view>
+        <view class="kit-badge">默认</view>
+      </view>
+      <view class="kit-copy">已内置 Allegro/电商 Listing Image Kit：白底主图、造型主图、面料细节、尺寸说明、佩戴方式、生活场景等。</view>
+      <view class="category-picker">
+        <view wx:for="{{categoryKits}}" wx:key="id" class="category-option {{item.active ? 'active' : ''}}" bindtap="selectCategory" data-id="{{item.id}}">
+          <view>
+            <view class="category-title">{{item.title}}</view>
+            <view class="category-desc">{{item.desc}}</view>
+          </view>
+          <view class="category-status">{{item.status}}</view>
+        </view>
+      </view>
+      <view class="kit-action" bindtap="requestCategory">申请增加品类</view>
+    </view>
+    <view class="scene-grid">
+      <block wx:for="{{scenes}}" wx:key="id">
+        <view wx:if="{{item.visible}}" class="scene-card {{item.active ? 'active' : ''}}" bindtap="toggleScene" data-id="{{item.id}}">
+          <view class="wand">✦</view>
+          <view>{{item.label}}</view>
+        </view>
+      </block>
+    </view>
+  </view>
+
+  <view class="panel">
+    <view class="switch-row" bindtap="toggleSwitch" data-field="removeWatermarkAndLogo">
+      <view>
+        <view class="switch-title">去水印 / Logo</view>
+        <view class="panel-sub">默认清理平台标识、旧店铺水印和无关角标。</view>
+      </view>
+      <view class="switch {{removeWatermarkAndLogo ? 'on' : ''}}"><view></view></view>
+    </view>
+    <view class="switch-row" bindtap="toggleSwitch" data-field="brandOverlayEnabled">
+      <view>
+        <view class="switch-title">叠加品牌</view>
+        <view class="panel-sub">后续可接 Logo 上传；当前会要求图片预留品牌空间。</view>
+      </view>
+      <view class="switch {{brandOverlayEnabled ? 'on' : ''}}"><view></view></view>
+    </view>
+  </view>
+
+  <view class="panel">
+    <view class="panel-head" bindtap="toggleAdvanced">
+      <view>
+        <view class="panel-title">输出设置</view>
+        <view class="panel-sub">尺寸、每场景数量和补充方向。</view>
+      </view>
+      <view class="chevron">{{advancedOpen ? '收起' : '展开'}}</view>
+    </view>
+    <view wx:if="{{advancedOpen}}">
+      <view class="two-fields">
+        <view class="field">
+          <text class="field-label">输出尺寸</text>
+          <picker range="{{sizeLabels}}" value="{{sizeIndex}}" bindchange="onSizeChange">
+            <view class="select-box">{{sizeLabels[sizeIndex]}}</view>
+          </picker>
+        </view>
+        <view class="field">
+          <text class="field-label">每场景数量</text>
+          <picker range="{{countLabels}}" value="{{countIndex}}" bindchange="onCountChange">
+            <view class="select-box">{{countLabels[countIndex]}}</view>
+          </picker>
+        </view>
+      </view>
+      <view class="field">
+        <text class="field-label">补充要求</text>
+        <textarea class="form-textarea" value="{{extraDirection}}" data-field="extraDirection" bindinput="onInput" placeholder="例如：保留原构图；模特不露脸；不要新增夸大宣传文字" />
+      </view>
+    </view>
+  </view>
+
+  <view class="submit-spacer"></view>
+  <view class="submit-bar">
+    <view>
+      <view class="submit-count">{{images.length}} 张图 · {{activeSceneCount}} 个场景</view>
+      <view class="submit-note">提交后生成任务并扣减额度</view>
+    </view>
+    <button class="submit-button" loading="{{submitting}}" bindtap="submitJobs">创建任务</button>
+  </view>
+</view>

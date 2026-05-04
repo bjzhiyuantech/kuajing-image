@@ -1,0 +1,49 @@
+{
+  "pages": [
+    "pages/home/home",
+    "pages/workbench/workbench",
+    "pages/jobs/jobs",
+    "pages/profile/profile",
+    "pages/login/login"
+  ],
+  "window": {
+    "navigationBarTitleText": "商图AI",
+    "navigationBarBackgroundColor": "#101828",
+    "navigationBarTextStyle": "white",
+    "backgroundColor": "#f5f7fb"
+  },
+  "tabBar": {
+    "color": "#667085",
+    "selectedColor": "#155eef",
+    "backgroundColor": "#ffffff",
+    "borderStyle": "black",
+    "list": [
+      {
+        "pagePath": "pages/home/home",
+        "text": "首页",
+        "iconPath": "assets/tabbar/home-normal.png",
+        "selectedIconPath": "assets/tabbar/home-active.png"
+      },
+      {
+        "pagePath": "pages/workbench/workbench",
+        "text": "出图",
+        "iconPath": "assets/tabbar/create-normal.png",
+        "selectedIconPath": "assets/tabbar/create-active.png"
+      },
+      {
+        "pagePath": "pages/jobs/jobs",
+        "text": "任务",
+        "iconPath": "assets/tabbar/jobs-normal.png",
+        "selectedIconPath": "assets/tabbar/jobs-active.png"
+      },
+      {
+        "pagePath": "pages/profile/profile",
+        "text": "我的",
+        "iconPath": "assets/tabbar/profile-normal.png",
+        "selectedIconPath": "assets/tabbar/profile-active.png"
+      }
+    ]
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json"
+}

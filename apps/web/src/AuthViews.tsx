@@ -18,6 +18,7 @@ import {
   Receipt,
   RefreshCw,
   Save,
+  Send,
   ShieldCheck,
   Sparkles,
   User,
@@ -225,19 +226,24 @@ export function AuthScreen({
   onModeChange,
   onAuthenticated,
   onLogin,
-  onRegister
+  onRegister,
+  onSendEmailCode
 }: {
   mode: AuthMode;
   onModeChange: (mode: AuthMode) => void;
   onAuthenticated: (session: AuthSession) => void;
   onLogin: (email: string, password: string) => Promise<AuthSession>;
-  onRegister: (email: string, password: string, displayName: string) => Promise<AuthSession>;
+  onRegister: (email: string, password: string, displayName: string, emailCode: string) => Promise<AuthSession>;
+  onSendEmailCode: (email: string) => Promise<void>;
 }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
+  const [emailCode, setEmailCode] = useState("");
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSendingCode, setIsSendingCode] = useState(false);
   const isRegister = mode === "register";
 
   async function submitForm(event: React.FormEvent<HTMLFormElement>): Promise<void> {
@@ -252,15 +258,38 @@ export function AuthScreen({
       setError("请输入显示名。");
       return;
     }
+    if (isRegister && !emailCode.trim()) {
+      setError("请输入邮箱验证码。");
+      return;
+    }
 
     setIsSubmitting(true);
     try {
-      const session = isRegister ? await onRegister(email, password, displayName) : await onLogin(email, password);
+      const session = isRegister ? await onRegister(email, password, displayName, emailCode) : await onLogin(email, password);
       onAuthenticated(session);
     } catch (authError) {
       setError(authError instanceof Error ? authError.message : isRegister ? "注册失败。" : "登录失败。");
     } finally {
       setIsSubmitting(false);
+    }
+  }
+
+  async function sendEmailCode(): Promise<void> {
+    setError("");
+    setNotice("");
+    if (!email.trim()) {
+      setError("请先输入邮箱。");
+      return;
+    }
+
+    setIsSendingCode(true);
+    try {
+      await onSendEmailCode(email);
+      setNotice("验证码已发送，请查收邮箱。");
+    } catch (sendError) {
+      setError(sendError instanceof Error ? sendError.message : "验证码发送失败。");
+    } finally {
+      setIsSendingCode(false);
     }
   }
 
@@ -295,6 +324,7 @@ export function AuthScreen({
               type="button"
               onClick={() => {
                 setError("");
+                setNotice("");
                 onModeChange("login");
               }}
             >
@@ -308,6 +338,7 @@ export function AuthScreen({
               type="button"
               onClick={() => {
                 setError("");
+                setNotice("");
                 onModeChange("register");
               }}
             >
@@ -346,6 +377,28 @@ export function AuthScreen({
             </div>
           </label>
 
+          {isRegister ? (
+            <label className="auth-field">
+              <span>邮箱验证码</span>
+              <div className="auth-input auth-input--with-action">
+                <ShieldCheck className="size-4" aria-hidden="true" />
+                <input
+                  autoComplete="one-time-code"
+                  inputMode="numeric"
+                  maxLength={6}
+                  name="emailCode"
+                  placeholder="6 位验证码"
+                  value={emailCode}
+                  onChange={(event) => setEmailCode(event.target.value)}
+                />
+                <button className="auth-input__action" disabled={isSendingCode} type="button" onClick={() => void sendEmailCode()}>
+                  {isSendingCode ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Send className="size-4" aria-hidden="true" />}
+                  发送
+                </button>
+              </div>
+            </label>
+          ) : null}
+
           <label className="auth-field">
             <span>密码</span>
             <div className="auth-input">
@@ -366,6 +419,12 @@ export function AuthScreen({
             <div className="auth-alert" role="alert">
               <AlertTriangle className="size-4" aria-hidden="true" />
               <p>{error}</p>
+            </div>
+          ) : null}
+          {notice ? (
+            <div className="admin-success" role="status">
+              <CheckCircle2 className="size-4" aria-hidden="true" />
+              <p>{notice}</p>
             </div>
           ) : null}
 
@@ -703,6 +762,7 @@ export function AdminPage() {
   const [assets, setAssets] = useState<AdminAssetRow[]>([]);
   const [billingSettings, setBillingSettings] = useState<BillingSettingsFormState>(createBillingSettingsForm());
   const [alipaySettings, setAlipaySettings] = useState<AlipayFormState>(createAlipayForm());
+  const [smtpSettings, setSmtpSettings] = useState<SmtpFormState>(createSmtpForm());
   const [transactions, setTransactions] = useState<BillingTransactionRow[]>([]);
   const [planDrafts, setPlanDrafts] = useState<Record<string, PlanFormState>>({});
   const [newPlan, setNewPlan] = useState<PlanFormState>(createEmptyPlanForm());
@@ -724,7 +784,7 @@ export function AdminPage() {
       setNotice("");
     }
     try {
-      const [statsResponse, usersResponse, jobsResponse, assetsResponse, plansResponse, billingResponse, alipayResponse, transactionsResponse] = await Promise.all([
+      const [statsResponse, usersResponse, jobsResponse, assetsResponse, plansResponse, billingResponse, alipayResponse, smtpResponse, transactionsResponse] = await Promise.all([
         authFetch("/api/admin/stats"),
         authFetch("/api/admin/users"),
         authFetch("/api/admin/ecommerce/jobs"),
@@ -732,6 +792,7 @@ export function AdminPage() {
         authFetch("/api/admin/plans"),
         authFetch("/api/admin/billing/settings"),
         authFetch("/api/admin/payment/alipay"),
+        authFetch("/api/admin/email/smtp"),
         authFetch("/api/admin/billing/transactions?limit=50")
       ]);
 
@@ -754,6 +815,9 @@ export function AdminPage() {
       }
       if (alipayResponse.ok) {
         setAlipaySettings(parseAlipayForm(await alipayResponse.json()));
+      }
+      if (smtpResponse.ok) {
+        setSmtpSettings(parseSmtpForm(await smtpResponse.json()));
       }
       if (transactionsResponse.ok) {
         setTransactions(parseBillingTransactions(await transactionsResponse.json()));
@@ -960,6 +1024,38 @@ export function AdminPage() {
     }
   }
 
+  async function saveSmtpSettings(): Promise<void> {
+    setSavingBilling("smtp");
+    setError("");
+    setNotice("");
+    try {
+      const response = await authFetch("/api/admin/email/smtp", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          enabled: smtpSettings.enabled,
+          host: smtpSettings.host,
+          port: Number.parseInt(smtpSettings.port, 10),
+          secure: smtpSettings.secure,
+          username: smtpSettings.username,
+          password: smtpSettings.password,
+          preservePassword: !smtpSettings.password.trim() && smtpSettings.passwordSaved,
+          fromName: smtpSettings.fromName,
+          fromEmail: smtpSettings.fromEmail
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "SMTP 配置保存失败。"));
+      }
+      setNotice("SMTP 配置已保存。");
+      await loadAdminData({ preserveNotice: true });
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "SMTP 配置保存失败。");
+    } finally {
+      setSavingBilling("");
+    }
+  }
+
   const draftRows = [
     ...plans.map((plan) => ({ id: plan.id, form: planDrafts[plan.id] ?? planToForm(plan), isNew: false })),
     { id: NEW_PLAN_ID, form: newPlan, isNew: true }
@@ -1070,6 +1166,42 @@ export function AdminPage() {
               <button className="secondary-action h-10" disabled={savingBilling === "alipay"} type="button" onClick={() => void saveAlipaySettings()}>
                 {savingBilling === "alipay" ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <CreditCard className="size-4" aria-hidden="true" />}
                 保存支付宝
+              </button>
+            </div>
+
+            <div className="admin-form-panel">
+              <div className="admin-form-panel__title-row">
+                <div>
+                  <p className="settings-eyebrow">Email</p>
+                  <h3>SMTP 邮箱验证码</h3>
+                </div>
+                <label className="admin-switch">
+                  <input
+                    checked={smtpSettings.enabled}
+                    type="checkbox"
+                    onChange={(event) => setSmtpSettings({ ...smtpSettings, enabled: event.target.checked })}
+                  />
+                  <span>{smtpSettings.enabled ? "启用" : "关闭"}</span>
+                </label>
+              </div>
+              <div className="admin-form-grid admin-form-grid--two">
+                <label><span>SMTP Host</span><input className="admin-input" value={smtpSettings.host} onChange={(event) => setSmtpSettings({ ...smtpSettings, host: event.target.value })} /></label>
+                <label><span>端口</span><input className="admin-input" inputMode="numeric" value={smtpSettings.port} onChange={(event) => setSmtpSettings({ ...smtpSettings, port: event.target.value })} /></label>
+                <label><span>账号</span><input className="admin-input" value={smtpSettings.username} onChange={(event) => setSmtpSettings({ ...smtpSettings, username: event.target.value })} /></label>
+                <label><span>发件邮箱</span><input className="admin-input" inputMode="email" value={smtpSettings.fromEmail} onChange={(event) => setSmtpSettings({ ...smtpSettings, fromEmail: event.target.value })} /></label>
+                <label><span>发件名称</span><input className="admin-input" value={smtpSettings.fromName} onChange={(event) => setSmtpSettings({ ...smtpSettings, fromName: event.target.value })} /></label>
+                <label className="admin-switch admin-switch--inline">
+                  <input checked={smtpSettings.secure} type="checkbox" onChange={(event) => setSmtpSettings({ ...smtpSettings, secure: event.target.checked })} />
+                  <span>SSL/TLS</span>
+                </label>
+              </div>
+              <label>
+                <span>SMTP 密码 {smtpSettings.passwordSaved ? "（已保存，留空不覆盖）" : ""}</span>
+                <input className="admin-input" type="password" value={smtpSettings.password} onChange={(event) => setSmtpSettings({ ...smtpSettings, password: event.target.value })} />
+              </label>
+              <button className="secondary-action h-10" disabled={savingBilling === "smtp"} type="button" onClick={() => void saveSmtpSettings()}>
+                {savingBilling === "smtp" ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Mail className="size-4" aria-hidden="true" />}
+                保存 SMTP
               </button>
             </div>
           </div>
@@ -1648,6 +1780,18 @@ interface AlipayFormState {
   signType: string;
 }
 
+interface SmtpFormState {
+  enabled: boolean;
+  host: string;
+  port: string;
+  secure: boolean;
+  username: string;
+  password: string;
+  passwordSaved: boolean;
+  fromName: string;
+  fromEmail: string;
+}
+
 interface BillingTransactionRow {
   id: string;
   userId?: string;
@@ -1943,6 +2087,21 @@ function parseAlipayForm(value: unknown): AlipayFormState {
   };
 }
 
+function parseSmtpForm(value: unknown): SmtpFormState {
+  const smtp = firstRecord(value, "smtp") ?? (isRecord(value) ? value : {});
+  return {
+    enabled: booleanFrom(smtp.enabled, false),
+    host: stringFrom(smtp.host),
+    port: String(numberFrom(smtp.port) ?? 465),
+    secure: booleanFrom(smtp.secure, true),
+    username: stringFrom(smtp.username),
+    password: "",
+    passwordSaved: booleanFrom(smtp.passwordSaved, false),
+    fromName: stringFrom(smtp.fromName) || "商图 AI 助手",
+    fromEmail: stringFrom(smtp.fromEmail)
+  };
+}
+
 function parseBillingTransactions(value: unknown): BillingTransactionRow[] {
   return arrayFrom(value, ["transactions", "items"]).map((item, index) => ({
     id: stringFrom(item.id) || `transaction-${index}`,
@@ -2032,6 +2191,20 @@ function createAlipayForm(): AlipayFormState {
     returnUrl: "",
     gateway: "https://openapi.alipay.com/gateway.do",
     signType: "RSA2"
+  };
+}
+
+function createSmtpForm(): SmtpFormState {
+  return {
+    enabled: false,
+    host: "",
+    port: "465",
+    secure: true,
+    username: "",
+    password: "",
+    passwordSaved: false,
+    fromName: "商图 AI 助手",
+    fromEmail: ""
   };
 }
 

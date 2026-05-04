@@ -1,0 +1,99 @@
+<view class="home-page">
+  <view class="home-top">
+    <view>
+      <view class="brand-line">商图AI</view>
+      <view class="hero-title">电商AI图片助手</view>
+      <view class="hero-copy">上传产品图，批量生成主图、翻译图、去水印图和平台场景图。</view>
+    </view>
+    <view class="avatar" bindtap="goProfile">{{userInitial}}</view>
+  </view>
+
+  <view class="hero-card">
+    <view class="hero-glow"></view>
+    <view class="hero-content">
+      <view class="hero-kicker">AI PRODUCT IMAGE SUITE</view>
+      <view class="hero-heading">一张产品图，生成整套电商素材</view>
+      <view class="hero-sub">适合上新、铺货、本地化翻译、清理旧水印和多平台投放。</view>
+      <view class="hero-actions">
+        <button class="start-button" bindtap="goCreate">开始出图</button>
+        <view class="ghost-button" bindtap="goJobs">查看任务</view>
+      </view>
+    </view>
+    <view class="mock-stack">
+      <view class="mock-card mock-main">
+        <view class="mock-image"></view>
+        <view class="mock-line wide"></view>
+        <view class="mock-line"></view>
+      </view>
+      <view class="mock-card mock-float">
+        <view class="spark"></view>
+        <view>
+          <view class="mock-mini-line"></view>
+          <view class="mock-mini-line short"></view>
+        </view>
+      </view>
+    </view>
+  </view>
+
+  <view class="section-block">
+    <view class="section-head">
+      <view class="section-title">常用功能</view>
+      <view class="section-more" bindtap="goCreate">全部</view>
+    </view>
+    <view class="feature-grid">
+      <view wx:for="{{features}}" wx:key="key" class="feature-item" bindtap="openFeature" data-key="{{item.key}}">
+        <view class="feature-icon {{item.key}}">{{item.icon}}</view>
+        <view class="feature-title">{{item.title}}</view>
+        <view class="feature-desc">{{item.desc}}</view>
+      </view>
+    </view>
+  </view>
+
+  <view class="section-block">
+    <view class="section-head">
+      <view class="section-title">推荐工作流</view>
+      <view class="section-more" bindtap="goCreate">自定义</view>
+    </view>
+    <scroll-view scroll-x class="workflow-scroll">
+      <view wx:for="{{workflows}}" wx:key="key" class="workflow-card" bindtap="openWorkflow" data-key="{{item.key}}">
+        <view class="workflow-top">
+          <view class="workflow-badge">{{item.badge}}</view>
+          <view class="workflow-count">{{item.count}}</view>
+        </view>
+        <view class="workflow-title">{{item.title}}</view>
+        <view class="workflow-desc">{{item.desc}}</view>
+        <view class="workflow-tags">
+          <text wx:for="{{item.tags}}" wx:key="*this">{{item}}</text>
+        </view>
+      </view>
+    </scroll-view>
+  </view>
+
+  <view class="section-block">
+    <view class="section-head">
+      <view class="section-title">最近任务</view>
+      <view class="section-more" bindtap="goJobs">更多</view>
+    </view>
+    <view wx:if="{{recentJobs.length}}" class="recent-list">
+      <view wx:for="{{recentJobs}}" wx:key="jobId" class="recent-item" bindtap="goJobs">
+        <view>
+          <view class="recent-title">{{item.productTitle}}</view>
+          <view class="recent-meta">{{item.completedScenes}}/{{item.totalScenes}} 场景 · {{item.updatedAt}}</view>
+        </view>
+        <view class="recent-status {{item.status}}">{{item.statusLabel}}</view>
+      </view>
+    </view>
+    <view wx:else class="empty-task">
+      <view class="empty-title">还没有任务</view>
+      <view class="empty-copy">选择一个工作流，上传产品图开始生成。</view>
+    </view>
+  </view>
+
+  <view class="member-strip" bindtap="goProfile">
+    <view>
+      <view class="member-title">{{memberTitle}}</view>
+      <view class="member-copy">{{memberCopy}}</view>
+    </view>
+    <view class="member-arrow">›</view>
+  </view>
+</view>

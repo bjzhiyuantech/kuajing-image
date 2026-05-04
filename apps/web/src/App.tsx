@@ -94,6 +94,7 @@ import {
   isAdminUser,
   loginWithPassword,
   registerWithPassword,
+  sendRegisterEmailCode,
   storeAuthToken,
   type AuthSession,
   type AuthUser
@@ -3028,6 +3029,7 @@ export function App() {
             onLogin={loginWithPassword}
             onModeChange={navigateToAuth}
             onRegister={registerWithPassword}
+            onSendEmailCode={sendRegisterEmailCode}
           />
         ) : (
           <HomePage onAuthNavigate={navigateToAuth} />

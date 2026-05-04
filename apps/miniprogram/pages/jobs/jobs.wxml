@@ -1,0 +1,86 @@
+<view class="jobs-page">
+  <view class="jobs-hero">
+    <view>
+      <view class="eyebrow">TASK ALBUM</view>
+      <view class="page-title">任务相册</view>
+      <view class="page-copy">每批任务按相册展示生成结果，方便回看、挑图和下载。</view>
+    </view>
+    <button class="refresh-button" loading="{{loading}}" bindtap="loadJobs">刷新</button>
+  </view>
+
+  <view wx:if="{{!token}}" class="empty-card">
+    <view class="empty-title">登录后查看任务相册</view>
+    <view class="empty-copy">生成结果会保存到你的账号，方便跨设备查看。</view>
+    <button class="login-button" bindtap="loadJobs">登录查看</button>
+  </view>
+
+  <view wx:if="{{token && !jobs.length && !loading}}" class="empty-card">
+    <view class="empty-title">还没有任务</view>
+    <view class="empty-copy">先创建一组商品图任务，生成后会在这里展示。</view>
+  </view>
+
+  <view wx:for="{{jobs}}" wx:key="jobId" class="album-card" bindtap="openJob" data-id="{{item.jobId}}">
+    <view class="album-head">
+      <view>
+        <view class="album-title">{{item.productTitle || '未命名商品'}}</view>
+        <view class="album-meta">{{item.completedScenes}}/{{item.totalScenes}} 场景 · {{item.imageCount}} 张图</view>
+      </view>
+      <view class="status-chip {{item.status}}">{{item.statusLabel}}</view>
+    </view>
+
+    <view class="progress-track">
+      <view class="progress-fill" style="width: {{item.progressPercent}}%;"></view>
+    </view>
+
+    <scroll-view wx:if="{{item.coverImages.length}}" scroll-x class="album-scroll" enhanced show-scrollbar="{{false}}">
+      <image
+        wx:for="{{item.coverImages}}"
+        wx:key="id"
+        class="album-image"
+        src="{{item.url}}"
+        mode="aspectFill"
+        catchtap="previewImage"
+        data-url="{{item.url}}"
+      />
+    </scroll-view>
+
+    <view wx:else class="album-placeholder">
+      <view class="placeholder-icon">⌁</view>
+      <view>{{item.status === 'running' || item.status === 'pending' ? '图片生成中' : '暂无可展示图片'}}</view>
+    </view>
+
+    <view class="album-foot">
+      <view>{{item.updatedAt}}</view>
+      <view>查看相册 ›</view>
+    </view>
+  </view>
+
+  <view wx:if="{{currentJob}}" class="gallery-mask" bindtap="closeGallery">
+    <view class="gallery-panel" catchtap="noop">
+      <view class="gallery-head">
+        <view>
+          <view class="gallery-title">{{currentJob.productTitle || '任务相册'}}</view>
+          <view class="gallery-copy">{{currentJob.message}}</view>
+        </view>
+        <view class="gallery-close" bindtap="closeGallery">×</view>
+      </view>
+      <scroll-view scroll-y class="gallery-body">
+        <view wx:if="{{currentJob.coverImages.length}}" class="gallery-grid">
+          <image
+            wx:for="{{currentJob.coverImages}}"
+            wx:key="id"
+            class="gallery-image"
+            src="{{item.url}}"
+            mode="aspectFill"
+            catchtap="previewImage"
+            data-url="{{item.url}}"
+          />
+        </view>
+        <view wx:else class="album-placeholder large">
+          <view class="placeholder-icon">⌁</view>
+          <view>这批任务暂时还没有可展示图片。</view>
+        </view>
+      </scroll-view>
+    </view>
+  </view>
+</view>

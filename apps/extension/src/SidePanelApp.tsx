@@ -986,9 +986,11 @@ function formatSourceUrl(url: string): string {
 export function SidePanelApp() {
   const [auth, setAuth] = useState<ExtensionAuthState>(defaultAuth);
   const [authMode, setAuthMode] = useState<AuthMode>("login");
-  const [authForm, setAuthForm] = useState({ email: "", password: "", displayName: "" });
+  const [authForm, setAuthForm] = useState({ email: "", password: "", displayName: "", emailCode: "" });
   const [authLoading, setAuthLoading] = useState(false);
+  const [authCodeLoading, setAuthCodeLoading] = useState(false);
   const [authError, setAuthError] = useState("");
+  const [authNotice, setAuthNotice] = useState("");
   const [pendingAuthAction, setPendingAuthAction] = useState<PendingAuthAction | null>(null);
   const [form, setForm] = useState<BatchFormState>(defaultForm);
   const [pageContext, setPageContext] = useState<PageContext | null>(null);
@@ -1474,6 +1476,11 @@ export function SidePanelApp() {
   async function submitAuth(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     setAuthError("");
+    setAuthNotice("");
+    if (authMode === "register" && !authForm.emailCode.trim()) {
+      setAuthError("请输入邮箱验证码。");
+      return;
+    }
     setAuthLoading(true);
     try {
       const response = await fetch(`${apiBaseUrl()}/api/auth/${authMode}`, {
@@ -1482,7 +1489,8 @@ export function SidePanelApp() {
         body: JSON.stringify({
           email: authForm.email.trim(),
           password: authForm.password,
-          displayName: authMode === "register" ? authForm.displayName.trim() || undefined : undefined
+          displayName: authMode === "register" ? authForm.displayName.trim() || undefined : undefined,
+          emailCode: authMode === "register" ? authForm.emailCode.trim() : undefined
         })
       });
       const body = await parseResponseOrThrow(response);
@@ -1515,6 +1523,30 @@ export function SidePanelApp() {
       setAuthError(error instanceof Error ? error.message : "登录失败，请稍后重试。");
     } finally {
       setAuthLoading(false);
+    }
+  }
+
+  async function sendAuthEmailCode(): Promise<void> {
+    setAuthError("");
+    setAuthNotice("");
+    if (!authForm.email.trim()) {
+      setAuthError("请先输入邮箱。");
+      return;
+    }
+
+    setAuthCodeLoading(true);
+    try {
+      const response = await fetch(`${apiBaseUrl()}/api/auth/email-code`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: authForm.email.trim() })
+      });
+      await parseResponseOrThrow(response);
+      setAuthNotice("验证码已发送，请查收邮箱。");
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "验证码发送失败。");
+    } finally {
+      setAuthCodeLoading(false);
     }
   }
 
@@ -3375,11 +3407,31 @@ export function SidePanelApp() {
                         <input autoComplete="name" value={authForm.displayName} onChange={(event) => setAuthForm({ ...authForm, displayName: event.target.value })} />
                       </label>
                     ) : null}
+                    {authMode === "register" ? (
+                      <label>
+                        <span>邮箱验证码</span>
+                        <div className="auth-code-row">
+                          <input
+                            autoComplete="one-time-code"
+                            inputMode="numeric"
+                            maxLength={6}
+                            value={authForm.emailCode}
+                            onChange={(event) => setAuthForm({ ...authForm, emailCode: event.target.value })}
+                            required
+                          />
+                          <button className="mini-button" disabled={authCodeLoading} type="button" onClick={() => void sendAuthEmailCode()}>
+                            {authCodeLoading ? <Loader2 className="spin" size={13} /> : <Send size={13} />}
+                            发送
+                          </button>
+                        </div>
+                      </label>
+                    ) : null}
                     <label>
                       <span>密码</span>
                       <input autoComplete={authMode === "login" ? "current-password" : "new-password"} type="password" value={authForm.password} onChange={(event) => setAuthForm({ ...authForm, password: event.target.value })} required />
                     </label>
                     {authError ? <p className="tool-error">{authError}</p> : null}
+                    {authNotice ? <p className="settings-note">{authNotice}</p> : null}
                     <button className="primary-button auth-submit" disabled={authLoading} type="submit">
                       {authLoading ? <Loader2 className="spin" size={15} /> : <KeyRound size={15} />}
                       {authMode === "login" ? "登录" : "注册并登录"}

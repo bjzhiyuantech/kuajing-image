@@ -93,13 +93,27 @@ export async function loginWithPassword(email: string, password: string): Promis
   return parseAuthSession(await response.json());
 }
 
-export async function registerWithPassword(email: string, password: string, displayName: string): Promise<AuthSession> {
+export async function sendRegisterEmailCode(email: string): Promise<void> {
+  const response = await fetch("/api/auth/email-code", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ email: email.trim() })
+  });
+
+  if (!response.ok) {
+    throw new Error(await readApiError(response, "验证码发送失败，请稍后重试。"));
+  }
+}
+
+export async function registerWithPassword(email: string, password: string, displayName: string, emailCode: string): Promise<AuthSession> {
   const response = await fetch("/api/auth/register", {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({ email: email.trim(), password, displayName: displayName.trim() })
+    body: JSON.stringify({ email: email.trim(), password, displayName: displayName.trim(), emailCode: emailCode.trim() })
   });
 
   if (!response.ok) {

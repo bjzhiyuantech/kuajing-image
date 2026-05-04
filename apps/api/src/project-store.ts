@@ -168,7 +168,7 @@ export async function getAdminGalleryImages(): Promise<GalleryResponse> {
         outputId: output.id,
         generationId: generation.id,
         userId: generation.createdByUserId,
-        userEmail: user?.email,
+        userEmail: user?.email ?? undefined,
         userDisplayName: user?.displayName,
         workspaceId: output.workspaceId,
         mode: generation.mode as ImageMode,

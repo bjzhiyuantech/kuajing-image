@@ -1,0 +1,78 @@
+<view class="page login-page">
+  <view class="hero-shell">
+    <view class="brand-row">
+      <view class="brand-mark">商图</view>
+      <view class="brand-copy">
+        <view class="brand-title">商图AI</view>
+        <view class="brand-subtitle">电商AI图片助手</view>
+      </view>
+    </view>
+    <view class="hero-copy">先用微信登录进入工作台，真正发起生图、翻译、去水印时再完成账号绑定和登录确认。</view>
+    <view class="hero-tags">
+      <text>首页</text>
+      <text>出图</text>
+      <text>任务</text>
+      <text>会员</text>
+    </view>
+  </view>
+
+  <view class="mode-switch">
+    <view class="mode-item {{loginMode === 'wechat' ? 'active' : ''}}" data-mode="wechat" bindtap="switchLoginMode">微信一键登录</view>
+    <view class="mode-item {{loginMode === 'account' ? 'active' : ''}}" data-mode="account" bindtap="switchLoginMode">邮箱账号登录</view>
+  </view>
+
+  <view wx:if="{{loginMode === 'wechat'}}" class="login-panel">
+    <view class="panel-title">微信登录</view>
+    <view class="panel-copy">登录后可自动识别是否已绑定已有账号。</view>
+    <button class="login-button" loading="{{loading}}" bindtap="onSubmit">微信一键登录</button>
+
+    <view wx:if="{{needsBind}}" class="bind-panel">
+      <view class="bind-title">该微信尚未绑定账号</view>
+      <view class="bind-copy">可以先绑定已有账号，或者直接注册新用户。</view>
+
+      <view wx:if="{{allowBindExistingAccount}}" class="bind-card">
+        <view class="field">
+          <text class="field-label">邮箱</text>
+          <input class="login-input" value="{{email}}" bindinput="onEmailInput" type="text" placeholder="you@example.com" />
+        </view>
+        <view class="field">
+          <text class="field-label">密码</text>
+          <input class="login-input" value="{{password}}" bindinput="onPasswordInput" password placeholder="请输入密码" />
+        </view>
+        <button class="secondary-button" loading="{{loading}}" bindtap="bindExistingAccount">绑定已有账号</button>
+      </view>
+
+      <view wx:if="{{allowRegisterNewUser}}" class="bind-card">
+        <view class="field">
+          <text class="field-label">昵称</text>
+          <input class="login-input" value="{{displayName}}" bindinput="onDisplayNameInput" placeholder="微信用户" />
+        </view>
+        <view class="field">
+          <text class="field-label">邮箱（可后补）</text>
+          <input class="login-input" value="{{email}}" bindinput="onEmailInput" type="text" placeholder="选填" />
+        </view>
+        <button class="primary-outline-button" loading="{{loading}}" bindtap="registerNewUser">跳过，注册新用户</button>
+      </view>
+    </view>
+  </view>
+
+  <view wx:else class="login-panel">
+    <view class="panel-title">{{mode === 'login' ? '邮箱登录' : '邮箱注册'}}</view>
+    <view class="panel-copy">{{mode === 'login' ? '已有账号直接登录。' : '注册后即可使用会员额度。'}}</view>
+
+    <view class="field">
+      <text class="field-label">邮箱</text>
+      <input class="login-input" value="{{email}}" bindinput="onEmailInput" type="text" placeholder="you@example.com" />
+    </view>
+    <view class="field">
+      <text class="field-label">密码</text>
+      <input class="login-input" value="{{password}}" bindinput="onPasswordInput" password placeholder="请输入密码" />
+    </view>
+    <view class="field" wx:if="{{mode === 'register'}}">
+      <text class="field-label">昵称</text>
+      <input class="login-input" value="{{displayName}}" bindinput="onDisplayNameInput" placeholder="用于会员中心展示" />
+    </view>
+    <button class="login-button" loading="{{loading}}" bindtap="onSubmit">{{mode === 'login' ? '登录' : '注册并登录'}}</button>
+    <view class="switch-link" bindtap="toggleMode">{{mode === 'login' ? '没有账号？注册一个' : '已有账号？去登录'}}</view>
+  </view>
+</view>

@@ -28,6 +28,7 @@ export type {
   AdminAdjustBalanceRequest,
   AdminPlansResponse,
   AdminStatsResponse,
+  AdminWechatMiniAppConfigResponse,
   AdminUserItem,
   AdminUsersResponse,
   AssetCloudUploadStatus,
@@ -80,10 +81,17 @@ export type {
   SaveAlipayConfigRequest,
   SaveBillingSettingsRequest,
   SaveStorageConfigRequest,
+  SaveWechatMiniAppConfigRequest,
   SizePreset,
   StorageConfigResponse,
   StorageTestResult,
   StylePresetId,
   UserRole,
-  ValidationResult
+  UpdateAuthProfileRequest,
+  ValidationResult,
+  WechatMiniAppBindRequest,
+  WechatMiniAppConfigResponse,
+  WechatMiniAppLoginRequest,
+  WechatMiniAppLoginResponse,
+  WechatMiniAppRegisterRequest
 } from "@gpt-image-canvas/shared";

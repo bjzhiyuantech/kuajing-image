@@ -4,7 +4,7 @@ import { createPool, type Pool, type PoolOptions } from "mysql2/promise";
 import type { RowDataPacket } from "mysql2";
 import { hashPassword } from "./auth-crypto.js";
 import { DEMO_USER_ID, DEMO_WORKSPACE_ID, type RequestTenant } from "./auth-context.js";
-import { authConfig, ensureRuntimeStorage, mysqlConfig } from "./runtime.js";
+import { authConfig, ensureRuntimeStorage, mysqlConfig, wechatMiniAppRuntimeConfig } from "./runtime.js";
 import * as schema from "./schema.js";
 
 ensureRuntimeStorage();
@@ -122,7 +122,7 @@ async function createSchema(): Promise<void> {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id VARCHAR(64) PRIMARY KEY,
-      email VARCHAR(255) NOT NULL,
+      email VARCHAR(255),
       password_hash VARCHAR(512) NOT NULL DEFAULT '',
       display_name VARCHAR(255) NOT NULL,
       role VARCHAR(32) NOT NULL DEFAULT 'user',
@@ -143,6 +143,24 @@ async function createSchema(): Promise<void> {
   await migrateUsersTable();
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS wechat_accounts (
+      id VARCHAR(64) PRIMARY KEY,
+      user_id VARCHAR(64) NOT NULL,
+      provider VARCHAR(32) NOT NULL,
+      open_id VARCHAR(255) NOT NULL,
+      union_id VARCHAR(255),
+      nickname VARCHAR(255),
+      avatar_url TEXT,
+      created_at VARCHAR(32) NOT NULL,
+      updated_at VARCHAR(32) NOT NULL,
+      UNIQUE KEY wechat_accounts_provider_open_id_idx (provider, open_id),
+      UNIQUE KEY wechat_accounts_provider_union_id_idx (provider, union_id),
+      UNIQUE KEY wechat_accounts_user_provider_idx (user_id, provider),
+      CONSTRAINT wechat_accounts_user_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS system_settings (
       setting_key VARCHAR(128) PRIMARY KEY,
       value_json LONGTEXT NOT NULL,
@@ -151,6 +169,22 @@ async function createSchema(): Promise<void> {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
   await seedDefaultSystemSettings();
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS email_verification_codes (
+      id VARCHAR(64) PRIMARY KEY,
+      email VARCHAR(255) NOT NULL,
+      purpose VARCHAR(32) NOT NULL,
+      code_hash VARCHAR(128) NOT NULL,
+      expires_at VARCHAR(32) NOT NULL,
+      consumed_at VARCHAR(32),
+      attempt_count INT NOT NULL DEFAULT 0,
+      sent_at VARCHAR(32) NOT NULL,
+      created_at VARCHAR(32) NOT NULL,
+      KEY email_verification_codes_email_purpose_idx (email, purpose),
+      KEY email_verification_codes_expires_at_idx (expires_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS workspaces (
@@ -530,6 +564,7 @@ async function migrateUsersTable(): Promise<void> {
   await addColumnIfMissing("users", "storage_quota_bytes", "BIGINT NOT NULL DEFAULT 0");
   await addColumnIfMissing("users", "storage_used_bytes", "BIGINT NOT NULL DEFAULT 0");
   await addColumnIfMissing("users", "currency", "VARCHAR(16) NOT NULL DEFAULT 'CNY'");
+  await makeUserEmailNullable();
   await normalizeDuplicateUserEmails();
   await addIndexIfMissing("users", "users_email_unique_idx", "UNIQUE KEY users_email_unique_idx (email)");
   await addIndexIfMissing("users", "users_plan_id_idx", "KEY users_plan_id_idx (plan_id)");
@@ -639,6 +674,16 @@ async function seedDefaultSystemSettings(): Promise<void> {
         gateway: "https://openapi.alipay.com/gateway.do",
         signType: "RSA2"
       }
+    ],
+    [
+      "auth.wechat.miniapp",
+      {
+        enabled: wechatMiniAppRuntimeConfig.enabled,
+        appId: wechatMiniAppRuntimeConfig.appId ?? "",
+        appSecret: wechatMiniAppRuntimeConfig.appSecret ?? "",
+        allowBindExistingAccount: true,
+        allowRegisterNewUser: true
+      }
     ]
   ] as const;
 
@@ -728,6 +773,10 @@ async function addIndexIfMissing(tableName: string, indexName: string, definitio
   }
 
   await pool.query(`ALTER TABLE ${tableName} ADD ${definition}`);
+}
+
+async function makeUserEmailNullable(): Promise<void> {
+  await pool.query("ALTER TABLE users MODIFY COLUMN email VARCHAR(255) NULL");
 }
 
 async function columnExists(tableName: string, columnName: string): Promise<boolean> {
