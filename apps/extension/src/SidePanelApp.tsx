@@ -677,6 +677,17 @@ function normalizeJobsResponse(payload: unknown): EcommerceJobSummary[] {
   });
 }
 
+function mergeHistoryJobDetails(summary: EcommerceJobSummary, detail: EcommerceBatchGenerateResponse): EcommerceJobSummary {
+  return {
+    ...summary,
+    status: detail.status,
+    createdAt: detail.createdAt || summary.createdAt,
+    updatedAt: detail.updatedAt || summary.updatedAt,
+    completedAt: detail.completedAt || summary.completedAt,
+    records: detail.records
+  };
+}
+
 function normalizeStatsResponse(payload: unknown): EcommerceStatsSummary {
   const root = asRecord(payload);
   const source = asRecord(root.stats ?? root.data ?? payload);
@@ -1634,7 +1645,24 @@ export function SidePanelApp() {
         headers: apiHeaders(false, token)
       });
       const body = await parseResponseOrThrow(response);
-      setHistoryState({ data: normalizeJobsResponse(body), error: "", loading: false });
+      const summaries = normalizeJobsResponse(body);
+
+      const hydratedJobs = await Promise.all(
+        summaries.slice(0, 12).map(async (job) => {
+          try {
+            return mergeHistoryJobDetails(job, await fetchBatchJob(job.id, token));
+          } catch {
+            return job;
+          }
+        })
+      );
+
+      setHistoryState((current) => ({
+        ...current,
+        data: summaries.map((job) => hydratedJobs.find((item) => item.id === job.id) ?? job),
+        error: "",
+        loading: false
+      }));
     } catch (error) {
       setHistoryState((current) => ({
         ...current,
