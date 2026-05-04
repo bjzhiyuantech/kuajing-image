@@ -128,6 +128,12 @@ corepack pnpm --filter @gpt-image-canvas/extension build:dev
 corepack pnpm --filter @gpt-image-canvas/extension build:prod
 node scripts/package-extensions.mjs "$DOWNLOADS_DIR"
 
+echo "Rebuilding $service with the freshly packaged downloads..."
+docker compose -f "$COMPOSE_FILE" up -d --build "$service"
+wait_for_service "$service"
+docker compose -f "$COMPOSE_FILE" up -d nginx
+docker compose -f "$COMPOSE_FILE" exec -T nginx nginx -s reload
+
 echo "Dev environment is $service on http://localhost:$DEV_PUBLIC_PORT"
 echo "Extension packages are in $DOWNLOADS_DIR/"
 echo "After verification, promote with: ./scripts/bluegreen-switch.sh $target"

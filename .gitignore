@@ -24,6 +24,7 @@ apps/extension/dist-dev/
 apps/extension/dist-prod/
 packages/shared/dist/
 downloads/*.zip
+downloads/*.json
 deploy/nginx/active-upstream.conf
 deploy/nginx/dev-upstream.conf
 deploy/bluegreen/active

@@ -1,20 +1,64 @@
 import { Copy, Download, ExternalLink, Globe, Package, ShieldCheck } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-const ZIP_DOWNLOAD_URL = "https://imagen.neimou.com/downloads/kuajing-image-extension-prod-latest.zip";
+const DEFAULT_ZIP_DOWNLOAD_URL = "https://imagen.neimou.com/downloads/kuajing-image-extension-prod-latest.zip";
+const RELEASE_MANIFEST_URL = "/downloads/kuajing-image-extension-prod-latest.json";
+
+interface ExtensionReleaseManifest {
+  version?: string;
+  latestDownloadUrl?: string;
+  downloadUrl?: string;
+}
 
 function extensionManagerUrl(browser: "chrome" | "edge"): string {
   return browser === "chrome" ? "chrome://extensions" : "edge://extensions";
 }
 
+function releaseDownloadUrl(manifest: ExtensionReleaseManifest): string {
+  const rawUrl = manifest.latestDownloadUrl || manifest.downloadUrl || DEFAULT_ZIP_DOWNLOAD_URL;
+  const url = new URL(rawUrl, window.location.origin);
+  if (manifest.version) {
+    url.searchParams.set("v", manifest.version);
+  }
+  return url.toString();
+}
+
 export function InstallHelpApp() {
   const [copied, setCopied] = useState(false);
   const [activeBrowser, setActiveBrowser] = useState<"chrome" | "edge">("chrome");
+  const [zipDownloadUrl, setZipDownloadUrl] = useState(DEFAULT_ZIP_DOWNLOAD_URL);
   const extensionPage = useMemo(() => extensionManagerUrl(activeBrowser), [activeBrowser]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadReleaseManifest() {
+      try {
+        const response = await fetch(`${RELEASE_MANIFEST_URL}?t=${Date.now()}`, { cache: "no-store" });
+        if (!response.ok) {
+          return;
+        }
+        const manifest = (await response.json()) as ExtensionReleaseManifest;
+        if (!cancelled) {
+          setZipDownloadUrl(releaseDownloadUrl(manifest));
+        }
+      } catch {
+        if (!cancelled) {
+          setZipDownloadUrl(DEFAULT_ZIP_DOWNLOAD_URL);
+        }
+      }
+    }
+
+    void loadReleaseManifest();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function handleCopyLink() {
     try {
-      await navigator.clipboard.writeText(ZIP_DOWNLOAD_URL);
+      await navigator.clipboard.writeText(zipDownloadUrl);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1800);
     } catch {
@@ -39,7 +83,7 @@ export function InstallHelpApp() {
             <h2>插件压缩包下载</h2>
             <p>始终指向当前生产版最新安装包。</p>
           </div>
-          <a className="install-download-button" href={ZIP_DOWNLOAD_URL} target="_blank" rel="noreferrer">
+          <a className="install-download-button" href={zipDownloadUrl} target="_blank" rel="noreferrer">
             <Download size={16} />
             下载压缩包
           </a>
@@ -48,7 +92,7 @@ export function InstallHelpApp() {
         <div className="install-link-row">
           <div className="install-link">
             <span>ZIP 地址</span>
-            <code>{ZIP_DOWNLOAD_URL}</code>
+            <code>{zipDownloadUrl}</code>
           </div>
           <button className="install-ghost-button" type="button" onClick={handleCopyLink}>
             <Copy size={16} />
