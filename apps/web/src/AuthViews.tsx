@@ -658,8 +658,8 @@ export function AccountPage({
   const inviteUrl = referral.inviteUrl || (referral.inviteCode ? `${window.location.origin}/register?inviteCode=${encodeURIComponent(referral.inviteCode)}` : "");
   const inviteeRegisterCredits = referral.settings.inviteeRegisterCredits;
   const inviterRegisterCredits = referral.settings.inviterRegisterCredits;
-  const rechargeCashbackRate = referral.settings.rechargeCashbackRateBps / 100;
-  const planCashbackRate = referral.settings.planPurchaseCashbackRateBps / 100;
+  const rechargeCashbackRate = typeof referral.settings.rechargeCashbackRateBps === "number" ? referral.settings.rechargeCashbackRateBps / 100 : undefined;
+  const planCashbackRate = typeof referral.settings.planPurchaseCashbackRateBps === "number" ? referral.settings.planPurchaseCashbackRateBps / 100 : undefined;
   const activePlanBlocksPurchase = Boolean(
     currentPlanId &&
       currentPlanId !== "free" &&
@@ -1030,9 +1030,9 @@ export function AccountPage({
             <h2 id="referral-campaign-title">邀请好友注册，赚生图张数和现金返现</h2>
             <p>好友通过你的邀请链接注册，双方都能获得生图额度；好友后续充值或购买套餐，你还可以获得现金激励。</p>
             <div className="referral-campaign-panel__rules">
-              <span>你得 {inviterRegisterCredits.toLocaleString("zh-CN")} 张</span>
-              <span>好友多得 {inviteeRegisterCredits.toLocaleString("zh-CN")} 张</span>
-              <span>充值返现 {formatPercent(rechargeCashbackRate)}</span>
+              <span>你得 {formatCreditReward(inviterRegisterCredits)}</span>
+              <span>好友多得 {formatCreditReward(inviteeRegisterCredits)}</span>
+              <span>充值返现 {formatOptionalPercent(rechargeCashbackRate)}</span>
             </div>
           </div>
           <div className="referral-campaign-panel__actions">
@@ -2609,14 +2609,14 @@ function InviteCampaignDialog({
   error: string;
   inviteCode: string;
   inviteUrl: string;
-  inviteeRegisterCredits: number;
+  inviteeRegisterCredits?: number;
   invitedUserCount: number;
-  inviterRegisterCredits: number;
+  inviterRegisterCredits?: number;
   loading: boolean;
   notice: string;
   inviteQrDataUrl: string;
-  planCashbackRate: number;
-  rechargeCashbackRate: number;
+  planCashbackRate?: number;
+  rechargeCashbackRate?: number;
   onClose: () => void;
   onCopy: () => void;
   onDownload: () => void;
@@ -2644,10 +2644,10 @@ function InviteCampaignDialog({
             好友通过你的邀请链接完成注册，你和好友都会获得生图额度。好友后续充值或购买套餐，你还可以获得现金激励账户返现。
           </p>
           <div className="invite-rule-grid">
-            <div><span>你获得</span><strong>{inviterRegisterCredits.toLocaleString("zh-CN")} 张</strong></div>
-            <div><span>好友额外获得</span><strong>{inviteeRegisterCredits.toLocaleString("zh-CN")} 张</strong></div>
-            <div><span>充值返现</span><strong>{formatPercent(rechargeCashbackRate)}</strong></div>
-            <div><span>套餐返现</span><strong>{formatPercent(planCashbackRate)}</strong></div>
+            <div><span>你获得</span><strong>{formatCreditReward(inviterRegisterCredits)}</strong></div>
+            <div><span>好友额外获得</span><strong>{formatCreditReward(inviteeRegisterCredits)}</strong></div>
+            <div><span>充值返现</span><strong>{formatOptionalPercent(rechargeCashbackRate)}</strong></div>
+            <div><span>套餐返现</span><strong>{formatOptionalPercent(planCashbackRate)}</strong></div>
           </div>
           <InviteShareCard inviteCode={inviteCode} inviteUrl={inviteUrl} invitedUserCount={invitedUserCount} inviteQrDataUrl={inviteQrDataUrl} />
           {notice ? <p className="billing-alert billing-alert--success">{notice}</p> : null}
@@ -2800,13 +2800,13 @@ interface InviteSummaryState {
   referralBalanceCents: number;
   currency: string;
   settings: {
-    enabled: boolean;
-    baseRegisterCredits: number;
-    inviterRegisterCredits: number;
-    inviteeRegisterCredits: number;
-    rechargeCashbackRateBps: number;
-    planPurchaseCashbackRateBps: number;
-    minCashbackOrderAmountCents: number;
+    enabled?: boolean;
+    baseRegisterCredits?: number;
+    inviterRegisterCredits?: number;
+    inviteeRegisterCredits?: number;
+    rechargeCashbackRateBps?: number;
+    planPurchaseCashbackRateBps?: number;
+    minCashbackOrderAmountCents?: number;
     currency: string;
   };
 }
@@ -3145,13 +3145,13 @@ function parseInviteSummary(value: unknown, user: AuthUser): InviteSummaryState 
     referralBalanceCents: numberFrom(invite.referralBalanceCents ?? invite.referral_balance_cents ?? user.referralBalanceCents) ?? 0,
     currency: stringFrom(invite.currency ?? settings.currency ?? user.currency) || "CNY",
     settings: {
-      enabled: booleanFrom(settings.enabled, true),
-      baseRegisterCredits: numberFrom(settings.baseRegisterCredits ?? settings.base_register_credits) ?? 2,
-      inviterRegisterCredits: numberFrom(settings.inviterRegisterCredits ?? settings.inviter_register_credits) ?? 4,
-      inviteeRegisterCredits: numberFrom(settings.inviteeRegisterCredits ?? settings.invitee_register_credits) ?? 6,
-      rechargeCashbackRateBps: numberFrom(settings.rechargeCashbackRateBps ?? settings.recharge_cashback_rate_bps) ?? 500,
-      planPurchaseCashbackRateBps: numberFrom(settings.planPurchaseCashbackRateBps ?? settings.plan_purchase_cashback_rate_bps) ?? 500,
-      minCashbackOrderAmountCents: numberFrom(settings.minCashbackOrderAmountCents ?? settings.min_cashback_order_amount_cents) ?? 100,
+      enabled: typeof settings.enabled === "boolean" ? settings.enabled : undefined,
+      baseRegisterCredits: numberFrom(settings.baseRegisterCredits ?? settings.base_register_credits),
+      inviterRegisterCredits: numberFrom(settings.inviterRegisterCredits ?? settings.inviter_register_credits),
+      inviteeRegisterCredits: numberFrom(settings.inviteeRegisterCredits ?? settings.invitee_register_credits),
+      rechargeCashbackRateBps: numberFrom(settings.rechargeCashbackRateBps ?? settings.recharge_cashback_rate_bps),
+      planPurchaseCashbackRateBps: numberFrom(settings.planPurchaseCashbackRateBps ?? settings.plan_purchase_cashback_rate_bps),
+      minCashbackOrderAmountCents: numberFrom(settings.minCashbackOrderAmountCents ?? settings.min_cashback_order_amount_cents),
       currency: stringFrom(settings.currency) || "CNY"
     }
   };
@@ -3165,13 +3165,6 @@ function createInviteSummaryState(user: AuthUser): InviteSummaryState {
     referralBalanceCents: user.referralBalanceCents ?? 0,
     currency: user.currency ?? "CNY",
     settings: {
-      enabled: true,
-      baseRegisterCredits: 2,
-      inviterRegisterCredits: 4,
-      inviteeRegisterCredits: 6,
-      rechargeCashbackRateBps: 500,
-      planPurchaseCashbackRateBps: 500,
-      minCashbackOrderAmountCents: 100,
       currency: user.currency ?? "CNY"
     }
   };
@@ -3752,6 +3745,14 @@ function formatPercent(value: number): string {
     return "0%";
   }
   return `${Number(value.toFixed(2))}%`;
+}
+
+function formatOptionalPercent(value: number | undefined): string {
+  return typeof value === "number" ? formatPercent(value) : "读取中";
+}
+
+function formatCreditReward(value: number | undefined): string {
+  return typeof value === "number" ? `${value.toLocaleString("zh-CN")} 张` : "读取中";
 }
 
 function sumAssetBytes(assets: AdminAssetRow[]): number {
