@@ -50,7 +50,7 @@ import {
   type ReferenceImageInput,
   type StylePresetId
 } from "@gpt-image-canvas/shared";
-import type { AuthUser, BatchFormState, BatchTask, ExtensionAuthState, PageContext } from "./types";
+import type { AuthUser, BatchFormState, BatchTask, ExtensionAuthState, PageContext, PageProductContext } from "./types";
 
 const ACTIVE_BATCH_JOB_STORAGE_KEY = "activeBatchJob";
 const AUTH_STORAGE_KEY = "auth";
@@ -2194,12 +2194,18 @@ export function SidePanelApp() {
     try {
       const context = (await chrome.tabs.sendMessage(tab.id, { type: "kuajing-image:get-page-context" })) as PageContext;
       setPageContext(context);
+      const product: PageProductContext = context.product ?? { attributes: [] };
       setForm((current) => ({
         ...current,
         product: {
           ...current.product,
           title: context.title || current.product.title,
-          description: context.description || current.product.description
+          description: product.description || context.description || current.product.description,
+          targetCustomer: product.targetCustomer || current.product.targetCustomer,
+          usageScene: product.usageScene || current.product.usageScene,
+          material: product.material || current.product.material,
+          color: product.color || current.product.color,
+          brandTone: product.brand ? `${product.brand}, marketplace-ready` : current.product.brandTone
         },
         referenceImageUrl: context.imageUrls[0] || current.referenceImageUrl,
         referenceImageUrls: context.imageUrls[0] ? [context.imageUrls[0]] : current.referenceImageUrls

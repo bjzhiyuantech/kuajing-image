@@ -42,6 +42,10 @@ function normalizeText(value: string): string {
   return value.replace(/\s+/gu, " ").trim();
 }
 
+function compactText(value: string): string {
+  return normalizeText(value).replace(/[：:]+$/u, "").trim();
+}
+
 function absoluteUrl(value: string): string {
   try {
     return new URL(value, location.href).toString();
@@ -298,6 +302,115 @@ function readLazyImageAttributes(element: Element): string[] {
 
 function readDocMeta(doc: Document, selector: string): string {
   return doc.querySelector<HTMLMetaElement>(selector)?.content.trim() ?? "";
+}
+
+function textFromNode(node: Node | null): string {
+  if (!node) {
+    return "";
+  }
+  return normalizeText(node.textContent ?? "");
+}
+
+function collectTablePairs(doc: Document): Array<{ label: string; value: string }> {
+  const pairs: Array<{ label: string; value: string }> = [];
+  const rows = Array.from(doc.querySelectorAll("tr"));
+
+  for (const row of rows) {
+    const cells = Array.from(row.querySelectorAll("th, td"));
+    if (cells.length < 2 || cells.length % 2 !== 0) {
+      continue;
+    }
+
+    for (let index = 0; index < cells.length; index += 2) {
+      const label = compactText(textFromNode(cells[index]));
+      const value = textFromNode(cells[index + 1]);
+      if (label && value) {
+        pairs.push({ label, value });
+      }
+    }
+  }
+
+  return pairs;
+}
+
+function collectLabeledBlocks(doc: Document): Array<{ label: string; value: string }> {
+  const pairs: Array<{ label: string; value: string }> = [];
+  const nodes = Array.from(doc.querySelectorAll("li, dl, div, p, span"));
+
+  for (const node of nodes) {
+    const text = normalizeText(node.textContent ?? "");
+    const match = text.match(/^([^：:]{2,16})[:：]\s*(.{1,120})$/u);
+    if (!match) {
+      continue;
+    }
+    const label = compactText(match[1]);
+    const value = normalizeText(match[2]);
+    if (label && value) {
+      pairs.push({ label, value });
+    }
+  }
+
+  return pairs;
+}
+
+function extractPageAttributes(doc: Document): Array<{ label: string; value: string }> {
+  const pairs = [...collectTablePairs(doc), ...collectLabeledBlocks(doc)];
+  const seen = new Set<string>();
+  const deduped: Array<{ label: string; value: string }> = [];
+
+  for (const pair of pairs) {
+    const key = `${pair.label}::${pair.value}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(pair);
+  }
+
+  return deduped;
+}
+
+function mapPageProductContext(doc: Document): NonNullable<PageContext["product"]> {
+  const attributes = extractPageAttributes(doc);
+  const byLabel = new Map<string, string>();
+  for (const { label, value } of attributes) {
+    byLabel.set(label, value);
+  }
+
+  const pick = (...labels: string[]): string | undefined => {
+    for (const label of labels) {
+      const value = byLabel.get(label);
+      if (value) {
+        return value;
+      }
+    }
+    return undefined;
+  };
+
+  const title = readProductTitle(doc);
+  const description = [
+    pick("商品名称"),
+    pick("产品名称"),
+    pick("品牌"),
+    pick("类型"),
+    pick("保健功能"),
+    pick("食用方法"),
+    pick("注意事项")
+  ]
+    .filter(Boolean)
+    .join("；");
+
+  return {
+    title,
+    description,
+    brand: pick("品牌"),
+    productName: pick("商品名称", "产品名称", "规格") || title,
+    targetCustomer: pick("适宜人群", "不适宜人群"),
+    usageScene: pick("食用方法", "适用场景", "使用场景"),
+    material: pick("主要原料", "材质"),
+    color: pick("颜色", "颜色/SKU", "色号", "SKU"),
+    attributes
+  };
 }
 
 function readProductTitle(doc: Document): string {
@@ -670,7 +783,8 @@ async function pageContext(): Promise<PageContext> {
     title: readProductTitle(document),
     description: readDocMeta(document, 'meta[name="description"], meta[property="og:description"]'),
     url: location.href,
-    imageUrls: await filterProductImageUrls(imageCandidates)
+    imageUrls: await filterProductImageUrls(imageCandidates),
+    product: mapPageProductContext(document)
   };
 }
 

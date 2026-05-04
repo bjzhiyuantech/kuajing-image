@@ -41,6 +41,19 @@ export interface PageContext {
   description: string;
   url: string;
   imageUrls: string[];
+  product?: PageProductContext;
+}
+
+export interface PageProductContext {
+  title?: string;
+  description?: string;
+  brand?: string;
+  productName?: string;
+  targetCustomer?: string;
+  usageScene?: string;
+  material?: string;
+  color?: string;
+  attributes: Array<{ label: string; value: string }>;
 }
 
 export interface BatchFormState {
