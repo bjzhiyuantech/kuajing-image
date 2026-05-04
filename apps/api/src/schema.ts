@@ -18,6 +18,9 @@ export const users = mysqlTable(
     quotaTotal: bigint("quota_total", { mode: "number" }).notNull(),
     quotaUsed: bigint("quota_used", { mode: "number" }).notNull(),
     balanceCents: bigint("balance_cents", { mode: "number" }).notNull(),
+    referralBalanceCents: bigint("referral_balance_cents", { mode: "number" }).notNull(),
+    inviteCode: shortText("invite_code", 64),
+    inviterUserId: id("inviter_user_id"),
     storageQuotaBytes: bigint("storage_quota_bytes", { mode: "number" }).notNull(),
     storageUsedBytes: bigint("storage_used_bytes", { mode: "number" }).notNull(),
     currency: shortText("currency", 16).notNull(),
@@ -26,6 +29,8 @@ export const users = mysqlTable(
   },
   (table) => ({
     emailIdx: uniqueIndex("users_email_unique_idx").on(table.email),
+    inviteCodeIdx: uniqueIndex("users_invite_code_unique_idx").on(table.inviteCode),
+    inviterIdx: index("users_inviter_user_id_idx").on(table.inviterUserId),
     planIdx: index("users_plan_id_idx").on(table.planId)
   })
 );
@@ -295,6 +300,10 @@ export const generationRecords = mysqlTable(
     count: int("count").notNull(),
     status: shortText("status", 32).notNull(),
     error: text("error"),
+    model: shortText("model", 255),
+    modelConfigId: id("model_config_id"),
+    modelProvider: shortText("model_provider", 64),
+    modelDisplayName: shortText("model_display_name", 255),
     referenceAssetId: id("reference_asset_id").references(() => assets.id, { onDelete: "set null" }),
     createdAt: isoDate("created_at").notNull()
   },

@@ -546,6 +546,7 @@ export interface GenerateImageRequest {
   outputFormat: OutputFormat;
   outputCompression?: number;
   count: GenerationCount;
+  modelConfigId?: string;
 }
 
 export interface EditImageRequest extends GenerateImageRequest {
@@ -591,6 +592,10 @@ export interface GenerationRecord {
   count: number;
   status: GenerationStatus;
   error?: string;
+  model?: string;
+  modelConfigId?: string;
+  modelProvider?: string;
+  modelDisplayName?: string;
   referenceAssetId?: string;
   createdAt: string;
   outputs: GenerationOutput[];
@@ -614,6 +619,10 @@ export interface GalleryImageItem {
   size: ImageSize;
   quality: ImageQuality;
   outputFormat: OutputFormat;
+  model?: string;
+  modelConfigId?: string;
+  modelProvider?: string;
+  modelDisplayName?: string;
   createdAt: string;
   asset: GeneratedAsset;
 }
@@ -668,7 +677,10 @@ export interface AuthUser {
   quotaTotal: number;
   quotaUsed: number;
   balanceCents: number;
+  referralBalanceCents?: number;
   currency?: string;
+  inviteCode?: string;
+  inviterUserId?: string;
   storageQuotaBytes: number;
   storageUsedBytes: number;
   createdAt: string;
@@ -696,6 +708,47 @@ export interface UpdateAuthProfileRequest {
   displayName?: string;
   email?: string;
   password?: string;
+}
+
+export interface InviteRewardSettings {
+  enabled: boolean;
+  baseRegisterCredits: number;
+  inviterRegisterCredits: number;
+  inviteeRegisterCredits: number;
+  rechargeCashbackRateBps: number;
+  planPurchaseCashbackRateBps: number;
+  minCashbackOrderAmountCents: number;
+  currency: string;
+  updatedAt?: string;
+}
+
+export interface InviteSummary {
+  inviteCode: string;
+  inviteUrl?: string;
+  invitedUserCount: number;
+  successfulInviteCount: number;
+  referralBalanceCents: number;
+  currency: string;
+  settings: InviteRewardSettings;
+}
+
+export interface InviteSummaryResponse {
+  invite: InviteSummary;
+}
+
+export interface SaveInviteRewardSettingsRequest {
+  enabled: boolean;
+  baseRegisterCredits: number;
+  inviterRegisterCredits: number;
+  inviteeRegisterCredits: number;
+  rechargeCashbackRateBps: number;
+  planPurchaseCashbackRateBps: number;
+  minCashbackOrderAmountCents: number;
+  currency?: string;
+}
+
+export interface AdminInviteRewardSettingsResponse {
+  settings: InviteRewardSettings;
 }
 
 export interface WechatMiniAppPublicConfig {
@@ -761,6 +814,7 @@ export interface WechatMiniAppRegisterRequest {
   bindToken: string;
   displayName?: string;
   email?: string;
+  inviteCode?: string;
 }
 
 export interface AdminStatsResponse {

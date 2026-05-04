@@ -18,6 +18,12 @@ import type {
 import { db } from "./database.js";
 import { verifyRegisterEmailCode } from "./email-service.js";
 import { ensureUserPlanCurrent } from "./plan-expiration.js";
+import {
+  inviteCodeFromUserId,
+  registerQuotaTotal,
+  resolveInviter,
+  rewardInviterForRegistration
+} from "./referral-service.js";
 import { wechatMiniAppRuntimeConfig } from "./runtime.js";
 import { subscriptionPlans, users, wechatAccounts, workspaceMembers, workspaces } from "./schema.js";
 import { getSystemSetting, saveSystemSetting } from "./system-settings.js";
@@ -40,6 +46,7 @@ export interface RegisterInput {
   password: string;
   displayName?: string;
   emailCode: string;
+  inviteCode?: string;
 }
 
 export interface LoginInput {
@@ -77,6 +84,8 @@ export async function registerUser(input: RegisterInput): Promise<AuthResponse> 
   const userId = randomUUID();
   const workspaceId = randomUUID();
   const defaultPlan = await getDefaultPlan();
+  const inviter = await resolveInviter(input.inviteCode, userId);
+  const quotaTotal = await registerQuotaTotal({ baseQuota: defaultPlan.imageQuota, inviter });
   try {
     await db.transaction(async (tx) => {
       await tx.insert(users).values({
@@ -87,9 +96,12 @@ export async function registerUser(input: RegisterInput): Promise<AuthResponse> 
         role: "user",
         planId: defaultPlan.id,
         planExpiresAt: null,
-        quotaTotal: defaultPlan.imageQuota,
+        quotaTotal,
         quotaUsed: 0,
         balanceCents: 0,
+        referralBalanceCents: 0,
+        inviteCode: inviteCodeFromUserId(userId),
+        inviterUserId: inviter?.id,
         storageQuotaBytes: defaultPlan.storageQuotaBytes,
         storageUsedBytes: 0,
         currency: "CNY",
@@ -118,6 +130,7 @@ export async function registerUser(input: RegisterInput): Promise<AuthResponse> 
     }
     throw error;
   }
+  await rewardInviterForRegistration({ inviter, inviteeUserId: userId, now });
 
   return buildAuthResponse({
     user: toAuthUser({
@@ -128,9 +141,12 @@ export async function registerUser(input: RegisterInput): Promise<AuthResponse> 
       role: "user",
       planId: defaultPlan.id,
       planExpiresAt: null,
-      quotaTotal: defaultPlan.imageQuota,
+      quotaTotal,
       quotaUsed: 0,
       balanceCents: 0,
+      referralBalanceCents: 0,
+      inviteCode: inviteCodeFromUserId(userId),
+      inviterUserId: inviter?.id ?? null,
       storageQuotaBytes: defaultPlan.storageQuotaBytes,
       storageUsedBytes: 0,
       currency: "CNY",
@@ -291,6 +307,8 @@ export async function registerWechatMiniAppUser(input: WechatMiniAppRegisterRequ
   const workspaceId = randomUUID();
   const defaultPlan = await getDefaultPlan();
   const displayName = input.displayName?.trim() || `微信用户${wechat.openId.slice(-4)}`;
+  const inviter = await resolveInviter(input.inviteCode, userId);
+  const quotaTotal = await registerQuotaTotal({ baseQuota: defaultPlan.imageQuota, inviter });
   await db.transaction(async (tx) => {
     await tx.insert(users).values({
       id: userId,
@@ -300,9 +318,12 @@ export async function registerWechatMiniAppUser(input: WechatMiniAppRegisterRequ
       role: "user",
       planId: defaultPlan.id,
       planExpiresAt: null,
-      quotaTotal: defaultPlan.imageQuota,
+      quotaTotal,
       quotaUsed: 0,
       balanceCents: 0,
+      referralBalanceCents: 0,
+      inviteCode: inviteCodeFromUserId(userId),
+      inviterUserId: inviter?.id ?? null,
       storageQuotaBytes: defaultPlan.storageQuotaBytes,
       storageUsedBytes: 0,
       currency: "CNY",
@@ -336,6 +357,7 @@ export async function registerWechatMiniAppUser(input: WechatMiniAppRegisterRequ
       updatedAt: now
     });
   });
+  await rewardInviterForRegistration({ inviter, inviteeUserId: userId, now });
 
   return buildAuthResponse({
     user: toAuthUser({
@@ -346,9 +368,12 @@ export async function registerWechatMiniAppUser(input: WechatMiniAppRegisterRequ
       role: "user",
       planId: defaultPlan.id,
       planExpiresAt: null,
-      quotaTotal: defaultPlan.imageQuota,
+      quotaTotal,
       quotaUsed: 0,
       balanceCents: 0,
+      referralBalanceCents: 0,
+      inviteCode: inviteCodeFromUserId(userId),
+      inviterUserId: inviter?.id ?? null,
       storageQuotaBytes: defaultPlan.storageQuotaBytes,
       storageUsedBytes: 0,
       currency: "CNY",
@@ -559,7 +584,10 @@ function toAuthUser(row: typeof users.$inferSelect, plan?: Pick<typeof subscript
     quotaTotal: Number(row.quotaTotal ?? 0),
     quotaUsed: Number(row.quotaUsed ?? 0),
     balanceCents: Number(row.balanceCents ?? 0),
+    referralBalanceCents: Number(row.referralBalanceCents ?? 0),
     currency: row.currency ?? "CNY",
+    inviteCode: row.inviteCode ?? undefined,
+    inviterUserId: row.inviterUserId ?? undefined,
     storageQuotaBytes: Number(row.storageQuotaBytes ?? 0),
     storageUsedBytes: Number(row.storageUsedBytes ?? 0),
     createdAt: row.createdAt,

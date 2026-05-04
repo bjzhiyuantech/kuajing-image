@@ -1162,6 +1162,32 @@ textarea:focus {
   overflow-wrap: anywhere;
 }
 
+.invite-card {
+  background: #ffffff;
+  border: 1px solid #e4ebe7;
+  border-radius: 7px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 10px;
+  padding: 8px;
+}
+
+.invite-card span {
+  color: #66766d;
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.invite-card strong {
+  color: #17201c;
+  display: block;
+  font-size: 13px;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}
+
 .button-row {
   flex-wrap: wrap;
   gap: 8px;

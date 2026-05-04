@@ -143,6 +143,25 @@ interface BillingOverview {
   packageRemaining?: number;
 }
 
+interface ReferralSummary {
+  inviteCode: string;
+  inviteUrl?: string;
+  invitedUserCount: number;
+  successfulInviteCount: number;
+  referralBalanceCents: number;
+  currency: string;
+  settings: {
+    enabled: boolean;
+    baseRegisterCredits: number;
+    inviterRegisterCredits: number;
+    inviteeRegisterCredits: number;
+    rechargeCashbackRateBps: number;
+    planPurchaseCashbackRateBps: number;
+    minCashbackOrderAmountCents: number;
+    currency: string;
+  };
+}
+
 interface RemoteState<T> {
   data: T;
   error: string;
@@ -978,7 +997,10 @@ function normalizeUser(value: unknown): AuthUser | null {
     quotaTotal: firstNumber(source, ["quotaTotal", "quota_total", "totalQuota"]),
     quotaUsed: firstNumber(source, ["quotaUsed", "quota_used", "usedQuota"]),
     balanceCents: firstNumber(source, ["balanceCents", "balance_cents", "balance"]),
+    referralBalanceCents: firstNumber(source, ["referralBalanceCents", "referral_balance_cents"]),
     currency: firstString(source, ["currency"]),
+    inviteCode: firstString(source, ["inviteCode", "invite_code"]),
+    inviterUserId: firstString(source, ["inviterUserId", "inviter_user_id"]),
     packageTotal: firstNumber(source, ["packageTotal", "package_total", "planQuota"]),
     packageUsed: firstNumber(source, ["packageUsed", "package_used", "planUsed"]),
     packageRemaining: firstNumber(source, ["packageRemaining", "package_remaining", "remainingQuota"])
@@ -996,6 +1018,30 @@ function normalizeAuthResponse(payload: unknown): ExtensionAuthState {
   return {
     token,
     user: normalizeUser(root) ?? normalizeUser(data)
+  };
+}
+
+function normalizeReferralSummary(payload: unknown): ReferralSummary {
+  const root = asRecord(payload);
+  const invite = asRecord(root.invite ?? root.data ?? payload);
+  const settings = asRecord(invite.settings);
+  return {
+    inviteCode: firstString(invite, ["inviteCode", "invite_code"]) ?? "",
+    inviteUrl: firstString(invite, ["inviteUrl", "invite_url"]),
+    invitedUserCount: firstNumber(invite, ["invitedUserCount", "invited_user_count"]) ?? 0,
+    successfulInviteCount: firstNumber(invite, ["successfulInviteCount", "successful_invite_count"]) ?? 0,
+    referralBalanceCents: firstNumber(invite, ["referralBalanceCents", "referral_balance_cents"]) ?? 0,
+    currency: firstString(invite, ["currency"]) || firstString(settings, ["currency"]) || "CNY",
+    settings: {
+      enabled: settings.enabled !== false,
+      baseRegisterCredits: firstNumber(settings, ["baseRegisterCredits", "base_register_credits"]) ?? 2,
+      inviterRegisterCredits: firstNumber(settings, ["inviterRegisterCredits", "inviter_register_credits"]) ?? 4,
+      inviteeRegisterCredits: firstNumber(settings, ["inviteeRegisterCredits", "invitee_register_credits"]) ?? 6,
+      rechargeCashbackRateBps: firstNumber(settings, ["rechargeCashbackRateBps", "recharge_cashback_rate_bps"]) ?? 0,
+      planPurchaseCashbackRateBps: firstNumber(settings, ["planPurchaseCashbackRateBps", "plan_purchase_cashback_rate_bps"]) ?? 0,
+      minCashbackOrderAmountCents: firstNumber(settings, ["minCashbackOrderAmountCents", "min_cashback_order_amount_cents"]) ?? 0,
+      currency: firstString(settings, ["currency"]) || "CNY"
+    }
   };
 }
 
@@ -1027,7 +1073,7 @@ function formatSourceUrl(url: string): string {
 export function SidePanelApp() {
   const [auth, setAuth] = useState<ExtensionAuthState>(defaultAuth);
   const [authMode, setAuthMode] = useState<AuthMode>("login");
-  const [authForm, setAuthForm] = useState({ email: "", password: "", displayName: "", emailCode: "" });
+  const [authForm, setAuthForm] = useState({ email: "", password: "", displayName: "", emailCode: "", inviteCode: "" });
   const [authLoading, setAuthLoading] = useState(false);
   const [authCodeLoading, setAuthCodeLoading] = useState(false);
   const [authError, setAuthError] = useState("");
@@ -1076,6 +1122,12 @@ export function SidePanelApp() {
   const [rechargeAmount, setRechargeAmount] = useState("50");
   const [billingAction, setBillingAction] = useState("");
   const [billingActionLoading, setBillingActionLoading] = useState(false);
+  const [referralState, setReferralState] = useState<RemoteState<ReferralSummary | null>>({
+    data: null,
+    error: "",
+    loading: false
+  });
+  const [referralAction, setReferralAction] = useState("");
   const [batchGenerationLocked, setBatchGenerationLocked] = useState(false);
   const [hiddenResultKeys, setHiddenResultKeys] = useState<Set<string>>(() => new Set());
   const [localResultRecords, setLocalResultRecords] = useState<GenerationRecord[]>([]);
@@ -1223,6 +1275,15 @@ export function SidePanelApp() {
   }, []);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const inviteCode = params.get("inviteCode") || params.get("invite") || params.get("ref");
+    if (inviteCode) {
+      setAuthMode("register");
+      setAuthForm((current) => ({ ...current, inviteCode }));
+    }
+  }, []);
+
+  useEffect(() => {
     const update = extensionVersionState.update;
     if (!update) {
       setExtensionUpdateDialogOpen(false);
@@ -1280,6 +1341,9 @@ export function SidePanelApp() {
     }
     if (activeTool === "billing") {
       void refreshBilling();
+    }
+    if (activeTool === "account" && auth.token.trim()) {
+      void refreshReferral();
     }
   }, [activeTool, auth.token, toolPanelOpen]);
 
@@ -1582,7 +1646,8 @@ export function SidePanelApp() {
           email: authForm.email.trim(),
           password: authForm.password,
           displayName: authMode === "register" ? authForm.displayName.trim() || undefined : undefined,
-          emailCode: authMode === "register" ? authForm.emailCode.trim() : undefined
+          emailCode: authMode === "register" ? authForm.emailCode.trim() : undefined,
+          inviteCode: authMode === "register" ? authForm.inviteCode.trim() || undefined : undefined
         })
       });
       const body = await parseResponseOrThrow(response);
@@ -1611,6 +1676,7 @@ export function SidePanelApp() {
       } else if (action === "job" && task.id !== "idle") {
         void pollBatchJob(task.id, nextAuth.token);
       }
+      void refreshReferral(true, nextAuth.token);
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : "登录失败，请稍后重试。");
     } finally {
@@ -1761,6 +1827,37 @@ export function SidePanelApp() {
         loading: false
       });
     }
+  }
+
+  async function refreshReferral(authAlreadyChecked = false, token = auth.token): Promise<void> {
+    if (!token.trim() && !authAlreadyChecked && !requireAuth("billing")) {
+      return;
+    }
+    setReferralState((current) => ({ ...current, error: "", loading: true }));
+    try {
+      const response = await fetch(`${apiBaseUrl()}/api/referral/summary`, {
+        headers: apiHeaders(false, token)
+      });
+      const body = await parseResponseOrThrow(response);
+      setReferralState({ data: normalizeReferralSummary(body), error: "", loading: false });
+    } catch (error) {
+      setReferralState((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : "邀请信息读取失败。",
+        loading: false
+      }));
+    }
+  }
+
+  async function copyInviteLink(): Promise<void> {
+    const invite = referralState.data;
+    const link = invite?.inviteUrl || (invite?.inviteCode ? `${apiBaseUrl().replace(/\/$/u, "")}/register?inviteCode=${encodeURIComponent(invite.inviteCode)}` : "");
+    if (!link) {
+      setReferralAction("邀请链接还没准备好，请刷新后再试。");
+      return;
+    }
+    await navigator.clipboard.writeText(link);
+    setReferralAction("邀请链接已复制。");
   }
 
   async function openPaymentUrl(url: string): Promise<void> {
@@ -3800,13 +3897,38 @@ export function SidePanelApp() {
                       <div><span>当前套餐</span><strong>{billingState.data.currentPlan?.name || auth.user?.planName || auth.user?.planId || "未设置"}</strong></div>
                       <div><span>套餐到期</span><strong>{billingState.data.currentPlanExpiresAt || auth.user?.planExpiresAt ? formatDateTime(billingState.data.currentPlanExpiresAt || auth.user?.planExpiresAt) : "长期"}</strong></div>
                       <div><span>账户余额</span><strong>{formatMoney(billingState.data.balanceCents ?? auth.user?.balanceCents ?? 0, billingState.data.currency || auth.user?.currency)}</strong></div>
+                      <div><span>邀请激励</span><strong>{formatMoney(referralState.data?.referralBalanceCents ?? auth.user?.referralBalanceCents ?? 0, referralState.data?.currency || auth.user?.currency)}</strong></div>
                       <div><span>已用张数</span><strong>{formatCount(accountQuota.quotaUsed)}/{formatCount(accountQuota.quotaTotal)}</strong></div>
                       <div><span>套餐余量</span><strong>{formatCount(accountQuota.remaining)}</strong></div>
                     </div>
+                    <div className="invite-card">
+                      <div>
+                        <span>我的邀请码</span>
+                        <strong>{referralState.data?.inviteCode || auth.user?.inviteCode || "生成中"}</strong>
+                      </div>
+                      <div>
+                        <span>邀请人数</span>
+                        <strong>{formatCount(referralState.data?.invitedUserCount)} 人</strong>
+                      </div>
+                      <div>
+                        <span>充值返现</span>
+                        <strong>{((referralState.data?.settings.rechargeCashbackRateBps ?? 0) / 100).toFixed(0)}%</strong>
+                      </div>
+                    </div>
+                    {referralAction ? <p className="settings-note">{referralAction}</p> : null}
+                    {referralState.error ? <p className="tool-error">{referralState.error}</p> : null}
                     <div className="button-row">
                       <button className="mini-button" type="button" onClick={() => void refreshMe()}>
                         <RefreshCw size={13} />
                         刷新账户
+                      </button>
+                      <button className="mini-button" disabled={referralState.loading} type="button" onClick={() => void refreshReferral()}>
+                        {referralState.loading ? <Loader2 className="spin" size={13} /> : <RefreshCw size={13} />}
+                        刷新邀请
+                      </button>
+                      <button className="mini-button" type="button" onClick={() => void copyInviteLink()}>
+                        <ExternalLink size={13} />
+                        复制邀请链接
                       </button>
                       <button className="mini-button" type="button" onClick={() => openTool("billing")}>
                         <CreditCard size={13} />
@@ -3847,6 +3969,17 @@ export function SidePanelApp() {
                             发送
                           </button>
                         </div>
+                      </label>
+                    ) : null}
+                    {authMode === "register" ? (
+                      <label>
+                        <span>邀请码</span>
+                        <input
+                          autoComplete="off"
+                          value={authForm.inviteCode}
+                          onChange={(event) => setAuthForm({ ...authForm, inviteCode: event.target.value })}
+                          placeholder="可选"
+                        />
                       </label>
                     ) : null}
                     <label>

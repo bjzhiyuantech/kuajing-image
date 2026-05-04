@@ -87,7 +87,7 @@ export class GenerationPlaceholderShapeUtil extends BaseBoxShapeUtil<GenerationP
             {shape.props.targetWidth} x {shape.props.targetHeight}px
           </div>
           <div className="generation-placeholder-shape__copy">
-            {isFailed ? conciseError(shape.props.error) : "gpt-image-canvas"}
+            {isFailed ? conciseError(shape.props.error) : "商图AI助手"}
           </div>
         </div>
       </HTMLContainer>

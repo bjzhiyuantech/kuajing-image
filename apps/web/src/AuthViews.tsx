@@ -34,6 +34,18 @@ import { BRAND_TAGLINE, BrandMark, BrandName } from "./Brand";
 import type { AdminWechatMiniAppConfigResponse, MaskedSecret } from "@gpt-image-canvas/shared";
 
 type AuthMode = "login" | "register";
+type AdminTab = "overview" | "models" | "billing" | "auth" | "plans" | "users" | "referral" | "ledger";
+
+const adminTabs: Array<{ id: AdminTab; label: string }> = [
+  { id: "overview", label: "概览" },
+  { id: "models", label: "模型" },
+  { id: "billing", label: "计费支付" },
+  { id: "auth", label: "登录" },
+  { id: "plans", label: "套餐" },
+  { id: "users", label: "用户" },
+  { id: "referral", label: "邀请激励" },
+  { id: "ledger", label: "流水" }
+];
 
 const audienceCards = [
   {
@@ -863,17 +875,20 @@ export function AccountPage({ user }: { user: AuthUser }) {
 }
 
 export function AdminPage() {
+  const [activeTab, setActiveTab] = useState<AdminTab>("overview");
   const [stats, setStats] = useState<AdminStats>({});
   const [users, setUsers] = useState<AdminUserRow[]>([]);
   const [plans, setPlans] = useState<AdminPlanRow[]>([]);
   const [jobs, setJobs] = useState<AdminJobRow[]>([]);
   const [assets, setAssets] = useState<AdminAssetRow[]>([]);
   const [billingSettings, setBillingSettings] = useState<BillingSettingsFormState>(createBillingSettingsForm());
+  const [referralSettings, setReferralSettings] = useState<ReferralSettingsFormState>(createReferralSettingsForm());
   const [imageModels, setImageModels] = useState<ImageModelFormState[]>([]);
   const [alipaySettings, setAlipaySettings] = useState<AlipayFormState>(createAlipayForm());
   const [wechatMiniAppSettings, setWechatMiniAppSettings] = useState<WechatMiniAppFormState>(createWechatMiniAppForm());
   const [smtpSettings, setSmtpSettings] = useState<SmtpFormState>(createSmtpForm());
   const [transactions, setTransactions] = useState<BillingTransactionRow[]>([]);
+  const [referralTransactions, setReferralTransactions] = useState<BillingTransactionRow[]>([]);
   const [planDrafts, setPlanDrafts] = useState<Record<string, PlanFormState>>({});
   const [newPlan, setNewPlan] = useState<PlanFormState>(createEmptyPlanForm());
   const [newAdmin, setNewAdmin] = useState<AdminUserFormState>(createEmptyAdminForm());
@@ -894,18 +909,34 @@ export function AdminPage() {
       setNotice("");
     }
     try {
-      const [statsResponse, usersResponse, jobsResponse, assetsResponse, plansResponse, billingResponse, imageModelsResponse, alipayResponse, wechatResponse, smtpResponse, transactionsResponse] = await Promise.all([
+      const [
+        statsResponse,
+        usersResponse,
+        jobsResponse,
+        assetsResponse,
+        plansResponse,
+        billingResponse,
+        referralSettingsResponse,
+        imageModelsResponse,
+        alipayResponse,
+        wechatResponse,
+        smtpResponse,
+        transactionsResponse,
+        referralTransactionsResponse
+      ] = await Promise.all([
         authFetch("/api/admin/stats"),
         authFetch("/api/admin/users"),
         authFetch("/api/admin/ecommerce/jobs"),
         authFetch("/api/admin/assets"),
         authFetch("/api/admin/plans"),
         authFetch("/api/admin/billing/settings"),
+        authFetch("/api/admin/referral/settings"),
         authFetch("/api/admin/image-models"),
         authFetch("/api/admin/payment/alipay"),
         authFetch("/api/admin/auth/wechat/miniapp"),
         authFetch("/api/admin/email/smtp"),
-        authFetch("/api/admin/billing/transactions?limit=50")
+        authFetch("/api/admin/billing/transactions?limit=50"),
+        authFetch("/api/admin/referral/transactions?limit=100")
       ]);
 
       const responses = [statsResponse, usersResponse, jobsResponse, assetsResponse];
@@ -925,6 +956,9 @@ export function AdminPage() {
       if (billingResponse.ok) {
         setBillingSettings(parseBillingSettingsForm(await billingResponse.json()));
       }
+      if (referralSettingsResponse.ok) {
+        setReferralSettings(parseReferralSettingsForm(await referralSettingsResponse.json()));
+      }
       if (imageModelsResponse.ok) {
         const parsedModels = parseImageModelForms(await imageModelsResponse.json());
         setImageModels(parsedModels.length > 0 ? parsedModels : [createImageModelForm("gemini", 1)]);
@@ -940,6 +974,9 @@ export function AdminPage() {
       }
       if (transactionsResponse.ok) {
         setTransactions(parseBillingTransactions(await transactionsResponse.json()));
+      }
+      if (referralTransactionsResponse.ok) {
+        setReferralTransactions(parseBillingTransactions(await referralTransactionsResponse.json()));
       }
       setUsers(parsedUsers);
       setPlans(parsedPlans);
@@ -1105,6 +1142,29 @@ export function AdminPage() {
       await loadAdminData({ preserveNotice: true });
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "计费设置保存失败。");
+    } finally {
+      setSavingBilling("");
+    }
+  }
+
+  async function saveReferralSettings(): Promise<void> {
+    setSavingBilling("referral");
+    setError("");
+    setNotice("");
+    try {
+      const response = await authFetch("/api/admin/referral/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(referralSettingsToPayload(referralSettings))
+      });
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "邀请激励设置保存失败。"));
+      }
+      setNotice("邀请激励设置已保存。");
+      setReferralSettings(parseReferralSettingsForm(await response.json()));
+      await loadAdminData({ preserveNotice: true });
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "邀请激励设置保存失败。");
     } finally {
       setSavingBilling("");
     }
@@ -1296,6 +1356,23 @@ export function AdminPage() {
           ))}
         </div>
 
+        <div className="admin-tabs" role="tablist" aria-label="后台功能">
+          {adminTabs.map((tab) => (
+            <button
+              aria-selected={activeTab === tab.id}
+              className="admin-tab"
+              data-active={activeTab === tab.id}
+              key={tab.id}
+              role="tab"
+              type="button"
+              onClick={() => setActiveTab(tab.id)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {activeTab === "models" ? (
         <section className="admin-table-card admin-billing-card" aria-labelledby="image-models-title">
           <div className="admin-table-card__title">
             <Layers3 className="size-4" aria-hidden="true" />
@@ -1357,7 +1434,9 @@ export function AdminPage() {
             </button>
           </div>
         </section>
+        ) : null}
 
+        {activeTab === "billing" ? (
         <section className="admin-table-card admin-billing-card" aria-labelledby="billing-config-title">
           <div className="admin-table-card__title">
             <CreditCard className="size-4" aria-hidden="true" />
@@ -1464,7 +1543,9 @@ export function AdminPage() {
             </div>
           </div>
         </section>
+        ) : null}
 
+        {activeTab === "auth" ? (
         <section className="admin-table-card admin-billing-card" aria-labelledby="wechat-config-title">
           <div className="admin-table-card__title">
             <ShieldCheck className="size-4" aria-hidden="true" />
@@ -1525,7 +1606,9 @@ export function AdminPage() {
             </div>
           </div>
         </section>
+        ) : null}
 
+        {activeTab === "plans" ? (
         <section className="admin-table-card" aria-labelledby="plans-table-title">
           <div className="admin-table-card__title">
             <Package className="size-4" aria-hidden="true" />
@@ -1649,7 +1732,9 @@ export function AdminPage() {
             </table>
           </div>
         </section>
+        ) : null}
 
+        {activeTab === "users" ? (
         <section className="admin-table-card" aria-labelledby="users-table-title">
           <div className="admin-table-card__title">
             <Users className="size-4" aria-hidden="true" />
@@ -1848,6 +1933,95 @@ export function AdminPage() {
             </table>
           </div>
         </section>
+        ) : null}
+
+        {activeTab === "referral" ? (
+          <section className="admin-table-card admin-billing-card" aria-labelledby="referral-config-title">
+            <div className="admin-table-card__title">
+              <UserPlus className="size-4" aria-hidden="true" />
+              <h2 id="referral-config-title">邀请激励配置</h2>
+            </div>
+            <div className="admin-billing-grid">
+              <div className="admin-form-panel">
+                <div className="admin-form-panel__title-row">
+                  <div>
+                    <p className="settings-eyebrow">Registration</p>
+                    <h3>注册生图奖励</h3>
+                  </div>
+                  <label className="admin-switch">
+                    <input
+                      checked={referralSettings.enabled}
+                      type="checkbox"
+                      onChange={(event) => setReferralSettings({ ...referralSettings, enabled: event.target.checked })}
+                    />
+                    <span>{referralSettings.enabled ? "启用" : "关闭"}</span>
+                  </label>
+                </div>
+                <div className="admin-form-grid admin-form-grid--two">
+                  <label>
+                    <span>自然注册基础张数</span>
+                    <input className="admin-input" inputMode="numeric" value={referralSettings.baseRegisterCredits} onChange={(event) => setReferralSettings({ ...referralSettings, baseRegisterCredits: event.target.value })} />
+                  </label>
+                  <label>
+                    <span>邀请者注册奖励张数</span>
+                    <input className="admin-input" inputMode="numeric" value={referralSettings.inviterRegisterCredits} onChange={(event) => setReferralSettings({ ...referralSettings, inviterRegisterCredits: event.target.value })} />
+                  </label>
+                  <label>
+                    <span>被邀请者注册加赠张数</span>
+                    <input className="admin-input" inputMode="numeric" value={referralSettings.inviteeRegisterCredits} onChange={(event) => setReferralSettings({ ...referralSettings, inviteeRegisterCredits: event.target.value })} />
+                  </label>
+                  <label>
+                    <span>币种</span>
+                    <input className="admin-input" value={referralSettings.currency} onChange={(event) => setReferralSettings({ ...referralSettings, currency: event.target.value.toUpperCase() })} />
+                  </label>
+                </div>
+              </div>
+
+              <div className="admin-form-panel">
+                <div>
+                  <p className="settings-eyebrow">Cashback</p>
+                  <h3>充值/套餐返现</h3>
+                </div>
+                <div className="admin-form-grid admin-form-grid--two">
+                  <label>
+                    <span>充值返现比例 %</span>
+                    <input className="admin-input" inputMode="decimal" value={referralSettings.rechargeCashbackRate} onChange={(event) => setReferralSettings({ ...referralSettings, rechargeCashbackRate: event.target.value })} />
+                  </label>
+                  <label>
+                    <span>套餐返现比例 %</span>
+                    <input className="admin-input" inputMode="decimal" value={referralSettings.planPurchaseCashbackRate} onChange={(event) => setReferralSettings({ ...referralSettings, planPurchaseCashbackRate: event.target.value })} />
+                  </label>
+                  <label>
+                    <span>最低返现订单金额</span>
+                    <input className="admin-input" inputMode="decimal" value={referralSettings.minCashbackOrderAmount} onChange={(event) => setReferralSettings({ ...referralSettings, minCashbackOrderAmount: event.target.value })} />
+                  </label>
+                </div>
+                <button className="primary-action h-10" disabled={savingBilling === "referral"} type="button" onClick={() => void saveReferralSettings()}>
+                  {savingBilling === "referral" ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Save className="size-4" aria-hidden="true" />}
+                  保存邀请规则
+                </button>
+              </div>
+            </div>
+            <DataTable
+              columns={["时间", "邀请者", "类型", "金额", "张数", "余额/额度后", "说明"]}
+              emptyLabel="暂无邀请奖励流水"
+              icon={<Receipt className="size-4" aria-hidden="true" />}
+              rows={referralTransactions.map((item) => [
+                formatDateTime(item.createdAt),
+                item.userEmail || item.userId || "-",
+                billingTypeLabel(item.type),
+                item.amountCents ? formatMoney(item.amountCents, item.currency) : "-",
+                item.imageCount ? `${item.imageCount}` : "-",
+                item.amountCents ? formatMoney(item.balanceAfterCents ?? 0, item.currency) : "-",
+                item.note || item.title
+              ])}
+              title="邀请奖励流水"
+            />
+          </section>
+        ) : null}
+
+        {activeTab === "ledger" ? (
+          <>
         <DataTable
           columns={["时间", "用户", "类型", "图片", "金额", "余额", "说明"]}
           emptyLabel="暂无扣费明细"
@@ -1883,6 +2057,8 @@ export function AdminPage() {
           rows={assets.map((item) => [item.id, item.fileName, formatBytes(item.sizeBytes), item.userEmail || item.userId, formatDateTime(item.createdAt)])}
           title="资产"
         />
+          </>
+        ) : null}
       </section>
     </main>
   );
@@ -2083,6 +2259,17 @@ interface AdminUserFormState {
 
 interface BillingSettingsFormState {
   imageUnitPrice: string;
+  currency: string;
+}
+
+interface ReferralSettingsFormState {
+  enabled: boolean;
+  baseRegisterCredits: string;
+  inviterRegisterCredits: string;
+  inviteeRegisterCredits: string;
+  rechargeCashbackRate: string;
+  planPurchaseCashbackRate: string;
+  minCashbackOrderAmount: string;
   currency: string;
 }
 
@@ -2414,6 +2601,33 @@ function parseBillingSettingsForm(value: unknown): BillingSettingsFormState {
   };
 }
 
+function parseReferralSettingsForm(value: unknown): ReferralSettingsFormState {
+  const settings = firstRecord(value, "settings") ?? (isRecord(value) ? value : {});
+  return {
+    enabled: booleanFrom(settings.enabled, true),
+    baseRegisterCredits: stringFromNumber(numberFrom(settings.baseRegisterCredits) ?? 2),
+    inviterRegisterCredits: stringFromNumber(numberFrom(settings.inviterRegisterCredits) ?? 4),
+    inviteeRegisterCredits: stringFromNumber(numberFrom(settings.inviteeRegisterCredits) ?? 6),
+    rechargeCashbackRate: bpsToPercentInput(numberFrom(settings.rechargeCashbackRateBps) ?? 500),
+    planPurchaseCashbackRate: bpsToPercentInput(numberFrom(settings.planPurchaseCashbackRateBps) ?? 500),
+    minCashbackOrderAmount: centsToMoneyInput(numberFrom(settings.minCashbackOrderAmountCents) ?? 100),
+    currency: stringFrom(settings.currency) || "CNY"
+  };
+}
+
+function referralSettingsToPayload(form: ReferralSettingsFormState): Record<string, unknown> {
+  return {
+    enabled: form.enabled,
+    baseRegisterCredits: nullableNumber(form.baseRegisterCredits) ?? 0,
+    inviterRegisterCredits: nullableNumber(form.inviterRegisterCredits) ?? 0,
+    inviteeRegisterCredits: nullableNumber(form.inviteeRegisterCredits) ?? 0,
+    rechargeCashbackRateBps: percentInputToBps(form.rechargeCashbackRate),
+    planPurchaseCashbackRateBps: percentInputToBps(form.planPurchaseCashbackRate),
+    minCashbackOrderAmountCents: moneyToCents(form.minCashbackOrderAmount) ?? 0,
+    currency: form.currency || "CNY"
+  };
+}
+
 function parseImageModelForms(value: unknown): ImageModelFormState[] {
   return arrayFrom(value, ["models", "items"]).map((item, index) => {
     const provider = stringFrom(item.provider) === "openai-compatible" ? "openai-compatible" : "gemini";
@@ -2559,6 +2773,19 @@ const NEW_PLAN_ID = "__new_plan__";
 function createBillingSettingsForm(): BillingSettingsFormState {
   return {
     imageUnitPrice: "0",
+    currency: "CNY"
+  };
+}
+
+function createReferralSettingsForm(): ReferralSettingsFormState {
+  return {
+    enabled: true,
+    baseRegisterCredits: "2",
+    inviterRegisterCredits: "4",
+    inviteeRegisterCredits: "6",
+    rechargeCashbackRate: "5",
+    planPurchaseCashbackRate: "5",
+    minCashbackOrderAmount: "1",
     currency: "CNY"
   };
 }
@@ -2895,4 +3122,16 @@ function centsToMoneyInput(value: number): string {
     return "0";
   }
   return String(Number((value / 100).toFixed(2)));
+}
+
+function bpsToPercentInput(value: number): string {
+  if (!Number.isFinite(value)) {
+    return "0";
+  }
+  return String(Number((value / 100).toFixed(2)));
+}
+
+function percentInputToBps(value: string): number {
+  const numericValue = nullableNumber(value);
+  return numericValue === null ? 0 : Math.round(numericValue * 100);
 }

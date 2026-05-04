@@ -19,6 +19,7 @@ import type {
 } from "./contracts.js";
 import { db } from "./database.js";
 import { ensureUserPlanCurrent, planExpiryFrom } from "./plan-expiration.js";
+import { applyReferralCashback } from "./referral-service.js";
 import { billingOrders, billingTransactions, subscriptionPlans, systemSettings, users } from "./schema.js";
 import { getSystemSetting, saveSystemSetting } from "./system-settings.js";
 
@@ -460,6 +461,7 @@ export async function listAdminBillingTransactions(limit: number): Promise<Billi
 }
 
 async function applyPlanPurchaseByBalance(tenant: RequestTenant, plan: typeof subscriptionPlans.$inferSelect): Promise<void> {
+  const now = new Date().toISOString();
   await db.transaction(async (tx) => {
     const [user] = await tx.select().from(users).where(eq(users.id, tenant.userId)).limit(1).for("update");
     if (!user) {
@@ -484,7 +486,7 @@ async function applyPlanPurchaseByBalance(tenant: RequestTenant, plan: typeof su
         storageQuotaBytes: Number(plan.storageQuotaBytes ?? 0),
         balanceCents: balanceAfter,
         currency: plan.currency || DEFAULT_CURRENCY,
-        updatedAt: new Date().toISOString()
+        updatedAt: now
       })
       .where(eq(users.id, user.id));
 
@@ -509,8 +511,15 @@ async function applyPlanPurchaseByBalance(tenant: RequestTenant, plan: typeof su
       note: "余额购买套餐",
       createdByUserId: user.id,
       metadataJson: JSON.stringify({ planId: plan.id, storageQuotaBytes: Number(plan.storageQuotaBytes ?? 0) }),
-      createdAt: new Date().toISOString()
+      createdAt: now
     });
+  });
+  await applyReferralCashback({
+    inviteeUserId: tenant.userId,
+    orderType: "plan_purchase",
+    amountCents: Number(plan.priceCents ?? 0),
+    currency: plan.currency || DEFAULT_CURRENCY,
+    now
   });
 }
 
@@ -518,6 +527,7 @@ async function applyPaidOrder(
   outTradeNo: string,
   input: { providerTradeNo?: string; paidAmountCents?: number; notifyPayload: Record<string, string> }
 ): Promise<void> {
+  let paidOrder: { id: string; type: string; userId: string; amountCents: number; currency: string; now: string } | undefined;
   await db.transaction(async (tx) => {
     const [order] = await tx.select().from(billingOrders).where(eq(billingOrders.outTradeNo, outTradeNo)).limit(1).for("update");
     if (!order) {
@@ -606,7 +616,25 @@ async function applyPaidOrder(
       metadataJson: JSON.stringify({ orderId: order.id, outTradeNo: order.outTradeNo, planId: order.planId }),
       createdAt: now
     });
+    paidOrder = {
+      id: order.id,
+      type: order.type,
+      userId: user.id,
+      amountCents: Number(order.amountCents ?? 0),
+      currency: order.currency,
+      now
+    };
   });
+  if (paidOrder) {
+    await applyReferralCashback({
+      inviteeUserId: paidOrder.userId,
+      orderType: paidOrder.type,
+      orderId: paidOrder.id,
+      amountCents: paidOrder.amountCents,
+      currency: paidOrder.currency,
+      now: paidOrder.now
+    });
+  }
 }
 
 async function markOrderNotify(outTradeNo: string, payload: Record<string, string>, tradeStatus: string): Promise<void> {

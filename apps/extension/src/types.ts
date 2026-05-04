@@ -25,7 +25,10 @@ export interface AuthUser {
   quotaTotal?: number;
   quotaUsed?: number;
   balanceCents?: number;
+  referralBalanceCents?: number;
   currency?: string;
+  inviteCode?: string;
+  inviterUserId?: string;
   packageTotal?: number;
   packageUsed?: number;
   packageRemaining?: number;
