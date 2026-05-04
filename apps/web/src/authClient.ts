@@ -5,6 +5,8 @@ export type AuthRole = "user" | "admin" | string;
 export interface AuthUser {
   id: string;
   email: string;
+  phone?: string;
+  phoneVerifiedAt?: string;
   displayName: string;
   role: AuthRole;
   planId?: string;
@@ -13,6 +15,9 @@ export interface AuthUser {
   quotaTotal?: number;
   quotaUsed?: number;
   balanceCents?: number;
+  referralBalanceCents?: number;
+  currency?: string;
+  inviteCode?: string;
   recordCount?: number;
   packageRemaining?: number;
   storageQuotaBytes?: number;
@@ -107,11 +112,55 @@ export async function sendRegisterEmailCode(email: string): Promise<void> {
   }
 }
 
+export async function sendRegisterSmsCode(phone: string): Promise<void> {
+  const response = await fetch("/api/auth/sms-code", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ phone: phone.trim() })
+  });
+
+  if (!response.ok) {
+    throw new Error(await readApiError(response, "验证码发送失败，请稍后重试。"));
+  }
+}
+
+export async function sendBindPhoneSmsCode(phone: string): Promise<void> {
+  const response = await authFetch("/api/auth/phone-code", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ phone: phone.trim() })
+  });
+
+  if (!response.ok) {
+    throw new Error(await readApiError(response, "验证码发送失败，请稍后重试。"));
+  }
+}
+
+export async function bindPhone(phone: string, smsCode: string): Promise<AuthSession> {
+  const response = await authFetch("/api/auth/phone", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ phone: phone.trim(), smsCode: smsCode.trim() })
+  });
+
+  if (!response.ok) {
+    throw new Error(await readApiError(response, "手机号验证失败，请稍后重试。"));
+  }
+
+  return parseAuthSession(await response.json());
+}
+
 export async function registerWithPassword(
-  email: string,
+  phone: string,
   password: string,
   displayName: string,
-  emailCode: string,
+  smsCode: string,
   inviteCode?: string
 ): Promise<AuthSession> {
   const response = await fetch("/api/auth/register", {
@@ -120,10 +169,10 @@ export async function registerWithPassword(
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      email: email.trim(),
+      phone: phone.trim(),
       password,
       displayName: displayName.trim(),
-      emailCode: emailCode.trim(),
+      smsCode: smsCode.trim(),
       inviteCode: inviteCode?.trim() || undefined
     })
   });
@@ -204,6 +253,9 @@ export function parseAuthUser(value: unknown): AuthUser {
     quotaTotal: numberFrom(value.quota_total ?? value.quotaTotal),
     quotaUsed: numberFrom(value.quota_used ?? value.quotaUsed),
     balanceCents: numberFrom(value.balance_cents ?? value.balanceCents ?? (isRecord(value.balance) ? value.balance.amountCents ?? value.balance.cents : undefined)),
+    referralBalanceCents: numberFrom(value.referral_balance_cents ?? value.referralBalanceCents),
+    currency: stringFrom(value.currency),
+    inviteCode: stringFrom(value.invite_code ?? value.inviteCode),
     recordCount: numberFrom(value.record_count ?? value.recordCount ?? value.generationCount),
     packageRemaining: numberFrom(value.package_remaining ?? value.packageRemaining ?? value.quotaRemaining),
     storageQuotaBytes: numberFrom(value.storage_quota_bytes ?? value.storageQuotaBytes ?? (isRecord(value.storage) ? value.storage.quotaBytes : undefined)),

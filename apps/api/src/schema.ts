@@ -11,6 +11,8 @@ export const users = mysqlTable(
     id: id("id").primaryKey(),
     numericId: bigint("numeric_id", { mode: "number", unsigned: true }).notNull().default(0),
     email: shortText("email"),
+    phone: shortText("phone", 32),
+    phoneVerifiedAt: isoDate("phone_verified_at"),
     passwordHash: shortText("password_hash", 512).notNull(),
     displayName: shortText("display_name").notNull(),
     role: shortText("role", 32).notNull(),
@@ -31,6 +33,7 @@ export const users = mysqlTable(
   (table) => ({
     numericIdIdx: uniqueIndex("users_numeric_id_unique_idx").on(table.numericId),
     emailIdx: uniqueIndex("users_email_unique_idx").on(table.email),
+    phoneIdx: uniqueIndex("users_phone_unique_idx").on(table.phone),
     inviteCodeIdx: uniqueIndex("users_invite_code_unique_idx").on(table.inviteCode),
     inviterIdx: index("users_inviter_user_id_idx").on(table.inviterUserId),
     planIdx: index("users_plan_id_idx").on(table.planId)
@@ -82,6 +85,25 @@ export const emailVerificationCodes = mysqlTable(
   (table) => ({
     emailPurposeIdx: index("email_verification_codes_email_purpose_idx").on(table.email, table.purpose),
     expiresAtIdx: index("email_verification_codes_expires_at_idx").on(table.expiresAt)
+  })
+);
+
+export const smsVerificationCodes = mysqlTable(
+  "sms_verification_codes",
+  {
+    id: id("id").primaryKey(),
+    phone: shortText("phone", 32).notNull(),
+    purpose: shortText("purpose", 32).notNull(),
+    codeHash: shortText("code_hash", 128).notNull(),
+    expiresAt: isoDate("expires_at").notNull(),
+    consumedAt: isoDate("consumed_at"),
+    attemptCount: int("attempt_count").notNull(),
+    sentAt: isoDate("sent_at").notNull(),
+    createdAt: isoDate("created_at").notNull()
+  },
+  (table) => ({
+    phonePurposeIdx: index("sms_verification_codes_phone_purpose_idx").on(table.phone, table.purpose),
+    expiresAtIdx: index("sms_verification_codes_expires_at_idx").on(table.expiresAt)
   })
 );
 

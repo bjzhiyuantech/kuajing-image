@@ -987,14 +987,17 @@ function billingOrderStatusLabel(status: string): string {
 function normalizeUser(value: unknown): AuthUser | null {
   const root = asRecord(value);
   const source = asRecord(root.user ?? root.data ?? root.profile ?? value);
-  const email = firstString(source, ["email", "mail", "username"]);
-  if (!email) {
+  const email = firstString(source, ["email", "mail", "username"]) ?? "";
+  const phone = firstString(source, ["phone", "mobile"]);
+  if (!email && !phone) {
     return null;
   }
 
   return {
     id: firstString(source, ["id", "userId", "sub"]),
     email,
+    phone,
+    phoneVerifiedAt: firstString(source, ["phoneVerifiedAt", "phone_verified_at"]),
     displayName: firstString(source, ["displayName", "display_name", "name", "nickname"]),
     role: firstString(source, ["role", "plan"]),
     planId: firstString(source, ["planId", "plan_id"]),
@@ -1090,7 +1093,7 @@ function formatSourceUrl(url: string): string {
 export function SidePanelApp() {
   const [auth, setAuth] = useState<ExtensionAuthState>(defaultAuth);
   const [authMode, setAuthMode] = useState<AuthMode>("login");
-  const [authForm, setAuthForm] = useState({ email: "", password: "", displayName: "", emailCode: "", inviteCode: "" });
+  const [authForm, setAuthForm] = useState({ email: "", phone: "", password: "", displayName: "", smsCode: "", inviteCode: "" });
   const [authLoading, setAuthLoading] = useState(false);
   const [authCodeLoading, setAuthCodeLoading] = useState(false);
   const [authError, setAuthError] = useState("");
@@ -1650,8 +1653,8 @@ export function SidePanelApp() {
     event.preventDefault();
     setAuthError("");
     setAuthNotice("");
-    if (authMode === "register" && !authForm.emailCode.trim()) {
-      setAuthError("请输入邮箱验证码。");
+    if (authMode === "register" && !authForm.smsCode.trim()) {
+      setAuthError("请输入短信验证码。");
       return;
     }
     setAuthLoading(true);
@@ -1660,10 +1663,11 @@ export function SidePanelApp() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          email: authForm.email.trim(),
+          email: authMode === "login" ? authForm.email.trim() : undefined,
+          phone: authMode === "register" ? authForm.phone.trim() : undefined,
           password: authForm.password,
           displayName: authMode === "register" ? authForm.displayName.trim() || undefined : undefined,
-          emailCode: authMode === "register" ? authForm.emailCode.trim() : undefined,
+          smsCode: authMode === "register" ? authForm.smsCode.trim() : undefined,
           inviteCode: authMode === "register" ? authForm.inviteCode.trim() || undefined : undefined
         })
       });
@@ -1701,23 +1705,23 @@ export function SidePanelApp() {
     }
   }
 
-  async function sendAuthEmailCode(): Promise<void> {
+  async function sendAuthSmsCode(): Promise<void> {
     setAuthError("");
     setAuthNotice("");
-    if (!authForm.email.trim()) {
-      setAuthError("请先输入邮箱。");
+    if (!authForm.phone.trim()) {
+      setAuthError("请先输入手机号。");
       return;
     }
 
     setAuthCodeLoading(true);
     try {
-      const response = await fetch(`${apiBaseUrl()}/api/auth/email-code`, {
+      const response = await fetch(`${apiBaseUrl()}/api/auth/sms-code`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: authForm.email.trim() })
+        body: JSON.stringify({ phone: authForm.phone.trim() })
       });
       await parseResponseOrThrow(response);
-      setAuthNotice("验证码已发送，请查收邮箱。");
+      setAuthNotice("验证码已发送，请查收短信。");
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : "验证码发送失败。");
     } finally {
@@ -3980,10 +3984,17 @@ export function SidePanelApp() {
                       <button className={authMode === "login" ? "active" : ""} type="button" onClick={() => setAuthMode("login")}>登录</button>
                       <button className={authMode === "register" ? "active" : ""} type="button" onClick={() => setAuthMode("register")}>注册</button>
                     </div>
-                    <label>
-                      <span>邮箱</span>
-                      <input autoComplete="email" type="email" value={authForm.email} onChange={(event) => setAuthForm({ ...authForm, email: event.target.value })} required />
-                    </label>
+                    {authMode === "register" ? (
+                      <label>
+                        <span>手机号</span>
+                        <input autoComplete="tel" inputMode="tel" value={authForm.phone} onChange={(event) => setAuthForm({ ...authForm, phone: event.target.value })} required />
+                      </label>
+                    ) : (
+                      <label>
+                        <span>邮箱</span>
+                        <input autoComplete="email" type="email" value={authForm.email} onChange={(event) => setAuthForm({ ...authForm, email: event.target.value })} required />
+                      </label>
+                    )}
                     {authMode === "register" ? (
                       <label>
                         <span>显示名</span>
@@ -3992,17 +4003,17 @@ export function SidePanelApp() {
                     ) : null}
                     {authMode === "register" ? (
                       <label>
-                        <span>邮箱验证码</span>
+                        <span>短信验证码</span>
                         <div className="auth-code-row">
                           <input
                             autoComplete="one-time-code"
                             inputMode="numeric"
                             maxLength={6}
-                            value={authForm.emailCode}
-                            onChange={(event) => setAuthForm({ ...authForm, emailCode: event.target.value })}
+                            value={authForm.smsCode}
+                            onChange={(event) => setAuthForm({ ...authForm, smsCode: event.target.value })}
                             required
                           />
-                          <button className="mini-button" disabled={authCodeLoading} type="button" onClick={() => void sendAuthEmailCode()}>
+                          <button className="mini-button" disabled={authCodeLoading} type="button" onClick={() => void sendAuthSmsCode()}>
                             {authCodeLoading ? <Loader2 className="spin" size={13} /> : <Send size={13} />}
                             发送
                           </button>

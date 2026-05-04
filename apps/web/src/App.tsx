@@ -93,8 +93,10 @@ import {
   getStoredAuthToken,
   isAdminUser,
   loginWithPassword,
+  bindPhone,
   registerWithPassword,
-  sendRegisterEmailCode,
+  sendBindPhoneSmsCode,
+  sendRegisterSmsCode,
   storeAuthToken,
   type AuthSession,
   type AuthUser
@@ -3120,7 +3122,7 @@ export function App() {
             onLogin={loginWithPassword}
             onModeChange={navigateToAuth}
             onRegister={registerWithPassword}
-            onSendEmailCode={sendRegisterEmailCode}
+            onSendSmsCode={sendRegisterSmsCode}
           />
         ) : (
           <HomePage onAuthNavigate={navigateToAuth} />
@@ -3130,13 +3132,15 @@ export function App() {
   }
 
   const resolvedRoute = route === "admin" && !isAdminUser(currentUser) ? "canvas" : route;
+  const requiresPhoneVerification = !currentUser.phone && !isAdminUser(currentUser);
+  const visibleRoute = requiresPhoneVerification ? "account" : resolvedRoute;
 
   return (
     <div className="app-root">
       <TopNavigation
         ecommerceStats={ecommerceStats}
         generationHistoryCount={generationHistory.length}
-        route={resolvedRoute}
+        route={visibleRoute}
         user={currentUser}
         onLogout={handleLogout}
         onNavigate={navigateToRoute}
@@ -3147,7 +3151,7 @@ export function App() {
         }}
         onPreloadGallery={preloadGalleryPage}
       />
-      <main className="app-shell app-view relative flex min-h-0 overflow-hidden bg-neutral-950 text-neutral-900" data-active-route={resolvedRoute} hidden={resolvedRoute !== "canvas"}>
+      <main className="app-shell app-view relative flex min-h-0 overflow-hidden bg-neutral-950 text-neutral-900" data-active-route={visibleRoute} hidden={visibleRoute !== "canvas"}>
       <section
         className="relative min-w-0 flex-1 bg-neutral-100 outline-none"
         aria-label={`${BRAND_NAME}创作画布`}
@@ -4103,7 +4107,7 @@ export function App() {
         </div>
       ) : null}
       </main>
-      {resolvedRoute === "gallery" ? (
+      {visibleRoute === "gallery" ? (
         <Suspense
           fallback={
             <main className="gallery-page app-view" data-testid="gallery-loading-page">
@@ -4117,8 +4121,8 @@ export function App() {
           <LazyGalleryPage fetcher={authFetch} onDeleted={removeGalleryOutputFromHistory} onReuse={reuseGalleryImage} />
         </Suspense>
       ) : null}
-      {resolvedRoute === "account" ? <AccountPage user={currentUser} /> : null}
-      {resolvedRoute === "admin" && isAdminUser(currentUser) ? <AdminPage /> : null}
+      {visibleRoute === "account" ? <AccountPage user={currentUser} onUserUpdated={setCurrentUser} onSendPhoneCode={sendBindPhoneSmsCode} onBindPhone={bindPhone} /> : null}
+      {visibleRoute === "admin" && isAdminUser(currentUser) ? <AdminPage /> : null}
     </div>
   );
 }

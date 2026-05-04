@@ -10,6 +10,7 @@ import { parsePreviewWidth, readStoredAssetPreview } from "./asset-preview.js";
 import { resolveRequestTenant, type RequestTenant } from "./auth-context.js";
 import {
   AuthError,
+  bindCurrentUserPhone,
   bindWechatMiniAppToCurrentUser,
   getAdminWechatMiniAppConfig,
   getAuthSession,
@@ -89,6 +90,7 @@ import {
   saveBillingSettings
 } from "./billing.js";
 import { EmailError, getSmtpSettings, saveSmtpSettings, sendRegisterEmailCode } from "./email-service.js";
+import { SmsError, getAliyunSmsSettings, saveAliyunSmsSettings, sendBindPhoneSmsCode, sendRegisterSmsCode } from "./sms-service.js";
 import {
   ProviderError,
   type EditImageProviderInput,
@@ -249,6 +251,24 @@ app.post("/api/auth/email-code", async (c) => {
   }
 });
 
+app.post("/api/auth/sms-code", async (c) => {
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+
+  const parsed = parseSmsCodePayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  try {
+    return c.json(await sendRegisterSmsCode(parsed.value.phone));
+  } catch (error) {
+    return smsErrorJson(c, error);
+  }
+});
+
 app.post("/api/auth/login", async (c) => {
   const payload = await readJson(c.req.raw);
   if (!payload.ok) {
@@ -269,6 +289,39 @@ app.post("/api/auth/login", async (c) => {
 
 app.get("/api/auth/wechat/miniapp/config", async (c) => {
   return c.json(await getWechatMiniAppConfig());
+});
+
+app.post("/api/auth/phone-code", async (c) => {
+  try {
+    const session = await requireAuthSession(c.req.raw.headers);
+    const payload = await readJson(c.req.raw);
+    if (!payload.ok) {
+      return c.json(payload.error, 400);
+    }
+    const parsed = parseSmsCodePayload(payload.value);
+    if (!parsed.ok) {
+      return c.json(parsed.error, 400);
+    }
+    return c.json(await sendBindPhoneSmsCode(parsed.value.phone, session.user.id));
+  } catch (error) {
+    return authErrorJson(c, error);
+  }
+});
+
+app.post("/api/auth/phone", async (c) => {
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+  const parsed = parseBindPhonePayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+  try {
+    return c.json(await bindCurrentUserPhone(c.req.raw.headers, parsed.value));
+  } catch (error) {
+    return authErrorJson(c, error);
+  }
 });
 
 app.post("/api/auth/wechat/miniapp/login", async (c) => {
@@ -361,6 +414,10 @@ app.use("/api/*", async (c, next) => {
   const session = (await getAuthSession(c.req.raw.headers)) ?? (await getAssetQueryTokenSession(c));
   if (session) {
     authSessions.set(c, session);
+    const path = new URL(c.req.url).pathname;
+    if (!session.user.phone && !canAccessWithoutPhoneVerification(path)) {
+      return c.json(errorResponse("phone_verification_required", "请先完成手机号验证后再使用账户权益。"), 403);
+    }
     await next();
     return;
   }
@@ -383,6 +440,15 @@ async function getAssetQueryTokenSession(c: Context): Promise<AuthSession | unde
 
   const token = c.req.query("token") ?? c.req.query("access_token");
   return token ? getAuthSessionFromToken(token) : undefined;
+}
+
+function canAccessWithoutPhoneVerification(path: string): boolean {
+  return (
+    path === "/api/auth/me" ||
+    path === "/api/auth/phone-code" ||
+    path === "/api/auth/phone" ||
+    path.startsWith("/api/admin/")
+  );
 }
 
 app.get("/api/project", async (c) => c.json(await getProjectState(await requestTenant(c))));
@@ -913,6 +979,38 @@ app.put("/api/admin/email/smtp", async (c) => {
     return c.json(await saveSmtpSettings(parsed.value));
   } catch (error) {
     return emailErrorJson(c, error);
+  }
+});
+
+app.get("/api/admin/sms/aliyun", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return c.json(await getAliyunSmsSettings());
+});
+
+app.put("/api/admin/sms/aliyun", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+
+  const parsed = parseAliyunSmsSettingsPayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  try {
+    return c.json(await saveAliyunSmsSettings(parsed.value));
+  } catch (error) {
+    return smsErrorJson(c, error);
   }
 });
 
@@ -1462,9 +1560,20 @@ function authErrorJson(c: Context, error: unknown): Response {
   if (error instanceof EmailError) {
     return c.json(errorResponse(error.code, error.message), error.status as 400 | 409 | 429 | 500 | 503);
   }
+  if (error instanceof SmsError) {
+    return c.json(errorResponse(error.code, error.message), error.status as 400 | 409 | 429 | 500 | 503);
+  }
 
   if (error instanceof Error && error.message.includes("JWT_SECRET")) {
     return c.json(errorResponse("auth_not_configured", "服务端未配置 JWT_SECRET。"), 500);
+  }
+
+  throw error;
+}
+
+function smsErrorJson(c: Context, error: unknown): Response {
+  if (error instanceof SmsError) {
+    return c.json(errorResponse(error.code, error.message), error.status as 400 | 409 | 429 | 500 | 503);
   }
 
   throw error;
@@ -1806,7 +1915,7 @@ function parseListLimit(value: string | undefined): number {
 function parseAuthPayload(
   input: unknown,
   includeDisplayName: boolean
-): ParseResult<{ email: string; password: string; displayName?: string; emailCode: string; inviteCode?: string }> {
+): ParseResult<{ email: string; phone: string; password: string; displayName?: string; emailCode: string; smsCode: string; inviteCode?: string }> {
   if (!isRecord(input)) {
     return {
       ok: false,
@@ -1815,21 +1924,24 @@ function parseAuthPayload(
   }
 
   const email = stringValue(input.email)?.trim();
+  const phone = stringValue(input.phone)?.trim();
   const password = stringValue(input.password);
-  if (!email || !password) {
+  if ((!includeDisplayName && !email) || (includeDisplayName && !phone) || !password) {
     return {
       ok: false,
-      error: errorResponse("invalid_credentials", "请输入邮箱和密码。")
+      error: errorResponse("invalid_credentials", includeDisplayName ? "请输入手机号和密码。" : "请输入邮箱和密码。")
     };
   }
 
   return {
     ok: true,
     value: {
-      email,
+      email: email ?? "",
+      phone: phone ?? "",
       password,
       displayName: includeDisplayName ? stringValue(input.displayName)?.trim() : undefined,
       emailCode: includeDisplayName ? stringValue(input.emailCode)?.trim() || "" : "",
+      smsCode: includeDisplayName ? stringValue(input.smsCode ?? input.phoneCode)?.trim() || "" : "",
       inviteCode: includeDisplayName ? stringValue(input.inviteCode)?.trim() : undefined
     }
   };
@@ -1899,6 +2011,45 @@ function parseEmailCodePayload(input: unknown): ParseResult<{ email: string }> {
   }
 
   return { ok: true, value: { email } };
+}
+
+function parseSmsCodePayload(input: unknown): ParseResult<{ phone: string }> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_request", "请求内容必须是 JSON 对象。")
+    };
+  }
+
+  const phone = stringValue(input.phone)?.trim();
+  if (!phone) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_phone", "请输入手机号。")
+    };
+  }
+
+  return { ok: true, value: { phone } };
+}
+
+function parseBindPhonePayload(input: unknown): ParseResult<{ phone: string; smsCode: string }> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_request", "请求内容必须是 JSON 对象。")
+    };
+  }
+
+  const phone = stringValue(input.phone)?.trim();
+  const smsCode = stringValue(input.smsCode ?? input.phoneCode)?.trim();
+  if (!phone || !smsCode) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_phone_binding", "请输入手机号和短信验证码。")
+    };
+  }
+
+  return { ok: true, value: { phone, smsCode } };
 }
 
 function parsePlanPayload(input: unknown, requireName: boolean): ParseResult<PlanMutation> {
@@ -2406,6 +2557,45 @@ function parseSmtpSettingsPayload(input: unknown): ParseResult<{
       preservePassword: input.preservePassword === true,
       fromName: stringValue(input.fromName),
       fromEmail: stringValue(input.fromEmail)
+    }
+  };
+}
+
+function parseAliyunSmsSettingsPayload(input: unknown): ParseResult<{
+  enabled: boolean;
+  accessKeyId?: string;
+  accessKeySecret?: string;
+  preserveAccessKeySecret?: boolean;
+  endpoint?: string;
+  signName?: string;
+  registerTemplateCode?: string;
+  bindTemplateCode?: string;
+}> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_sms_config", "阿里云短信配置内容必须是 JSON 对象。")
+    };
+  }
+
+  if (typeof input.enabled !== "boolean") {
+    return {
+      ok: false,
+      error: errorResponse("invalid_sms_config", "enabled 必须是布尔值。")
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      enabled: input.enabled,
+      accessKeyId: stringValue(input.accessKeyId),
+      accessKeySecret: stringValue(input.accessKeySecret),
+      preserveAccessKeySecret: input.preserveAccessKeySecret === true,
+      endpoint: stringValue(input.endpoint),
+      signName: stringValue(input.signName),
+      registerTemplateCode: stringValue(input.registerTemplateCode),
+      bindTemplateCode: stringValue(input.bindTemplateCode)
     }
   };
 }

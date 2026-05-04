@@ -4,9 +4,12 @@ import {
   BarChart3,
   CheckCircle2,
   Clock,
+  Copy,
   CreditCard,
   Database,
+  Download,
   ExternalLink,
+  Gift,
   Layers3,
   HardDrive,
   ImageIcon,
@@ -15,6 +18,7 @@ import {
   Mail,
   Package,
   Pencil,
+  Phone,
   Plus,
   Receipt,
   RefreshCw,
@@ -29,6 +33,7 @@ import {
 } from "lucide-react";
 import type React from "react";
 import { Fragment, useEffect, useMemo, useState } from "react";
+import QRCode from "qrcode";
 import { authFetch, readApiError, type AuthSession, type AuthUser } from "./authClient";
 import { BRAND_TAGLINE, BrandMark, BrandName } from "./Brand";
 import type { AdminWechatMiniAppConfigResponse, MaskedSecret } from "@gpt-image-canvas/shared";
@@ -347,19 +352,20 @@ export function AuthScreen({
   onAuthenticated,
   onLogin,
   onRegister,
-  onSendEmailCode
+  onSendSmsCode
 }: {
   mode: AuthMode;
   onModeChange: (mode: AuthMode) => void;
   onAuthenticated: (session: AuthSession) => void;
   onLogin: (email: string, password: string) => Promise<AuthSession>;
-  onRegister: (email: string, password: string, displayName: string, emailCode: string, inviteCode?: string) => Promise<AuthSession>;
-  onSendEmailCode: (email: string) => Promise<void>;
+  onRegister: (phone: string, password: string, displayName: string, smsCode: string, inviteCode?: string) => Promise<AuthSession>;
+  onSendSmsCode: (phone: string) => Promise<void>;
 }) {
   const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
-  const [emailCode, setEmailCode] = useState("");
+  const [smsCode, setSmsCode] = useState("");
   const [inviteCode, setInviteCode] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -379,22 +385,30 @@ export function AuthScreen({
     event.preventDefault();
     setError("");
 
-    if (!email.trim() || !password) {
-      setError("请输入邮箱和密码。");
+    if (isRegister && !phone.trim()) {
+      setError("请输入手机号。");
+      return;
+    }
+    if (!isRegister && !email.trim()) {
+      setError("请输入邮箱。");
+      return;
+    }
+    if (!password) {
+      setError("请输入密码。");
       return;
     }
     if (isRegister && !displayName.trim()) {
       setError("请输入显示名。");
       return;
     }
-    if (isRegister && !emailCode.trim()) {
-      setError("请输入邮箱验证码。");
+    if (isRegister && !smsCode.trim()) {
+      setError("请输入短信验证码。");
       return;
     }
 
     setIsSubmitting(true);
     try {
-      const session = isRegister ? await onRegister(email, password, displayName, emailCode, inviteCode) : await onLogin(email, password);
+      const session = isRegister ? await onRegister(phone, password, displayName, smsCode, inviteCode) : await onLogin(email, password);
       onAuthenticated(session);
     } catch (authError) {
       setError(authError instanceof Error ? authError.message : isRegister ? "注册失败。" : "登录失败。");
@@ -403,18 +417,18 @@ export function AuthScreen({
     }
   }
 
-  async function sendEmailCode(): Promise<void> {
+  async function sendSmsCode(): Promise<void> {
     setError("");
     setNotice("");
-    if (!email.trim()) {
-      setError("请先输入邮箱。");
+    if (!phone.trim()) {
+      setError("请先输入手机号。");
       return;
     }
 
     setIsSendingCode(true);
     try {
-      await onSendEmailCode(email);
-      setNotice("验证码已发送，请查收邮箱。");
+      await onSendSmsCode(phone);
+      setNotice("验证码已发送，请查收短信。");
     } catch (sendError) {
       setError(sendError instanceof Error ? sendError.message : "验证码发送失败。");
     } finally {
@@ -491,36 +505,53 @@ export function AuthScreen({
             </label>
           ) : null}
 
-          <label className="auth-field">
-            <span>邮箱</span>
-            <div className="auth-input">
-              <Mail className="size-4" aria-hidden="true" />
-              <input
-                autoComplete="email"
-                name="email"
-                placeholder="you@example.com"
-                type="email"
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-              />
-            </div>
-          </label>
+          {isRegister ? (
+            <label className="auth-field">
+              <span>手机号</span>
+              <div className="auth-input">
+                <Phone className="size-4" aria-hidden="true" />
+                <input
+                  autoComplete="tel"
+                  inputMode="tel"
+                  name="phone"
+                  placeholder="请输入 11 位手机号"
+                  value={phone}
+                  onChange={(event) => setPhone(event.target.value)}
+                />
+              </div>
+            </label>
+          ) : (
+            <label className="auth-field">
+              <span>邮箱</span>
+              <div className="auth-input">
+                <Mail className="size-4" aria-hidden="true" />
+                <input
+                  autoComplete="email"
+                  name="email"
+                  placeholder="you@example.com"
+                  type="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                />
+              </div>
+            </label>
+          )}
 
           {isRegister ? (
             <label className="auth-field">
-              <span>邮箱验证码</span>
+              <span>短信验证码</span>
               <div className="auth-input auth-input--with-action">
                 <ShieldCheck className="size-4" aria-hidden="true" />
                 <input
                   autoComplete="one-time-code"
                   inputMode="numeric"
                   maxLength={6}
-                  name="emailCode"
+                  name="smsCode"
                   placeholder="6 位验证码"
-                  value={emailCode}
-                  onChange={(event) => setEmailCode(event.target.value)}
+                  value={smsCode}
+                  onChange={(event) => setSmsCode(event.target.value)}
                 />
-                <button className="auth-input__action" disabled={isSendingCode} type="button" onClick={() => void sendEmailCode()}>
+                <button className="auth-input__action" disabled={isSendingCode} type="button" onClick={() => void sendSmsCode()}>
                   {isSendingCode ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Send className="size-4" aria-hidden="true" />}
                   发送
                 </button>
@@ -583,8 +614,30 @@ export function AuthScreen({
   );
 }
 
-export function AccountPage({ user }: { user: AuthUser }) {
+export function AccountPage({
+  user,
+  onUserUpdated,
+  onSendPhoneCode,
+  onBindPhone
+}: {
+  user: AuthUser;
+  onUserUpdated?: (user: AuthUser) => void;
+  onSendPhoneCode?: (phone: string) => Promise<void>;
+  onBindPhone?: (phone: string, smsCode: string) => Promise<AuthSession>;
+}) {
   const [billing, setBilling] = useState<AccountBillingState>(() => createAccountBillingState(user));
+  const [referral, setReferral] = useState<InviteSummaryState>(() => createInviteSummaryState(user));
+  const [bindPhone, setBindPhone] = useState(user.phone ?? "");
+  const [bindSmsCode, setBindSmsCode] = useState("");
+  const [bindPhoneError, setBindPhoneError] = useState("");
+  const [bindPhoneNotice, setBindPhoneNotice] = useState("");
+  const [isSendingBindCode, setIsSendingBindCode] = useState(false);
+  const [isBindingPhone, setIsBindingPhone] = useState(false);
+  const [referralLoading, setReferralLoading] = useState(true);
+  const [referralAction, setReferralAction] = useState("");
+  const [referralError, setReferralError] = useState("");
+  const [isInviteDialogOpen, setIsInviteDialogOpen] = useState(false);
+  const [inviteQrDataUrl, setInviteQrDataUrl] = useState("");
   const [rechargeAmount, setRechargeAmount] = useState("50");
   const [billingLoading, setBillingLoading] = useState(true);
   const [billingAction, setBillingAction] = useState("");
@@ -601,6 +654,11 @@ export function AccountPage({ user }: { user: AuthUser }) {
   const currentPlanName = billing.currentPlan?.name || user.planName || user.planId || "未设置";
   const currentPlanExpiresAt = billing.currentPlanExpiresAt || user.planExpiresAt;
   const plans = billing.plans.length > 0 ? billing.plans : fallbackBillingPlans;
+  const inviteUrl = referral.inviteUrl || (referral.inviteCode ? `${window.location.origin}/register?inviteCode=${encodeURIComponent(referral.inviteCode)}` : "");
+  const inviteeRegisterCredits = referral.settings.inviteeRegisterCredits;
+  const inviterRegisterCredits = referral.settings.inviterRegisterCredits;
+  const rechargeCashbackRate = referral.settings.rechargeCashbackRateBps / 100;
+  const planCashbackRate = referral.settings.planPurchaseCashbackRateBps / 100;
   const activePlanBlocksPurchase = Boolean(
     currentPlanId &&
       currentPlanId !== "free" &&
@@ -662,6 +720,135 @@ export function AccountPage({ user }: { user: AuthUser }) {
     void loadBilling({ preserveNotice: returnedFromPayment, signal: controller.signal });
     return () => controller.abort();
   }, [user.id]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void loadReferral({ signal: controller.signal });
+    return () => controller.abort();
+  }, [user.id]);
+
+  useEffect(() => {
+    const dismissedKey = `referral-campaign-dismissed:${user.id}`;
+    if (!window.localStorage.getItem(dismissedKey)) {
+      setIsInviteDialogOpen(true);
+    }
+  }, [user.id]);
+
+  useEffect(() => {
+    let active = true;
+    if (!inviteUrl) {
+      setInviteQrDataUrl("");
+      return;
+    }
+    void QRCode.toDataURL(inviteUrl, {
+      errorCorrectionLevel: "M",
+      margin: 1,
+      width: 320,
+      color: {
+        dark: "#0f172a",
+        light: "#ffffff"
+      }
+    }).then((dataUrl) => {
+      if (active) {
+        setInviteQrDataUrl(dataUrl);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [inviteUrl]);
+
+  async function loadReferral({ signal }: { signal?: AbortSignal } = {}): Promise<void> {
+    setReferralLoading(true);
+    setReferralError("");
+    try {
+      const response = await authFetch("/api/referral/summary", { signal });
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "邀请信息加载失败。"));
+      }
+      const body = await response.json();
+      if (signal?.aborted) {
+        return;
+      }
+      setReferral(parseInviteSummary(body, user));
+    } catch (error) {
+      if (!signal?.aborted) {
+        setReferralError(error instanceof Error ? error.message : "邀请信息加载失败。");
+      }
+    } finally {
+      if (!signal?.aborted) {
+        setReferralLoading(false);
+      }
+    }
+  }
+
+  async function copyInviteUrl(): Promise<void> {
+    if (!inviteUrl) {
+      setReferralAction("邀请链接还没准备好，请刷新后再试。");
+      return;
+    }
+    await window.navigator.clipboard.writeText(inviteUrl);
+    setReferralAction("邀请链接已复制，可以直接发给好友注册。");
+  }
+
+  async function downloadInvitePoster(): Promise<void> {
+    if (!inviteUrl || !inviteQrDataUrl) {
+      setReferralAction("海报还没准备好，请稍后重试。");
+      return;
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = 1080;
+    canvas.height = 1440;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      setReferralAction("海报生成失败。");
+      return;
+    }
+
+    const loadImage = (src: string) =>
+      new Promise<HTMLImageElement>((resolve, reject) => {
+        const image = new Image();
+        image.crossOrigin = "anonymous";
+        image.onload = () => resolve(image);
+        image.onerror = () => reject(new Error("图片加载失败"));
+        image.src = src;
+      });
+
+    try {
+      const poster = await loadImage("/images/referral-campaign-poster.png");
+      context.drawImage(poster, 0, 0, canvas.width, canvas.height);
+      context.fillStyle = "rgba(255,255,255,0.92)";
+      context.fillRect(72, 924, 936, 360);
+      context.fillStyle = "#0f172a";
+      context.font = "900 54px sans-serif";
+      context.fillText("邀请好友注册，赚生图张数", 110, 1008);
+      context.font = "700 32px sans-serif";
+      context.fillStyle = "#334155";
+      context.fillText(`邀请码：${referral.inviteCode}`, 110, 1080);
+      context.fillText("好友注册送额度，充值再返现", 110, 1130);
+      const qr = await loadImage(inviteQrDataUrl);
+      context.drawImage(qr, 796, 948, 192, 192);
+      context.fillStyle = "#0f766e";
+      context.font = "900 28px sans-serif";
+      context.fillText("扫码注册", 820, 1180);
+      context.fillStyle = "#475569";
+      context.font = "600 26px sans-serif";
+      context.fillText(inviteUrl.replace(/^https?:\/\//u, ""), 110, 1218);
+      const link = document.createElement("a");
+      link.download = `invite-poster-${referral.inviteCode || "campaign"}.png`;
+      link.href = canvas.toDataURL("image/png");
+      link.click();
+      setReferralAction("邀请海报已下载。");
+    } catch {
+      setReferralAction("邀请海报生成失败，请重试。");
+    }
+  }
+
+  function closeInviteDialog(): void {
+    window.localStorage.setItem(`referral-campaign-dismissed:${user.id}`, "1");
+    setIsInviteDialogOpen(false);
+  }
 
   async function submitRecharge(): Promise<void> {
     const amountCents = moneyToCents(rechargeAmount);
@@ -734,6 +921,46 @@ export function AccountPage({ user }: { user: AuthUser }) {
     }
   }
 
+  async function sendBindCode(): Promise<void> {
+    if (!onSendPhoneCode) return;
+    setBindPhoneError("");
+    setBindPhoneNotice("");
+    if (!bindPhone.trim()) {
+      setBindPhoneError("请先输入手机号。");
+      return;
+    }
+    setIsSendingBindCode(true);
+    try {
+      await onSendPhoneCode(bindPhone);
+      setBindPhoneNotice("验证码已发送，请查收短信。");
+    } catch (error) {
+      setBindPhoneError(error instanceof Error ? error.message : "验证码发送失败。");
+    } finally {
+      setIsSendingBindCode(false);
+    }
+  }
+
+  async function submitBindPhone(): Promise<void> {
+    if (!onBindPhone) return;
+    setBindPhoneError("");
+    setBindPhoneNotice("");
+    if (!bindPhone.trim() || !bindSmsCode.trim()) {
+      setBindPhoneError("请输入手机号和短信验证码。");
+      return;
+    }
+    setIsBindingPhone(true);
+    try {
+      const session = await onBindPhone(bindPhone, bindSmsCode);
+      onUserUpdated?.(session.user);
+      setBindPhoneNotice("手机号已验证。");
+      setBindSmsCode("");
+    } catch (error) {
+      setBindPhoneError(error instanceof Error ? error.message : "手机号验证失败。");
+    } finally {
+      setIsBindingPhone(false);
+    }
+  }
+
   return (
     <main className="account-page app-view">
       <section className="settings-panel" aria-labelledby="account-title">
@@ -746,12 +973,73 @@ export function AccountPage({ user }: { user: AuthUser }) {
         </div>
 
         <div className="account-grid">
-          <InfoTile label="邮箱" value={user.email} icon={<Mail className="size-4" aria-hidden="true" />} />
+          <InfoTile label="手机号" value={user.phone || "未验证"} icon={<Phone className="size-4" aria-hidden="true" />} />
+          <InfoTile label="邮箱" value={user.email || "-"} icon={<Mail className="size-4" aria-hidden="true" />} />
           <InfoTile label="显示名" value={user.displayName} icon={<User className="size-4" aria-hidden="true" />} />
           <InfoTile label="角色" value={roleLabel(user.role)} icon={<ShieldCheck className="size-4" aria-hidden="true" />} />
           <InfoTile label="当前套餐" value={currentPlanName} icon={<Package className="size-4" aria-hidden="true" />} />
           <InfoTile label="套餐到期" value={currentPlanExpiresAt ? formatDateTime(currentPlanExpiresAt) : "长期"} icon={<Clock className="size-4" aria-hidden="true" />} />
         </div>
+
+        {!user.phone ? (
+          <section className="admin-form-panel" aria-labelledby="bind-phone-title">
+            <div className="admin-form-panel__title-row">
+              <div>
+                <p className="settings-eyebrow">Phone Verification</p>
+                <h3 id="bind-phone-title">补全手机号验证</h3>
+              </div>
+            </div>
+            <div className="admin-form-grid admin-form-grid--two">
+              <label>
+                <span>手机号</span>
+                <input className="admin-input" inputMode="tel" value={bindPhone} onChange={(event) => setBindPhone(event.target.value)} />
+              </label>
+              <label>
+                <span>短信验证码</span>
+                <div className="auth-input auth-input--with-action">
+                  <ShieldCheck className="size-4" aria-hidden="true" />
+                  <input inputMode="numeric" maxLength={6} value={bindSmsCode} onChange={(event) => setBindSmsCode(event.target.value)} />
+                  <button className="auth-input__action" disabled={isSendingBindCode} type="button" onClick={() => void sendBindCode()}>
+                    {isSendingBindCode ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Send className="size-4" aria-hidden="true" />}
+                    发送
+                  </button>
+                </div>
+              </label>
+            </div>
+            {bindPhoneError ? <div className="auth-alert" role="alert"><AlertTriangle className="size-4" aria-hidden="true" /><p>{bindPhoneError}</p></div> : null}
+            {bindPhoneNotice ? <div className="admin-success" role="status"><CheckCircle2 className="size-4" aria-hidden="true" /><p>{bindPhoneNotice}</p></div> : null}
+            <button className="primary-action h-10" disabled={isBindingPhone} type="button" onClick={() => void submitBindPhone()}>
+              {isBindingPhone ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <ShieldCheck className="size-4" aria-hidden="true" />}
+              完成验证
+            </button>
+          </section>
+        ) : null}
+
+        <section className="referral-campaign-panel" aria-labelledby="referral-campaign-title">
+          <div className="referral-campaign-panel__copy">
+            <p className="settings-eyebrow">
+              <Gift className="size-4" aria-hidden="true" />
+              Invite Campaign
+            </p>
+            <h2 id="referral-campaign-title">邀请好友注册，赚生图张数和现金返现</h2>
+            <p>好友通过你的邀请链接注册，双方都能获得生图额度；好友后续充值或购买套餐，你还可以获得现金激励。</p>
+            <div className="referral-campaign-panel__rules">
+              <span>你得 {inviterRegisterCredits.toLocaleString("zh-CN")} 张</span>
+              <span>好友多得 {inviteeRegisterCredits.toLocaleString("zh-CN")} 张</span>
+              <span>充值返现 {formatPercent(rechargeCashbackRate)}</span>
+            </div>
+          </div>
+          <div className="referral-campaign-panel__actions">
+            <button className="primary-action h-10" type="button" onClick={() => setIsInviteDialogOpen(true)}>
+              <Sparkles className="size-4" aria-hidden="true" />
+              生成邀请海报
+            </button>
+            <button className="secondary-action h-10" disabled={!inviteUrl} type="button" onClick={() => void copyInviteUrl()}>
+              <Copy className="size-4" aria-hidden="true" />
+              复制邀请链接
+            </button>
+          </div>
+        </section>
 
         <section className="billing-panel billing-panel--account" aria-labelledby="billing-title">
           <div className="billing-panel__header">
@@ -895,6 +1183,25 @@ export function AccountPage({ user }: { user: AuthUser }) {
           </div>
         </section>
       </section>
+      {isInviteDialogOpen ? (
+        <InviteCampaignDialog
+          inviteCode={referral.inviteCode}
+          inviteUrl={inviteUrl}
+          inviteeRegisterCredits={inviteeRegisterCredits}
+          invitedUserCount={referral.invitedUserCount}
+          inviterRegisterCredits={inviterRegisterCredits}
+          loading={referralLoading}
+          planCashbackRate={planCashbackRate}
+          rechargeCashbackRate={rechargeCashbackRate}
+          inviteQrDataUrl={inviteQrDataUrl}
+          error={referralError}
+          notice={referralAction}
+          onClose={closeInviteDialog}
+          onCopy={() => void copyInviteUrl()}
+          onDownload={() => void downloadInvitePoster()}
+          onRefresh={() => void loadReferral()}
+        />
+      ) : null}
     </main>
   );
 }
@@ -912,6 +1219,7 @@ export function AdminPage() {
   const [alipaySettings, setAlipaySettings] = useState<AlipayFormState>(createAlipayForm());
   const [wechatMiniAppSettings, setWechatMiniAppSettings] = useState<WechatMiniAppFormState>(createWechatMiniAppForm());
   const [smtpSettings, setSmtpSettings] = useState<SmtpFormState>(createSmtpForm());
+  const [aliyunSmsSettings, setAliyunSmsSettings] = useState<AliyunSmsFormState>(createAliyunSmsForm());
   const [transactions, setTransactions] = useState<BillingTransactionRow[]>([]);
   const [referralTransactions, setReferralTransactions] = useState<BillingTransactionRow[]>([]);
   const [planDrafts, setPlanDrafts] = useState<Record<string, PlanFormState>>({});
@@ -946,6 +1254,7 @@ export function AdminPage() {
         alipayResponse,
         wechatResponse,
         smtpResponse,
+        smsResponse,
         transactionsResponse,
         referralTransactionsResponse
       ] = await Promise.all([
@@ -960,6 +1269,7 @@ export function AdminPage() {
         authFetch("/api/admin/payment/alipay"),
         authFetch("/api/admin/auth/wechat/miniapp"),
         authFetch("/api/admin/email/smtp"),
+        authFetch("/api/admin/sms/aliyun"),
         authFetch("/api/admin/billing/transactions?limit=50"),
         authFetch("/api/admin/referral/transactions?limit=100")
       ]);
@@ -996,6 +1306,9 @@ export function AdminPage() {
       }
       if (smtpResponse.ok) {
         setSmtpSettings(parseSmtpForm(await smtpResponse.json()));
+      }
+      if (smsResponse.ok) {
+        setAliyunSmsSettings(parseAliyunSmsForm(await smsResponse.json()));
       }
       if (transactionsResponse.ok) {
         setTransactions(parseBillingTransactions(await transactionsResponse.json()));
@@ -1337,6 +1650,37 @@ export function AdminPage() {
     }
   }
 
+  async function saveAliyunSmsSettings(): Promise<void> {
+    setSavingBilling("aliyun-sms");
+    setError("");
+    setNotice("");
+    try {
+      const response = await authFetch("/api/admin/sms/aliyun", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          enabled: aliyunSmsSettings.enabled,
+          accessKeyId: aliyunSmsSettings.accessKeyId,
+          accessKeySecret: aliyunSmsSettings.accessKeySecret,
+          preserveAccessKeySecret: !aliyunSmsSettings.accessKeySecret.trim() && aliyunSmsSettings.accessKeySecretSaved,
+          endpoint: aliyunSmsSettings.endpoint,
+          signName: aliyunSmsSettings.signName,
+          registerTemplateCode: aliyunSmsSettings.registerTemplateCode,
+          bindTemplateCode: aliyunSmsSettings.bindTemplateCode
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "阿里云短信配置保存失败。"));
+      }
+      setNotice("阿里云短信配置已保存。");
+      await loadAdminData({ preserveNotice: true });
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "阿里云短信配置保存失败。");
+    } finally {
+      setSavingBilling("");
+    }
+  }
+
   const draftRows = [
     ...plans.map((plan) => ({ id: plan.id, form: planDrafts[plan.id] ?? planToForm(plan), isNew: false })),
     { id: NEW_PLAN_ID, form: newPlan, isNew: true }
@@ -1528,6 +1872,38 @@ export function AdminPage() {
               <button className="secondary-action h-10" disabled={savingBilling === "alipay"} type="button" onClick={() => void saveAlipaySettings()}>
                 {savingBilling === "alipay" ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <CreditCard className="size-4" aria-hidden="true" />}
                 保存支付宝
+              </button>
+            </div>
+
+            <div className="admin-form-panel">
+              <div className="admin-form-panel__title-row">
+                <div>
+                  <p className="settings-eyebrow">SMS</p>
+                  <h3>阿里云短信验证码</h3>
+                </div>
+                <label className="admin-switch">
+                  <input
+                    checked={aliyunSmsSettings.enabled}
+                    type="checkbox"
+                    onChange={(event) => setAliyunSmsSettings({ ...aliyunSmsSettings, enabled: event.target.checked })}
+                  />
+                  <span>{aliyunSmsSettings.enabled ? "启用" : "关闭"}</span>
+                </label>
+              </div>
+              <div className="admin-form-grid admin-form-grid--two">
+                <label><span>AccessKey ID</span><input className="admin-input" value={aliyunSmsSettings.accessKeyId} onChange={(event) => setAliyunSmsSettings({ ...aliyunSmsSettings, accessKeyId: event.target.value })} /></label>
+                <label><span>Endpoint</span><input className="admin-input" value={aliyunSmsSettings.endpoint} onChange={(event) => setAliyunSmsSettings({ ...aliyunSmsSettings, endpoint: event.target.value })} /></label>
+                <label><span>短信签名</span><input className="admin-input" value={aliyunSmsSettings.signName} onChange={(event) => setAliyunSmsSettings({ ...aliyunSmsSettings, signName: event.target.value })} /></label>
+                <label><span>注册模板 Code</span><input className="admin-input" value={aliyunSmsSettings.registerTemplateCode} onChange={(event) => setAliyunSmsSettings({ ...aliyunSmsSettings, registerTemplateCode: event.target.value })} /></label>
+                <label><span>补绑模板 Code</span><input className="admin-input" value={aliyunSmsSettings.bindTemplateCode} onChange={(event) => setAliyunSmsSettings({ ...aliyunSmsSettings, bindTemplateCode: event.target.value })} /></label>
+              </div>
+              <label>
+                <span>AccessKey Secret {aliyunSmsSettings.accessKeySecretSaved ? "（已保存，留空不覆盖）" : ""}</span>
+                <input className="admin-input" type="password" value={aliyunSmsSettings.accessKeySecret} onChange={(event) => setAliyunSmsSettings({ ...aliyunSmsSettings, accessKeySecret: event.target.value })} />
+              </label>
+              <button className="secondary-action h-10" disabled={savingBilling === "aliyun-sms"} type="button" onClick={() => void saveAliyunSmsSettings()}>
+                {savingBilling === "aliyun-sms" ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Phone className="size-4" aria-hidden="true" />}
+                保存短信
               </button>
             </div>
 
@@ -2193,6 +2569,119 @@ function DataTable({
   );
 }
 
+function InviteCampaignDialog({
+  error,
+  inviteCode,
+  inviteUrl,
+  inviteeRegisterCredits,
+  invitedUserCount,
+  inviterRegisterCredits,
+  loading,
+  notice,
+  inviteQrDataUrl,
+  planCashbackRate,
+  rechargeCashbackRate,
+  onClose,
+  onCopy,
+  onDownload,
+  onRefresh
+}: {
+  error: string;
+  inviteCode: string;
+  inviteUrl: string;
+  inviteeRegisterCredits: number;
+  invitedUserCount: number;
+  inviterRegisterCredits: number;
+  loading: boolean;
+  notice: string;
+  inviteQrDataUrl: string;
+  planCashbackRate: number;
+  rechargeCashbackRate: number;
+  onClose: () => void;
+  onCopy: () => void;
+  onDownload: () => void;
+  onRefresh: () => void;
+}) {
+  return (
+    <div className="invite-dialog-backdrop" role="presentation">
+      <section aria-labelledby="invite-dialog-title" aria-modal="true" className="invite-dialog" role="dialog">
+        <button aria-label="关闭邀请活动弹窗" className="invite-dialog__close" type="button" onClick={onClose}>
+          ×
+        </button>
+        <div className="invite-dialog__poster" style={{ backgroundImage: "url('/images/referral-campaign-poster.png')" }}>
+          <div className="invite-dialog__poster-copy">
+            <span>好友注册，多赚额度</span>
+            <strong>邀请好友一起做商品图</strong>
+          </div>
+        </div>
+        <div className="invite-dialog__body">
+          <p className="settings-eyebrow">
+            <Gift className="size-4" aria-hidden="true" />
+            Referral Campaign
+          </p>
+          <h2 id="invite-dialog-title">邀请好友注册，赚生图张数和现金激励</h2>
+          <p className="invite-dialog__lead">
+            好友通过你的邀请链接完成注册，你和好友都会获得生图额度。好友后续充值或购买套餐，你还可以获得现金激励账户返现。
+          </p>
+          <div className="invite-rule-grid">
+            <div><span>你获得</span><strong>{inviterRegisterCredits.toLocaleString("zh-CN")} 张</strong></div>
+            <div><span>好友额外获得</span><strong>{inviteeRegisterCredits.toLocaleString("zh-CN")} 张</strong></div>
+            <div><span>充值返现</span><strong>{formatPercent(rechargeCashbackRate)}</strong></div>
+            <div><span>套餐返现</span><strong>{formatPercent(planCashbackRate)}</strong></div>
+          </div>
+          <InviteShareCard inviteCode={inviteCode} inviteUrl={inviteUrl} invitedUserCount={invitedUserCount} inviteQrDataUrl={inviteQrDataUrl} />
+          {notice ? <p className="billing-alert billing-alert--success">{notice}</p> : null}
+          {error ? <p className="billing-alert billing-alert--warning">{error}</p> : null}
+          <div className="invite-dialog__actions">
+            <button className="primary-action h-10" disabled={!inviteUrl} type="button" onClick={onCopy}>
+              <Copy className="size-4" aria-hidden="true" />
+              复制邀请链接
+            </button>
+            <button className="secondary-action h-10" disabled={!inviteUrl} type="button" onClick={onDownload}>
+              <Download className="size-4" aria-hidden="true" />
+              下载分享海报
+            </button>
+            <button className="secondary-action h-10" disabled={loading} type="button" onClick={onRefresh}>
+              {loading ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <RefreshCw className="size-4" aria-hidden="true" />}
+              刷新邀请信息
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function InviteShareCard({
+  inviteCode,
+  inviteUrl,
+  invitedUserCount,
+  inviteQrDataUrl
+}: {
+  inviteCode: string;
+  inviteUrl: string;
+  invitedUserCount: number;
+  inviteQrDataUrl: string;
+}) {
+  return (
+    <div className="invite-share-card">
+      <div className="invite-share-card__text">
+        <span>专属邀请海报</span>
+        <strong>扫码或打开链接注册</strong>
+        <p>{inviteUrl || "邀请链接生成中"}</p>
+        <em>已邀请 {invitedUserCount.toLocaleString("zh-CN")} 位好友</em>
+      </div>
+      <div className="invite-share-card__qr" aria-label="邀请二维码">
+        {inviteQrDataUrl ? <img alt="邀请二维码" src={inviteQrDataUrl} /> : <span>生成中</span>}
+      </div>
+      <div className="invite-share-card__code">
+        <span>邀请码</span>
+        <strong>{inviteCode || "生成中"}</strong>
+      </div>
+    </div>
+  );
+}
+
 interface AdminStats {
   totalUsers?: number;
   totalJobs?: number;
@@ -2219,6 +2708,25 @@ interface AccountBillingState {
   plans: BillingPlan[];
   transactions: BillingTransactionRow[];
   orders: BillingOrderRow[];
+}
+
+interface InviteSummaryState {
+  inviteCode: string;
+  inviteUrl?: string;
+  invitedUserCount: number;
+  successfulInviteCount: number;
+  referralBalanceCents: number;
+  currency: string;
+  settings: {
+    enabled: boolean;
+    baseRegisterCredits: number;
+    inviterRegisterCredits: number;
+    inviteeRegisterCredits: number;
+    rechargeCashbackRateBps: number;
+    planPurchaseCashbackRateBps: number;
+    minCashbackOrderAmountCents: number;
+    currency: string;
+  };
 }
 
 interface BillingPlan {
@@ -2358,6 +2866,17 @@ interface SmtpFormState {
   passwordSaved: boolean;
   fromName: string;
   fromEmail: string;
+}
+
+interface AliyunSmsFormState {
+  enabled: boolean;
+  accessKeyId: string;
+  accessKeySecret: string;
+  accessKeySecretSaved: boolean;
+  endpoint: string;
+  signName: string;
+  registerTemplateCode: string;
+  bindTemplateCode: string;
 }
 
 interface BillingTransactionRow {
@@ -2529,6 +3048,50 @@ function createAccountBillingState(user: AuthUser): AccountBillingState {
     plans: fallbackBillingPlans,
     transactions: [],
     orders: []
+  };
+}
+
+function parseInviteSummary(value: unknown, user: AuthUser): InviteSummaryState {
+  const root = isRecord(value) ? value : {};
+  const invite = isRecord(root.invite) ? root.invite : isRecord(root.data) ? root.data : root;
+  const settings = isRecord(invite.settings) ? invite.settings : {};
+  return {
+    inviteCode: stringFrom(invite.inviteCode ?? invite.invite_code ?? user.inviteCode),
+    inviteUrl: stringFrom(invite.inviteUrl ?? invite.invite_url),
+    invitedUserCount: numberFrom(invite.invitedUserCount ?? invite.invited_user_count) ?? 0,
+    successfulInviteCount: numberFrom(invite.successfulInviteCount ?? invite.successful_invite_count) ?? 0,
+    referralBalanceCents: numberFrom(invite.referralBalanceCents ?? invite.referral_balance_cents ?? user.referralBalanceCents) ?? 0,
+    currency: stringFrom(invite.currency ?? settings.currency ?? user.currency) || "CNY",
+    settings: {
+      enabled: booleanFrom(settings.enabled, true),
+      baseRegisterCredits: numberFrom(settings.baseRegisterCredits ?? settings.base_register_credits) ?? 2,
+      inviterRegisterCredits: numberFrom(settings.inviterRegisterCredits ?? settings.inviter_register_credits) ?? 4,
+      inviteeRegisterCredits: numberFrom(settings.inviteeRegisterCredits ?? settings.invitee_register_credits) ?? 6,
+      rechargeCashbackRateBps: numberFrom(settings.rechargeCashbackRateBps ?? settings.recharge_cashback_rate_bps) ?? 500,
+      planPurchaseCashbackRateBps: numberFrom(settings.planPurchaseCashbackRateBps ?? settings.plan_purchase_cashback_rate_bps) ?? 500,
+      minCashbackOrderAmountCents: numberFrom(settings.minCashbackOrderAmountCents ?? settings.min_cashback_order_amount_cents) ?? 100,
+      currency: stringFrom(settings.currency) || "CNY"
+    }
+  };
+}
+
+function createInviteSummaryState(user: AuthUser): InviteSummaryState {
+  return {
+    inviteCode: user.inviteCode ?? "",
+    invitedUserCount: 0,
+    successfulInviteCount: 0,
+    referralBalanceCents: user.referralBalanceCents ?? 0,
+    currency: user.currency ?? "CNY",
+    settings: {
+      enabled: true,
+      baseRegisterCredits: 2,
+      inviterRegisterCredits: 4,
+      inviteeRegisterCredits: 6,
+      rechargeCashbackRateBps: 500,
+      planPurchaseCashbackRateBps: 500,
+      minCashbackOrderAmountCents: 100,
+      currency: user.currency ?? "CNY"
+    }
   };
 }
 
@@ -2739,6 +3302,20 @@ function parseSmtpForm(value: unknown): SmtpFormState {
   };
 }
 
+function parseAliyunSmsForm(value: unknown): AliyunSmsFormState {
+  const sms = firstRecord(value, "sms") ?? (isRecord(value) ? value : {});
+  return {
+    enabled: booleanFrom(sms.enabled, false),
+    accessKeyId: stringFrom(sms.accessKeyId),
+    accessKeySecret: "",
+    accessKeySecretSaved: booleanFrom(sms.accessKeySecretSaved, false),
+    endpoint: stringFrom(sms.endpoint) || "dysmsapi.aliyuncs.com",
+    signName: stringFrom(sms.signName),
+    registerTemplateCode: stringFrom(sms.registerTemplateCode),
+    bindTemplateCode: stringFrom(sms.bindTemplateCode)
+  };
+}
+
 function parseBillingTransactions(value: unknown): BillingTransactionRow[] {
   return arrayFrom(value, ["transactions", "items"]).map((item, index) => ({
     id: stringFrom(item.id) || `transaction-${index}`,
@@ -2885,6 +3462,19 @@ function createSmtpForm(): SmtpFormState {
     passwordSaved: false,
     fromName: "商图 AI 助手",
     fromEmail: ""
+  };
+}
+
+function createAliyunSmsForm(): AliyunSmsFormState {
+  return {
+    enabled: false,
+    accessKeyId: "",
+    accessKeySecret: "",
+    accessKeySecretSaved: false,
+    endpoint: "dysmsapi.aliyuncs.com",
+    signName: "",
+    registerTemplateCode: "",
+    bindTemplateCode: ""
   };
 }
 
@@ -3073,6 +3663,13 @@ function formatMoney(valueCents: number, currency = "CNY"): string {
   } catch {
     return `¥${amount.toFixed(amount % 1 === 0 ? 0 : 2)}`;
   }
+}
+
+function formatPercent(value: number): string {
+  if (!Number.isFinite(value)) {
+    return "0%";
+  }
+  return `${Number(value.toFixed(2))}%`;
 }
 
 function sumAssetBytes(assets: AdminAssetRow[]): number {

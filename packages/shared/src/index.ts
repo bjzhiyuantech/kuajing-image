@@ -670,6 +670,8 @@ export interface AuthUser {
   id: string;
   numericId?: number;
   email: string;
+  phone?: string;
+  phoneVerifiedAt?: string;
   displayName: string;
   role: UserRole;
   planId?: string;
@@ -709,6 +711,11 @@ export interface UpdateAuthProfileRequest {
   displayName?: string;
   email?: string;
   password?: string;
+}
+
+export interface BindPhoneRequest {
+  phone: string;
+  smsCode: string;
 }
 
 export interface InviteRewardSettings {

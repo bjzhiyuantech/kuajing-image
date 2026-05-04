@@ -17,6 +17,8 @@ import type {
 export interface AuthUser {
   id?: string;
   email: string;
+  phone?: string;
+  phoneVerifiedAt?: string;
   displayName?: string;
   role?: string;
   planId?: string;

@@ -71,6 +71,16 @@ export const smtpRuntimeConfig = {
   fromEmail: emptyToUndefined(process.env.SMTP_FROM_EMAIL)
 };
 
+export const aliyunSmsRuntimeConfig = {
+  enabled: process.env.ALIYUN_SMS_ENABLED === "true",
+  accessKeyId: emptyToUndefined(process.env.ALIYUN_SMS_ACCESS_KEY_ID),
+  accessKeySecret: emptyToUndefined(process.env.ALIYUN_SMS_ACCESS_KEY_SECRET),
+  endpoint: emptyToUndefined(process.env.ALIYUN_SMS_ENDPOINT) ?? "dysmsapi.aliyuncs.com",
+  signName: emptyToUndefined(process.env.ALIYUN_SMS_SIGN_NAME),
+  registerTemplateCode: emptyToUndefined(process.env.ALIYUN_SMS_REGISTER_TEMPLATE_CODE),
+  bindTemplateCode: emptyToUndefined(process.env.ALIYUN_SMS_BIND_TEMPLATE_CODE)
+};
+
 export const wechatMiniAppRuntimeConfig = {
   appId: emptyToUndefined(process.env.WECHAT_MINIAPP_APP_ID),
   appSecret: emptyToUndefined(process.env.WECHAT_MINIAPP_APP_SECRET),

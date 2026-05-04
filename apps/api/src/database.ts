@@ -124,6 +124,8 @@ async function createSchema(): Promise<void> {
       id VARCHAR(64) PRIMARY KEY,
       numeric_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
       email VARCHAR(255),
+      phone VARCHAR(32),
+      phone_verified_at VARCHAR(32),
       password_hash VARCHAR(512) NOT NULL DEFAULT '',
       display_name VARCHAR(255) NOT NULL,
       role VARCHAR(32) NOT NULL DEFAULT 'user',
@@ -142,6 +144,7 @@ async function createSchema(): Promise<void> {
       updated_at VARCHAR(32) NOT NULL,
       UNIQUE KEY users_numeric_id_unique_idx (numeric_id),
       UNIQUE KEY users_email_unique_idx (email),
+      UNIQUE KEY users_phone_unique_idx (phone),
       UNIQUE KEY users_invite_code_unique_idx (invite_code),
       KEY users_inviter_user_id_idx (inviter_user_id),
       KEY users_plan_id_idx (plan_id)
@@ -189,6 +192,21 @@ async function createSchema(): Promise<void> {
       created_at VARCHAR(32) NOT NULL,
       KEY email_verification_codes_email_purpose_idx (email, purpose),
       KEY email_verification_codes_expires_at_idx (expires_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS sms_verification_codes (
+      id VARCHAR(64) PRIMARY KEY,
+      phone VARCHAR(32) NOT NULL,
+      purpose VARCHAR(32) NOT NULL,
+      code_hash VARCHAR(128) NOT NULL,
+      expires_at VARCHAR(32) NOT NULL,
+      consumed_at VARCHAR(32),
+      attempt_count INT NOT NULL DEFAULT 0,
+      sent_at VARCHAR(32) NOT NULL,
+      created_at VARCHAR(32) NOT NULL,
+      KEY sms_verification_codes_phone_purpose_idx (phone, purpose),
+      KEY sms_verification_codes_expires_at_idx (expires_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
   await pool.query(`
@@ -588,11 +606,15 @@ async function migrateUsersTable(): Promise<void> {
   await addColumnIfMissing("users", "storage_used_bytes", "BIGINT NOT NULL DEFAULT 0");
   await addColumnIfMissing("users", "currency", "VARCHAR(16) NOT NULL DEFAULT 'CNY'");
   await addColumnIfMissing("users", "numeric_id", "BIGINT UNSIGNED NOT NULL DEFAULT 0");
+  await addColumnIfMissing("users", "phone", "VARCHAR(32)");
+  await addColumnIfMissing("users", "phone_verified_at", "VARCHAR(32)");
   await makeUserEmailNullable();
   await normalizeDuplicateUserEmails();
+  await normalizeDuplicateUserPhones();
   await backfillInviteCodes();
   await backfillUsersNumericId();
   await addIndexIfMissing("users", "users_email_unique_idx", "UNIQUE KEY users_email_unique_idx (email)");
+  await addIndexIfMissing("users", "users_phone_unique_idx", "UNIQUE KEY users_phone_unique_idx (phone)");
   await addIndexIfMissing("users", "users_invite_code_unique_idx", "UNIQUE KEY users_invite_code_unique_idx (invite_code)");
   await addIndexIfMissing("users", "users_inviter_user_id_idx", "KEY users_inviter_user_id_idx (inviter_user_id)");
   await addIndexIfMissing("users", "users_plan_id_idx", "KEY users_plan_id_idx (plan_id)");
@@ -734,6 +756,18 @@ async function seedDefaultSystemSettings(): Promise<void> {
         allowBindExistingAccount: true,
         allowRegisterNewUser: true
       }
+    ],
+    [
+      "sms.aliyun",
+      {
+        enabled: false,
+        accessKeyId: "",
+        accessKeySecret: "",
+        endpoint: "dysmsapi.aliyuncs.com",
+        signName: "",
+        registerTemplateCode: "",
+        bindTemplateCode: ""
+      }
     ]
   ] as const;
 
@@ -871,6 +905,27 @@ async function normalizeDuplicateUserEmails(): Promise<void> {
     }
 
     await pool.query("UPDATE users SET email = NULL WHERE id = ?", [row.id]);
+  }
+}
+
+async function normalizeDuplicateUserPhones(): Promise<void> {
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `
+      SELECT id, phone
+      FROM users
+      WHERE phone IS NOT NULL AND phone <> ''
+      ORDER BY phone, created_at, id
+    `
+  );
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const phone = String(row.phone).trim();
+    if (!seen.has(phone)) {
+      seen.add(phone);
+      continue;
+    }
+
+    await pool.query("UPDATE users SET phone = NULL, phone_verified_at = NULL WHERE id = ?", [row.id]);
   }
 }
 

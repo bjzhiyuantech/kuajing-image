@@ -16,7 +16,6 @@ import type {
   WechatMiniAppRegisterRequest
 } from "./contracts.js";
 import { db } from "./database.js";
-import { verifyRegisterEmailCode } from "./email-service.js";
 import { ensureUserPlanCurrent } from "./plan-expiration.js";
 import {
   inviteCodeFromUserId,
@@ -26,6 +25,7 @@ import {
 } from "./referral-service.js";
 import { wechatMiniAppRuntimeConfig } from "./runtime.js";
 import { subscriptionPlans, users, wechatAccounts, workspaceMembers, workspaces } from "./schema.js";
+import { normalizePhone, validatePhone, verifyBindPhoneSmsCode, verifyRegisterSmsCode } from "./sms-service.js";
 import { getSystemSetting, saveSystemSetting } from "./system-settings.js";
 
 const DEFAULT_PLAN_ID = "free";
@@ -42,16 +42,21 @@ export interface AuthSession {
 }
 
 export interface RegisterInput {
-  email: string;
+  phone: string;
   password: string;
   displayName?: string;
-  emailCode: string;
+  smsCode: string;
   inviteCode?: string;
 }
 
 export interface LoginInput {
   email: string;
   password: string;
+}
+
+export interface BindPhoneInput {
+  phone: string;
+  smsCode: string;
 }
 
 interface WechatSession {
@@ -68,17 +73,17 @@ interface WechatBindTokenPayload {
 
 export async function registerUser(input: RegisterInput): Promise<AuthResponse> {
   requireJwtSecret();
-  const email = normalizeEmail(input.email);
+  const phone = normalizePhone(input.phone);
   const password = input.password;
-  const displayName = normalizeDisplayName(input.displayName, email);
-  validateEmail(email);
+  const displayName = normalizeDisplayName(input.displayName, phone);
+  validatePhone(phone);
   validatePassword(password);
 
-  const existing = await findUserByEmail(email);
+  const existing = await findUserByPhone(phone);
   if (existing) {
-    throw new AuthError("email_exists", "该邮箱已经注册。", 409);
+    throw new AuthError("phone_exists", "该手机号已经注册。", 409);
   }
-  await verifyRegisterEmailCode(email, input.emailCode);
+  await verifyRegisterSmsCode(phone, input.smsCode);
 
   const now = new Date().toISOString();
   const userId = randomUUID();
@@ -91,7 +96,9 @@ export async function registerUser(input: RegisterInput): Promise<AuthResponse> 
       await tx.insert(users).values({
         id: userId,
         numericId: undefined,
-        email,
+        email: null,
+        phone,
+        phoneVerifiedAt: now,
         passwordHash: hashPassword(password),
         displayName,
         role: "user",
@@ -127,7 +134,7 @@ export async function registerUser(input: RegisterInput): Promise<AuthResponse> 
     });
   } catch (error) {
     if (isDuplicateEntry(error)) {
-      throw new AuthError("email_exists", "该邮箱已经注册。", 409);
+      throw new AuthError("phone_exists", "该手机号已经注册。", 409);
     }
     throw error;
   }
@@ -137,7 +144,9 @@ export async function registerUser(input: RegisterInput): Promise<AuthResponse> 
     user: toAuthUser({
       id: userId,
       numericId: 0,
-      email,
+      email: null,
+      phone,
+      phoneVerifiedAt: now,
       passwordHash: "",
       displayName,
       role: "user",
@@ -207,6 +216,22 @@ export async function updateAuthProfile(headers: Headers, input: UpdateAuthProfi
   }
 
   await db.update(users).set(patch).where(eq(users.id, session.user.id));
+  return toMeResponse(await requireAuthSession(new Headers({ authorization: `Bearer ${parseBearerToken(headers) ?? ""}` })));
+}
+
+export async function bindCurrentUserPhone(headers: Headers, input: BindPhoneInput): Promise<AuthMeResponse> {
+  const session = await requireAuthSession(headers);
+  const phone = normalizePhone(input.phone);
+  validatePhone(phone);
+  const existing = await findUserByPhone(phone);
+  if (existing && existing.id !== session.user.id) {
+    throw new AuthError("phone_exists", "该手机号已经被其他账号绑定。", 409);
+  }
+  await verifyBindPhoneSmsCode(phone, input.smsCode);
+  await db
+    .update(users)
+    .set({ phone, phoneVerifiedAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
+    .where(eq(users.id, session.user.id));
   return toMeResponse(await requireAuthSession(new Headers({ authorization: `Bearer ${parseBearerToken(headers) ?? ""}` })));
 }
 
@@ -367,6 +392,8 @@ export async function registerWechatMiniAppUser(input: WechatMiniAppRegisterRequ
       id: userId,
       numericId: 0,
       email: email ?? null,
+      phone: null,
+      phoneVerifiedAt: null,
       passwordHash: "",
       displayName,
       role: "user",
@@ -483,6 +510,11 @@ async function findUserByEmail(email: string): Promise<(typeof users.$inferSelec
   return row;
 }
 
+async function findUserByPhone(phone: string): Promise<(typeof users.$inferSelect) | undefined> {
+  const [row] = await db.select().from(users).where(eq(users.phone, phone)).limit(1);
+  return row;
+}
+
 async function findUserById(userId: string): Promise<(typeof users.$inferSelect) | undefined> {
   const [row] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
   return row;
@@ -580,6 +612,8 @@ function toAuthUser(row: typeof users.$inferSelect, plan?: Pick<typeof subscript
   return {
     id: row.id,
     email: row.email ?? "",
+    phone: row.phone ?? "",
+    phoneVerifiedAt: row.phoneVerifiedAt ?? undefined,
     displayName: row.displayName,
     role: row.role === "admin" ? "admin" : "user",
     planId: row.planId ?? undefined,
