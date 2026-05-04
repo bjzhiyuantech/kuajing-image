@@ -2036,8 +2036,8 @@ export function AdminPage() {
                 item.userEmail || item.userId || "-",
                 billingTypeLabel(item.type),
                 item.amountCents ? formatMoney(item.amountCents, item.currency) : "-",
-                item.imageCount ? `${item.imageCount}` : "-",
-                item.amountCents ? formatMoney(item.balanceAfterCents ?? 0, item.currency) : "-",
+                rewardQuotaCount(item),
+                rewardBalanceOrQuotaAfter(item),
                 item.note || item.title
               ])}
               title="邀请奖励流水"
@@ -2358,6 +2358,8 @@ interface BillingTransactionRow {
   amountCents: number;
   currency: string;
   balanceAfterCents?: number;
+  quotaAfter?: number;
+  quotaCount?: number;
   imageCount?: number;
   note?: string;
   createdAt: string;
@@ -2735,6 +2737,8 @@ function parseBillingTransactions(value: unknown): BillingTransactionRow[] {
     amountCents: numberFrom(item.amountCents ?? item.amount_cents) ?? 0,
     currency: stringFrom(item.currency) || "CNY",
     balanceAfterCents: numberFrom(item.balanceAfterCents ?? item.balance_after_cents),
+    quotaAfter: numberFrom(item.quotaAfter ?? item.quota_after),
+    quotaCount: numberFrom(item.quotaCount ?? item.quota_count),
     imageCount: numberFrom(item.imageCount ?? item.image_count),
     note: stringFrom(item.note),
     createdAt: stringFrom(item.createdAt) || stringFrom(item.created_at)
@@ -2990,7 +2994,24 @@ function billingTypeLabel(type: string): string {
   if (type === "admin_adjustment") return "后台调整";
   if (type === "recharge") return "充值";
   if (type === "plan_purchase") return "套餐购买";
+  if (type === "referral_register_quota") return "邀请注册奖励";
+  if (type === "referral_cashback") return "邀请订单返现";
   return type || "-";
+}
+
+function rewardQuotaCount(item: BillingTransactionRow): string {
+  const count = item.quotaCount ?? item.imageCount ?? 0;
+  return count > 0 ? `${count} 张` : "-";
+}
+
+function rewardBalanceOrQuotaAfter(item: BillingTransactionRow): string {
+  if (item.type === "referral_register_quota" && typeof item.quotaAfter === "number") {
+    return `${item.quotaAfter.toLocaleString("zh-CN")} 张`;
+  }
+  if (item.amountCents) {
+    return formatMoney(item.balanceAfterCents ?? 0, item.currency);
+  }
+  return "-";
 }
 
 function orderStatusLabel(status: string): string {

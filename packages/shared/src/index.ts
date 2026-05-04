@@ -934,6 +934,7 @@ export interface BillingTransaction {
   quotaBefore?: number;
   quotaAfter?: number;
   quotaConsumed?: number;
+  quotaCount?: number;
   imageCount?: number;
   unitPriceCents?: number;
   note?: string;

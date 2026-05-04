@@ -134,6 +134,7 @@ export async function listAdminReferralTransactions(limit: number): Promise<Bill
       quotaBefore: Number(transaction.quotaBefore ?? 0),
       quotaAfter: Number(transaction.quotaAfter ?? 0),
       quotaConsumed: Number(transaction.quotaConsumed ?? 0),
+      quotaCount: Number(transaction.quotaCount ?? 0),
       imageCount: Number(transaction.imageCount ?? 0),
       unitPriceCents: Number(transaction.unitPriceCents ?? 0),
       note: transaction.note ?? undefined,
