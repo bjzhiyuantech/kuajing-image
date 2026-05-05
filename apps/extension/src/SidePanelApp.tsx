@@ -2096,6 +2096,10 @@ export function SidePanelApp() {
     return "版本升级";
   }
 
+  function scrollToPanel(panelId: string): void {
+    document.getElementById(panelId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
   function openHistoryJob(job: EcommerceJobSummary): void {
     if (!requireAuth("job")) {
       return;
@@ -3491,7 +3495,7 @@ export function SidePanelApp() {
         </div>
       </header>
 
-      <section className="panel page-panel">
+      <section className="panel page-panel" id="page-context-panel">
         <div>
           <h2>当前页面</h2>
           <p>{pageContext?.url ?? "可从商品页自动读取标题、描述和图片。"}</p>
@@ -3503,7 +3507,7 @@ export function SidePanelApp() {
         </button>
       </section>
 
-      <section className="panel reference-panel">
+      <section className="panel reference-panel" id="reference-panel">
         <div className="reference-image-field reference-image-field-standalone">
           <label>
             <span>{form.generationMode === "creative" ? "商品主图 URL" : "商品主图 URL（必填）"}</span>
@@ -3547,7 +3551,7 @@ export function SidePanelApp() {
         </div>
       </section>
 
-      <section className="panel">
+      <section className="panel" id="product-panel">
         <h2>商品信息</h2>
         <label>
           <span>商品标题</span>
@@ -3579,7 +3583,7 @@ export function SidePanelApp() {
         </div>
       </section>
 
-      <section className="panel">
+      <section className="panel" id="market-panel">
         <h2>平台与市场</h2>
         <div className="two-col">
           <label>
@@ -3601,7 +3605,7 @@ export function SidePanelApp() {
         </div>
       </section>
 
-      <section className="panel">
+      <section className="panel" id="generation-mode-panel">
         <h2>生成方式</h2>
         <div className="mode-grid">
           {generationModes.map((mode) => (
@@ -3626,7 +3630,7 @@ export function SidePanelApp() {
       </section>
 
       {form.generationMode === "category-kit" ? (
-        <section className="panel category-kit-panel">
+        <section className="panel category-kit-panel" id="scene-panel">
           <div className="kit-heading">
             <div>
               <h2>配饰-丝巾类目套图</h2>
@@ -3687,7 +3691,7 @@ export function SidePanelApp() {
           </div>
         </section>
       ) : form.generationMode === "marketing-main" ? (
-        <section className="panel marketing-main-panel">
+        <section className="panel marketing-main-panel" id="scene-panel">
           <div className="kit-heading">
             <div>
               <h2>营销主图方法论</h2>
@@ -3782,7 +3786,7 @@ export function SidePanelApp() {
           </div>
         </section>
       ) : (
-        <section className="panel">
+        <section className="panel" id="scene-panel">
           <h2>生成场景</h2>
           <div className="scene-grid">
             {availableScenes.map((scene) => (
@@ -3819,7 +3823,7 @@ export function SidePanelApp() {
         </section>
       ) : null}
 
-      <section className="panel brand-overlay-panel">
+      <section className="panel brand-overlay-panel" id="brand-panel">
         <div className="toggle-row">
           <div>
             <h2>品牌叠加</h2>
@@ -3878,7 +3882,7 @@ export function SidePanelApp() {
         ) : null}
       </section>
 
-      <section className="panel">
+      <section className="panel" id="output-panel">
         <h2>输出设置</h2>
         <div className="two-col">
           <label>
@@ -3959,7 +3963,7 @@ export function SidePanelApp() {
         </button>
       </section>
 
-      <section className="panel results-panel">
+      <section className="panel results-panel" id="results-panel">
         <div className={`status status-${task.status}`}>
           {task.status === "succeeded" ? <CheckCircle2 size={16} /> : task.status === "running" ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
           {task.message}
@@ -3969,27 +3973,46 @@ export function SidePanelApp() {
 
       {renderEditDialog()}
 
-      <section className="tool-dock" aria-label="扩展工具">
-        <div className="tool-tabs">
+      <aside className="tool-dock" aria-label="商图AI助手导航">
+        <div className="workflow-tabs" aria-label="生成流程">
+          <button className="workflow-tab" title="选图" type="button" onClick={() => scrollToPanel("reference-panel")}>
+            <ImageIcon size={20} />
+            <span>选图</span>
+          </button>
+          <button className="workflow-tab" title="信息" type="button" onClick={() => scrollToPanel("product-panel")}>
+            <Edit3 size={20} />
+            <span>信息</span>
+          </button>
+          <button className="workflow-tab" title="生成" type="button" onClick={() => scrollToPanel("scene-panel")}>
+            <Wand2 size={20} />
+            <span>生成</span>
+          </button>
+          <button className="workflow-tab" title="结果" type="button" onClick={() => scrollToPanel("results-panel")}>
+            <Send size={20} />
+            <span>结果</span>
+          </button>
+        </div>
+
+        <div className="tool-tabs" aria-label="账户工具">
           <button className={activeTool === "account" && toolPanelOpen ? "tool-tab active" : "tool-tab"} type="button" onClick={() => openTool("account")}>
-            <UserCircle2 size={15} />
-            账户
+            <UserCircle2 size={20} />
+            <span>账户</span>
           </button>
           <button className={activeTool === "billing" && toolPanelOpen ? "tool-tab active" : "tool-tab"} type="button" onClick={() => openTool("billing")}>
-            <Wallet size={15} />
-            额度
+            <Wallet size={20} />
+            <span>额度</span>
           </button>
           <button className={activeTool === "history" && toolPanelOpen ? "tool-tab active" : "tool-tab"} type="button" onClick={() => openTool("history")}>
-            <Clock3 size={15} />
-            历史
+            <Clock3 size={20} />
+            <span>历史</span>
           </button>
           <button className={activeTool === "stats" && toolPanelOpen ? "tool-tab active" : "tool-tab"} type="button" onClick={() => openTool("stats")}>
-            <BarChart3 size={15} />
-            统计
+            <BarChart3 size={20} />
+            <span>统计</span>
           </button>
           <button className={activeTool === "version" && toolPanelOpen ? "tool-tab active" : "tool-tab"} type="button" onClick={() => openTool("version")}>
-            <Download size={15} />
-            版本
+            <Download size={20} />
+            <span>版本</span>
           </button>
         </div>
 
@@ -3997,7 +4020,9 @@ export function SidePanelApp() {
           <div className="tool-panel">
             <div className="tool-panel-header">
               <strong>{toolTitle(activeTool)}</strong>
-              <button className="tool-close" type="button" onClick={() => setToolPanelOpen(false)}>收起</button>
+              <button className="tool-close" title="收起" type="button" onClick={() => setToolPanelOpen(false)}>
+                <X size={17} />
+              </button>
             </div>
 
             {activeTool === "account" ? (
@@ -4468,7 +4493,7 @@ export function SidePanelApp() {
 
           </div>
         ) : null}
-      </section>
+      </aside>
       {requiresPhoneVerification && phoneDialogOpen ? (
         <div className="phone-dialog-backdrop" role="presentation">
           <section aria-labelledby="extension-phone-dialog-title" aria-modal="true" className="phone-dialog" role="dialog">
