@@ -1293,6 +1293,50 @@ textarea:focus {
   overflow-wrap: anywhere;
 }
 
+.invite-action-banner {
+  align-items: flex-start;
+  background:
+    linear-gradient(135deg, #fff7ea 0%, #fff 56%, #eef6ff 100%);
+  border: 1px solid #f0d7a8;
+  border-radius: 8px;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  padding: 10px;
+}
+
+.invite-action-banner strong {
+  color: #8b4e00;
+  display: block;
+  font-size: 13px;
+}
+
+.invite-action-banner span {
+  color: #6d5a3a;
+  display: block;
+  font-size: 11px;
+  line-height: 1.45;
+  margin-top: 4px;
+}
+
+.invite-action-banner__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.invite-action-banner__buttons .mini-button {
+  background: #ffffff;
+  border-color: #e8c98f;
+}
+
+.invite-action-banner__buttons .mini-button:first-child {
+  background: #fff3db;
+  color: #8b4e00;
+}
+
 .button-row {
   flex-wrap: wrap;
   gap: 8px;
@@ -1322,6 +1366,164 @@ textarea:focus {
   background: #f1f5f3;
   border-radius: 8px;
   color: #17201c;
+}
+
+.invite-dialog-backdrop {
+  align-items: center;
+  background: rgb(17 24 39 / 56%);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 14px;
+  position: fixed;
+  z-index: 99;
+}
+
+.invite-dialog {
+  background: #ffffff;
+  border: 1px solid #dfe6e2;
+  border-radius: 10px;
+  box-shadow: 0 22px 70px rgb(17 24 39 / 28%);
+  display: grid;
+  gap: 12px;
+  max-width: 420px;
+  padding: 14px;
+  position: relative;
+  width: 100%;
+}
+
+.invite-dialog__close {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: #607168;
+  cursor: pointer;
+  display: inline-flex;
+  height: 32px;
+  justify-content: center;
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  width: 32px;
+}
+
+.invite-dialog__close:hover {
+  background: #f1f5f3;
+  border-radius: 8px;
+  color: #17201c;
+}
+
+.invite-dialog__hero {
+  align-items: center;
+  background: linear-gradient(135deg, #fff3db 0%, #eef6ff 100%);
+  border: 1px solid #f0d7a8;
+  border-radius: 8px;
+  color: #8b4e00;
+  display: inline-flex;
+  gap: 8px;
+  padding: 10px 12px;
+  width: fit-content;
+}
+
+.invite-dialog__hero span {
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.invite-dialog__body {
+  display: grid;
+  gap: 12px;
+}
+
+.invite-dialog__body h2 {
+  color: #17201c;
+  font-size: 18px;
+  line-height: 1.35;
+  margin: 0;
+}
+
+.invite-dialog__lead {
+  color: #4a5a51;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.invite-rule-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.invite-rule-grid div {
+  background: #f7faf8;
+  border: 1px solid #e4ebe7;
+  border-radius: 8px;
+  padding: 9px;
+}
+
+.invite-rule-grid span {
+  color: #66766d;
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.invite-rule-grid strong {
+  color: #17201c;
+  display: block;
+  font-size: 14px;
+  margin-top: 4px;
+}
+
+.invite-share-card {
+  align-items: start;
+  background: #f7faf8;
+  border: 1px solid #e4ebe7;
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 10px;
+}
+
+.invite-share-card__text span,
+.invite-share-card__code span {
+  color: #66766d;
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.invite-share-card__text strong,
+.invite-share-card__code strong {
+  color: #17201c;
+  display: block;
+  font-size: 15px;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.invite-share-card__text p {
+  color: #4a5a51;
+  font-size: 11px;
+  line-height: 1.5;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+}
+
+.invite-share-card__text em {
+  color: #0d6b52;
+  display: block;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+  margin-top: 6px;
+}
+
+.invite-dialog__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .tool-actions {

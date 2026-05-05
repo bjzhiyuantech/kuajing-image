@@ -1,4 +1,5 @@
 import {
+  Copy,
   ArrowLeft,
   BarChart3,
   CheckCircle2,
@@ -8,6 +9,7 @@ import {
   Download,
   Edit3,
   ExternalLink,
+  Gift,
   ImageIcon,
   KeyRound,
   Languages,
@@ -1157,6 +1159,7 @@ export function SidePanelApp() {
     loading: false
   });
   const [referralAction, setReferralAction] = useState("");
+  const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
   const [batchGenerationLocked, setBatchGenerationLocked] = useState(false);
   const [hiddenResultKeys, setHiddenResultKeys] = useState<Set<string>>(() => new Set());
   const [localResultRecords, setLocalResultRecords] = useState<GenerationRecord[]>([]);
@@ -1988,6 +1991,23 @@ export function SidePanelApp() {
     setReferralAction("邀请链接已复制。");
   }
 
+  function openInviteDialog(): void {
+    setInviteDialogOpen(true);
+    setActiveTool("account");
+    setToolPanelOpen(true);
+    void refreshReferral();
+  }
+
+  function closeInviteDialog(): void {
+    setInviteDialogOpen(false);
+  }
+
+  function openInviteInPanel(): void {
+    setInviteDialogOpen(false);
+    setActiveTool("account");
+    setToolPanelOpen(true);
+  }
+
   async function openPaymentUrl(url: string): Promise<void> {
     await chrome.tabs.create({ url });
   }
@@ -2082,6 +2102,10 @@ export function SidePanelApp() {
     setToolPanelOpen(true);
   }
 
+  function openReferralCampaign(): void {
+    openInviteDialog();
+  }
+
   function openQueuedJobHistory(): void {
     setQueuedJobDialog(null);
     openTool("history");
@@ -2094,6 +2118,12 @@ export function SidePanelApp() {
     if (tab === "history") return "历史任务";
     if (tab === "stats") return "统计概览";
     return "版本升级";
+  }
+
+  function openReferralCampaignPage(): void {
+    const inviteCode = referralState.data?.inviteCode || auth.user?.inviteCode;
+    const url = inviteCode ? `${apiBaseUrl().replace(/\/$/u, "")}/register?inviteCode=${encodeURIComponent(inviteCode)}` : `${apiBaseUrl().replace(/\/$/u, "")}/register`;
+    void chrome.tabs.create({ url });
   }
 
   function scrollToPanel(panelId: string): void {
@@ -3998,6 +4028,10 @@ export function SidePanelApp() {
             <UserCircle2 size={20} />
             <span>账户</span>
           </button>
+          <button className={activeTool === "account" && toolPanelOpen ? "tool-tab active" : "tool-tab"} type="button" onClick={() => openReferralCampaign()}>
+            <Gift size={20} />
+            <span>邀请</span>
+          </button>
           <button className={activeTool === "billing" && toolPanelOpen ? "tool-tab active" : "tool-tab"} type="button" onClick={() => openTool("billing")}>
             <Wallet size={20} />
             <span>额度</span>
@@ -4065,6 +4099,22 @@ export function SidePanelApp() {
                       <div><span>邀请激励</span><strong>{formatMoney(referralState.data?.referralBalanceCents ?? auth.user?.referralBalanceCents ?? 0, referralState.data?.currency || auth.user?.currency)}</strong></div>
                       <div><span>已用张数</span><strong>{formatCount(accountQuota.quotaUsed)}/{formatCount(accountQuota.quotaTotal)}</strong></div>
                       <div><span>套餐余量</span><strong>{formatCount(accountQuota.remaining)}</strong></div>
+                    </div>
+                    <div className="invite-action-banner" id="referral-campaign">
+                      <div>
+                        <strong>邀请好友活动</strong>
+                        <span>好友注册送生图额度，充值/买套餐你拿现金返现。</span>
+                      </div>
+                      <div className="invite-action-banner__buttons">
+                        <button className="mini-button" type="button" onClick={openReferralCampaignPage}>
+                          <ExternalLink size={13} />
+                          打开 PC 页面
+                        </button>
+                        <button className="mini-button" type="button" onClick={() => void copyInviteLink()}>
+                          <Gift size={13} />
+                          复制邀请链接
+                        </button>
+                      </div>
                     </div>
                     <div className="invite-card">
                       <div>
@@ -4525,6 +4575,73 @@ export function SidePanelApp() {
               {bindPhoneLoading ? <Loader2 className="spin" size={15} /> : <CheckCircle2 size={15} />}
               完成验证
             </button>
+          </section>
+        </div>
+      ) : null}
+      {inviteDialogOpen ? (
+        <div className="invite-dialog-backdrop" role="presentation" onClick={closeInviteDialog}>
+          <section
+            aria-labelledby="extension-invite-dialog-title"
+            aria-modal="true"
+            className="invite-dialog"
+            role="dialog"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button aria-label="关闭邀请活动弹窗" className="invite-dialog__close" type="button" onClick={closeInviteDialog}>
+              <X size={16} />
+            </button>
+            <div className="invite-dialog__hero">
+              <Gift size={18} />
+              <span>邀请活动</span>
+            </div>
+            <div className="invite-dialog__body">
+              <h2 id="extension-invite-dialog-title">邀请好友注册，双方都能拿到生图张数</h2>
+              <p className="invite-dialog__lead">
+                好友通过邀请链接注册后，你和好友都会得到张数激励；好友后续充值或购买套餐，你还能获得现金返现进入邀请激励账户。
+              </p>
+              <div className="invite-rule-grid">
+                <div>
+                  <span>你获得</span>
+                  <strong>{formatCount(referralState.data?.settings.inviterRegisterCredits)} 张</strong>
+                </div>
+                <div>
+                  <span>好友获得</span>
+                  <strong>{formatCount(referralState.data?.settings.inviteeRegisterCredits)} 张</strong>
+                </div>
+                <div>
+                  <span>充值返现</span>
+                  <strong>{((referralState.data?.settings.rechargeCashbackRateBps ?? 0) / 100).toFixed(0)}%</strong>
+                </div>
+              </div>
+              <div className="invite-share-card">
+                <div className="invite-share-card__text">
+                  <span>我的邀请码</span>
+                  <strong>{referralState.data?.inviteCode || auth.user?.inviteCode || "生成中"}</strong>
+                  <p>{referralState.data?.inviteUrl || "刷新后可生成邀请链接。"}</p>
+                  <em>当前邀请人数 {formatCount(referralState.data?.invitedUserCount)} 人</em>
+                </div>
+                <div className="invite-share-card__code">
+                  <span>分享方式</span>
+                  <strong>链接 / 二维码 / 海报</strong>
+                </div>
+              </div>
+              {referralAction ? <p className="settings-note">{referralAction}</p> : null}
+              {referralState.error ? <p className="tool-error">{referralState.error}</p> : null}
+              <div className="invite-dialog__actions">
+                <button className="primary-button" disabled={referralState.loading} type="button" onClick={() => void copyInviteLink()}>
+                  <Copy size={15} />
+                  复制邀请链接
+                </button>
+                <button className="secondary-button" type="button" onClick={openInviteInPanel}>
+                  <UserCircle2 size={15} />
+                  插件内查看
+                </button>
+                <button className="secondary-button" type="button" onClick={openReferralCampaignPage}>
+                  <ExternalLink size={15} />
+                  打开 PC 页面
+                </button>
+              </div>
+            </div>
           </section>
         </div>
       ) : null}
