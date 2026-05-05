@@ -5,7 +5,7 @@
 html,
 body,
 #root {
-  min-width: 860px;
+  min-width: 0;
 }
 
 body {
@@ -24,7 +24,7 @@ textarea {
 
 .app-shell {
   min-height: 100vh;
-  padding: 14px 116px 14px 18px;
+  padding: 14px 116px 14px 14px;
   position: relative;
 }
 
@@ -1267,10 +1267,44 @@ textarea:focus {
   overflow-wrap: anywhere;
 }
 
-.invite-card {
+.invite-summary-card,
+.invite-card,
+.about-card,
+.about-contact-grid,
+.customer-service-card {
   background: #ffffff;
   border: 1px solid #e4ebe7;
   border-radius: 7px;
+}
+
+.invite-summary-card {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 10px;
+  padding: 8px;
+}
+
+.invite-summary-card span,
+.about-contact-grid span,
+.customer-service-card span {
+  color: #66766d;
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.invite-summary-card strong,
+.about-contact-grid strong,
+.customer-service-card strong {
+  color: #17201c;
+  display: block;
+  font-size: 13px;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}
+
+.invite-card {
   display: grid;
   gap: 8px;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1321,20 +1355,71 @@ textarea:focus {
 }
 
 .invite-action-banner__buttons {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
   gap: 8px;
-  justify-content: flex-end;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 10px;
 }
 
 .invite-action-banner__buttons .mini-button {
   background: #ffffff;
   border-color: #e8c98f;
+  justify-content: center;
 }
 
 .invite-action-banner__buttons .mini-button:first-child {
-  background: #fff3db;
-  color: #8b4e00;
+  grid-column: 1 / -1;
+}
+
+.about-card {
+  margin-bottom: 10px;
+  padding: 10px;
+}
+
+.about-card__brand {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.about-card__brand strong {
+  color: #17201c;
+  display: block;
+  font-size: 15px;
+}
+
+.about-card__brand span,
+.about-card p {
+  color: #66766d;
+  display: block;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.about-contact-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 10px;
+  padding: 8px;
+}
+
+.customer-service-card {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  padding: 10px;
+}
+
+.customer-service-card img {
+  border: 1px solid #e4ebe7;
+  border-radius: 8px;
+  height: 112px;
+  object-fit: cover;
+  width: 112px;
 }
 
 .button-row {
@@ -1783,7 +1868,6 @@ textarea:focus {
 .version-update-title strong {
   font-size: 15px;
 }
-
 .version-notes {
   color: #4a5a51;
   font-size: 12px;
@@ -2186,6 +2270,22 @@ textarea:focus {
   .stats-grid,
   .quota-summary-grid {
     grid-template-columns: 1fr;
+  }
+
+  .invite-summary-card,
+  .invite-card,
+  .about-contact-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .customer-service-card {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .customer-service-card img {
+    height: 160px;
+    width: 100%;
   }
 }
 

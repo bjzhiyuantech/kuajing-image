@@ -107,9 +107,9 @@ interface StoredBatchJob {
   token?: string;
 }
 
-type ToolTab = "account" | "billing" | "history" | "stats" | "version";
+type ToolTab = "account" | "billing" | "history" | "stats" | "referral" | "about";
 type AuthMode = "login" | "register";
-type PendingAuthAction = "generate" | "billing" | "history" | "stats" | "job";
+type PendingAuthAction = "generate" | "billing" | "history" | "stats" | "referral" | "job";
 
 interface EcommerceJobSummary {
   id: string;
@@ -1378,10 +1378,10 @@ export function SidePanelApp() {
     if (activeTool === "stats") {
       void refreshStats();
     }
-    if (activeTool === "billing") {
+    if (activeTool === "billing" || activeTool === "stats") {
       void refreshBilling();
     }
-    if (activeTool === "account" && auth.token.trim()) {
+    if ((activeTool === "account" || activeTool === "referral") && auth.token.trim()) {
       void refreshReferral();
     }
   }, [activeTool, auth.token, toolPanelOpen]);
@@ -1993,7 +1993,7 @@ export function SidePanelApp() {
 
   function openInviteDialog(): void {
     setInviteDialogOpen(true);
-    setActiveTool("account");
+    setActiveTool("referral");
     setToolPanelOpen(true);
     void refreshReferral();
   }
@@ -2004,7 +2004,7 @@ export function SidePanelApp() {
 
   function openInviteInPanel(): void {
     setInviteDialogOpen(false);
-    setActiveTool("account");
+    setActiveTool("referral");
     setToolPanelOpen(true);
   }
 
@@ -2090,7 +2090,7 @@ export function SidePanelApp() {
   }
 
   function openTool(tab: ToolTab): void {
-    if ((tab === "billing" || tab === "history" || tab === "stats") && !auth.token.trim()) {
+    if ((tab === "billing" || tab === "history" || tab === "stats" || tab === "referral") && !auth.token.trim()) {
       setPendingAuthAction(tab);
       setAuthMode("login");
       setAuthError("请先登录账号，再查看个人数据。");
@@ -2103,7 +2103,7 @@ export function SidePanelApp() {
   }
 
   function openReferralCampaign(): void {
-    openInviteDialog();
+    openTool("referral");
   }
 
   function openQueuedJobHistory(): void {
@@ -2114,10 +2114,11 @@ export function SidePanelApp() {
 
   function toolTitle(tab: ToolTab): string {
     if (tab === "account") return "账户";
-    if (tab === "billing") return "套餐与余额";
-    if (tab === "history") return "历史任务";
+    if (tab === "billing") return "套餐";
+    if (tab === "history") return "任务";
     if (tab === "stats") return "统计概览";
-    return "版本升级";
+    if (tab === "referral") return "邀请活动";
+    return "关于";
   }
 
   function openReferralCampaignPage(): void {
@@ -3510,7 +3511,7 @@ export function SidePanelApp() {
         </div>
         <div className="topbar-actions">
           {extensionVersionState.update ? (
-            <button className="update-badge" title={`发现新版本 ${extensionVersionState.update.version}`} type="button" onClick={() => openTool("version")}>
+            <button className="update-badge" title={`发现新版本 ${extensionVersionState.update.version}`} type="button" onClick={() => openTool("about")}>
               <Download size={14} />
               <span>升级</span>
             </button>
@@ -4028,25 +4029,25 @@ export function SidePanelApp() {
             <UserCircle2 size={20} />
             <span>账户</span>
           </button>
-          <button className={activeTool === "account" && toolPanelOpen ? "tool-tab active" : "tool-tab"} type="button" onClick={() => openReferralCampaign()}>
-            <Gift size={20} />
-            <span>邀请</span>
-          </button>
           <button className={activeTool === "billing" && toolPanelOpen ? "tool-tab active" : "tool-tab"} type="button" onClick={() => openTool("billing")}>
-            <Wallet size={20} />
-            <span>额度</span>
+            <Package size={20} />
+            <span>套餐</span>
           </button>
           <button className={activeTool === "history" && toolPanelOpen ? "tool-tab active" : "tool-tab"} type="button" onClick={() => openTool("history")}>
             <Clock3 size={20} />
-            <span>历史</span>
+            <span>任务</span>
           </button>
           <button className={activeTool === "stats" && toolPanelOpen ? "tool-tab active" : "tool-tab"} type="button" onClick={() => openTool("stats")}>
             <BarChart3 size={20} />
             <span>统计</span>
           </button>
-          <button className={activeTool === "version" && toolPanelOpen ? "tool-tab active" : "tool-tab"} type="button" onClick={() => openTool("version")}>
+          <button className={activeTool === "referral" && toolPanelOpen ? "tool-tab active" : "tool-tab"} type="button" onClick={() => openReferralCampaign()}>
+            <Gift size={20} />
+            <span>邀请</span>
+          </button>
+          <button className={activeTool === "about" && toolPanelOpen ? "tool-tab active" : "tool-tab"} type="button" onClick={() => openTool("about")}>
             <Download size={20} />
-            <span>版本</span>
+            <span>关于</span>
           </button>
         </div>
 
@@ -4096,79 +4097,21 @@ export function SidePanelApp() {
                       <div><span>当前套餐</span><strong>{billingState.data.currentPlan?.name || auth.user?.planName || auth.user?.planId || "未设置"}</strong></div>
                       <div><span>套餐到期</span><strong>{billingState.data.currentPlanExpiresAt || auth.user?.planExpiresAt ? formatDateTime(billingState.data.currentPlanExpiresAt || auth.user?.planExpiresAt) : "长期"}</strong></div>
                       <div><span>账户余额</span><strong>{formatMoney(billingState.data.balanceCents ?? auth.user?.balanceCents ?? 0, billingState.data.currency || auth.user?.currency)}</strong></div>
-                      <div><span>邀请激励</span><strong>{formatMoney(referralState.data?.referralBalanceCents ?? auth.user?.referralBalanceCents ?? 0, referralState.data?.currency || auth.user?.currency)}</strong></div>
                       <div><span>已用张数</span><strong>{formatCount(accountQuota.quotaUsed)}/{formatCount(accountQuota.quotaTotal)}</strong></div>
                       <div><span>套餐余量</span><strong>{formatCount(accountQuota.remaining)}</strong></div>
                     </div>
-                    <div className="invite-action-banner" id="referral-campaign">
-                      <div>
-                        <strong>邀请好友活动</strong>
-                        <span>好友注册送生图额度，充值/买套餐你拿现金返现。</span>
-                      </div>
-                      <div className="invite-action-banner__buttons">
-                        <button className="mini-button" type="button" onClick={openReferralCampaignPage}>
-                          <ExternalLink size={13} />
-                          打开 PC 页面
-                        </button>
-                        <button className="mini-button" type="button" onClick={() => void copyInviteLink()}>
-                          <Gift size={13} />
-                          复制邀请链接
-                        </button>
-                      </div>
-                    </div>
-                    <div className="invite-card">
-                      <div>
-                        <span>我的邀请码</span>
-                        <strong>{referralState.data?.inviteCode || auth.user?.inviteCode || "生成中"}</strong>
-                      </div>
-                      <div>
-                        <span>邀请人数</span>
-                        <strong>{formatCount(referralState.data?.invitedUserCount)} 人</strong>
-                      </div>
-                      <div>
-                        <span>充值返现</span>
-                        <strong>{((referralState.data?.settings.rechargeCashbackRateBps ?? 0) / 100).toFixed(0)}%</strong>
-                      </div>
-                    </div>
-                    <div className="invite-list">
-                      <div className="invite-list__head">
-                        <strong>我邀请的人</strong>
-                        <span>{formatCount(referralState.data?.invitedUserCount)} 人</span>
-                      </div>
-                      <div className="invite-list__body">
-                        {(referralState.data?.invitees || []).length > 0 ? (
-                          referralState.data!.invitees!.map((item) => (
-                            <div className="invite-list__item" key={item.userId}>
-                              <div className="invite-list__main">
-                                <strong>{item.displayName || item.email || item.userId}</strong>
-                                <span>{item.email || item.userId}</span>
-                              </div>
-                              <time>{formatDateTime(item.createdAt)}</time>
-                            </div>
-                          ))
-                        ) : (
-                          <p className="settings-note">暂无邀请记录。</p>
-                        )}
-                      </div>
-                    </div>
-                    {referralAction ? <p className="settings-note">{referralAction}</p> : null}
-                    {referralState.error ? <p className="tool-error">{referralState.error}</p> : null}
                     <div className="button-row">
                       <button className="mini-button" type="button" onClick={() => void refreshMe()}>
                         <RefreshCw size={13} />
                         刷新账户
                       </button>
-                      <button className="mini-button" disabled={referralState.loading} type="button" onClick={() => void refreshReferral()}>
-                        {referralState.loading ? <Loader2 className="spin" size={13} /> : <RefreshCw size={13} />}
-                        刷新邀请
-                      </button>
-                      <button className="mini-button" type="button" onClick={() => void copyInviteLink()}>
-                        <ExternalLink size={13} />
-                        复制邀请链接
-                      </button>
                       <button className="mini-button" type="button" onClick={() => openTool("billing")}>
                         <CreditCard size={13} />
                         购买/充值
+                      </button>
+                      <button className="mini-button" type="button" onClick={() => openTool("referral")}>
+                        <Gift size={13} />
+                        邀请活动
                       </button>
                     </div>
                   </div>
@@ -4244,7 +4187,7 @@ export function SidePanelApp() {
             {activeTool === "billing" ? (
               <div>
                 <div className="tool-actions">
-                  <span>套餐购买与支付宝余额充值</span>
+                  <span>充值、购买套餐与订单</span>
                   <button className="mini-button" disabled={billingState.loading} type="button" onClick={() => void refreshBilling()}>
                     {billingState.loading ? <Loader2 className="spin" size={13} /> : <RefreshCw size={13} />}
                     刷新
@@ -4272,22 +4215,6 @@ export function SidePanelApp() {
                     {billingActionLoading ? <Loader2 className="spin" size={15} /> : <Wallet size={15} />}
                     充值
                   </button>
-                </div>
-                <div className="billing-usage-card">
-                  <div className="quota-title-row">
-                    <div>
-                      <strong>图片生成张数</strong>
-                      <span>{formatCount(accountQuota.remaining)} 张可用</span>
-                    </div>
-                    <span>{accountQuota.percent}% 已用</span>
-                  </div>
-                  <div className="quota-meter">
-                    <span style={{ width: `${accountQuota.percent}%` }} />
-                  </div>
-                  <div className="quota-row">
-                    <span>{formatCount(accountQuota.quotaUsed)} 已用</span>
-                    <span>{formatCount(accountQuota.quotaTotal)} 总额度</span>
-                  </div>
                 </div>
                 <div className="plan-list">
                   {billingState.data.plans.map((plan) => (
@@ -4336,30 +4263,6 @@ export function SidePanelApp() {
                           <div>
                             <strong>{formatMoney(order.amountCents, order.currency)}</strong>
                             <span>{order.paymentProvider}</span>
-                          </div>
-                        </article>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                <div className="billing-usage-card">
-                  <div className="tool-actions compact">
-                    <span>生图与扣费明细</span>
-                    <CreditCard size={13} />
-                  </div>
-                  {billingState.data.transactions.length === 0 ? (
-                    <p className="tool-empty">暂无扣费明细。</p>
-                  ) : (
-                    <div className="billing-ledger-list">
-                      {billingState.data.transactions.slice(0, 8).map((transaction) => (
-                        <article className="billing-ledger-item" key={transaction.id}>
-                          <div>
-                            <strong>{billingTransactionLabel(transaction.type)}</strong>
-                            <span>{transaction.note || transaction.title}</span>
-                          </div>
-                          <div>
-                            <strong>{formatMoney(transaction.amountCents, transaction.currency)}</strong>
-                            <span>{formatDateTime(transaction.createdAt)}</span>
                           </div>
                         </article>
                       ))}
@@ -4490,11 +4393,141 @@ export function SidePanelApp() {
                   <div><span>进行中</span><strong>{statsState.data.runningJobs}</strong></div>
                   <div className="wide-stat"><span>生成图片</span><strong>{statsState.data.generatedImages}</strong></div>
                 </div>
+                <div className="billing-usage-card">
+                  <div className="tool-actions compact">
+                    <span>生图与扣费明细</span>
+                    <CreditCard size={13} />
+                  </div>
+                  {billingState.data.transactions.length === 0 ? (
+                    <p className="tool-empty">暂无扣费明细。</p>
+                  ) : (
+                    <div className="billing-ledger-list">
+                      {billingState.data.transactions.slice(0, 10).map((transaction) => (
+                        <article className="billing-ledger-item" key={transaction.id}>
+                          <div>
+                            <strong>{billingTransactionLabel(transaction.type)}</strong>
+                            <span>{transaction.note || transaction.title}</span>
+                          </div>
+                          <div>
+                            <strong>{formatMoney(transaction.amountCents, transaction.currency)}</strong>
+                            <span>{formatDateTime(transaction.createdAt)}</span>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             ) : null}
 
-            {activeTool === "version" ? (
+            {activeTool === "referral" ? (
               <div>
+                <div className="tool-actions">
+                  <span>邀请好友注册与充值返现</span>
+                  <button className="mini-button" disabled={referralState.loading} type="button" onClick={() => void refreshReferral()}>
+                    {referralState.loading ? <Loader2 className="spin" size={13} /> : <RefreshCw size={13} />}
+                    刷新
+                  </button>
+                </div>
+                <div className="invite-summary-card">
+                  <div>
+                    <span>已邀请</span>
+                    <strong>{formatCount(referralState.data?.invitedUserCount)} 人</strong>
+                  </div>
+                  <div>
+                    <span>获得现金激励</span>
+                    <strong>{formatMoney(referralState.data?.referralBalanceCents ?? auth.user?.referralBalanceCents ?? 0, referralState.data?.currency || auth.user?.currency)}</strong>
+                  </div>
+                  <div>
+                    <span>注册送图</span>
+                    <strong>{formatCount(referralState.data?.settings.inviterRegisterCredits)} 张</strong>
+                  </div>
+                </div>
+                <div className="invite-card">
+                  <div>
+                    <span>我的邀请码</span>
+                    <strong>{referralState.data?.inviteCode || auth.user?.inviteCode || "生成中"}</strong>
+                  </div>
+                  <div>
+                    <span>好友奖励</span>
+                    <strong>{formatCount(referralState.data?.settings.inviteeRegisterCredits)} 张</strong>
+                  </div>
+                  <div>
+                    <span>充值返现</span>
+                    <strong>{((referralState.data?.settings.rechargeCashbackRateBps ?? 0) / 100).toFixed(0)}%</strong>
+                  </div>
+                </div>
+                <div className="invite-action-banner" id="referral-campaign">
+                  <div>
+                    <strong>邀请活动</strong>
+                    <span>好友通过你的链接注册后，双方获得生图张数；好友充值或买套餐后，你获得现金返现激励。</span>
+                  </div>
+                  <div className="invite-action-banner__buttons">
+                    <button className="mini-button" type="button" onClick={openReferralCampaignPage}>
+                      <ExternalLink size={13} />
+                      打开 PC 页面
+                    </button>
+                    <button className="mini-button" type="button" onClick={() => void copyInviteLink()}>
+                      <Gift size={13} />
+                      复制邀请链接
+                    </button>
+                  </div>
+                </div>
+                <div className="invite-list">
+                  <div className="invite-list__head">
+                    <strong>我邀请的人</strong>
+                    <span>{formatCount(referralState.data?.invitedUserCount)} 人</span>
+                  </div>
+                  <div className="invite-list__body">
+                    {(referralState.data?.invitees || []).length > 0 ? (
+                      referralState.data!.invitees!.map((item) => (
+                        <div className="invite-list__item" key={item.userId}>
+                          <div className="invite-list__main">
+                            <strong>{item.displayName || item.email || item.userId}</strong>
+                            <span>{item.email || item.userId}</span>
+                          </div>
+                          <time>{formatDateTime(item.createdAt)}</time>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="settings-note">暂无邀请记录。</p>
+                    )}
+                  </div>
+                </div>
+                {referralAction ? <p className="settings-note">{referralAction}</p> : null}
+                {referralState.error ? <p className="tool-error">{referralState.error}</p> : null}
+              </div>
+            ) : null}
+
+            {activeTool === "about" ? (
+              <div>
+                <div className="about-card">
+                  <div className="about-card__brand">
+                    <Settings size={18} />
+                    <div>
+                      <strong>商图AI助手</strong>
+                      <span>面向跨境与电商运营的商品图批量生成工具。</span>
+                    </div>
+                  </div>
+                  <p>插件会读取当前商品页信息与候选图片，帮助你生成主图、场景图、卖点图、营销主图和多语言图片翻译结果。账户、套餐、任务、统计和邀请活动都集中在右侧侧栏管理。</p>
+                </div>
+                <div className="about-contact-grid">
+                  <div>
+                    <span>官网</span>
+                    <strong>imagen.neimou.com</strong>
+                  </div>
+                  <div>
+                    <span>客服微信</span>
+                    <strong>扫码添加</strong>
+                  </div>
+                </div>
+                <div className="customer-service-card">
+                  <div>
+                    <strong>客服微信二维码</strong>
+                    <span>用于咨询套餐、任务状态和产品使用问题。</span>
+                  </div>
+                  <img alt="客服微信二维码" src="/images/customer-service-qr.png" />
+                </div>
                 <div className="tool-actions">
                   <span>自动检测插件更新</span>
                   <button className="mini-button" disabled={extensionVersionState.loading} type="button" onClick={() => void checkExtensionUpdate("manual")}>
