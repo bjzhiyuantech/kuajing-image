@@ -24,7 +24,7 @@ textarea {
 
 .app-shell {
   min-height: 100vh;
-  padding: 14px 116px 14px 14px;
+  padding: 14px 132px 14px 14px;
   position: relative;
 }
 
@@ -1031,7 +1031,7 @@ textarea:focus {
   position: fixed;
   right: 0;
   top: 0;
-  width: 96px;
+  width: 112px;
   z-index: 20;
 }
 
@@ -1058,8 +1058,8 @@ textarea:focus {
   gap: 6px;
   justify-content: center;
   min-height: 60px;
-  padding: 7px 4px;
-  width: 74px;
+  padding: 8px 6px;
+  width: 88px;
 }
 
 .workflow-tab svg,
@@ -1127,9 +1127,9 @@ textarea:focus {
   overflow: auto;
   padding: 14px;
   position: fixed;
-  right: 96px;
+  right: 112px;
   top: 14px;
-  width: min(420px, calc(100vw - 124px));
+  width: min(480px, calc(100vw - 138px));
   z-index: 19;
 }
 
@@ -1241,7 +1241,7 @@ textarea:focus {
 .account-meta {
   display: grid;
   gap: 8px;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   margin: 10px 0;
 }
 
@@ -1280,7 +1280,7 @@ textarea:focus {
 .invite-summary-card {
   display: grid;
   gap: 8px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
   margin-bottom: 10px;
   padding: 8px;
 }
@@ -1307,7 +1307,7 @@ textarea:focus {
 .invite-card {
   display: grid;
   gap: 8px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
   margin-bottom: 10px;
   padding: 8px;
 }
@@ -1400,7 +1400,7 @@ textarea:focus {
 .about-contact-grid {
   display: grid;
   gap: 8px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
   margin-bottom: 10px;
   padding: 8px;
 }
@@ -1748,7 +1748,7 @@ textarea:focus {
   align-items: start;
   display: grid;
   gap: 8px;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.95fr) auto;
   margin-bottom: 10px;
   padding: 11px;
 }
@@ -2139,7 +2139,7 @@ textarea:focus {
 .stats-grid {
   display: grid;
   gap: 8px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
 }
 
 .stats-grid div {
@@ -2235,26 +2235,26 @@ textarea:focus {
 
 @media (max-width: 520px) {
   .app-shell {
-    padding-right: 78px;
+    padding-right: 90px;
   }
 
   .tool-dock {
     padding-left: 7px;
     padding-right: 7px;
-    width: 68px;
+    width: 80px;
   }
 
   .workflow-tab,
   .tool-tab {
     font-size: 10px;
     min-height: 56px;
-    width: 54px;
+    width: 62px;
   }
 
   .tool-panel {
-    right: 68px;
+    right: 80px;
     top: 8px;
-    width: min(360px, calc(100vw - 82px));
+    width: min(390px, calc(100vw - 94px));
   }
 
   .topbar {
