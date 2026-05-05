@@ -1327,50 +1327,6 @@ textarea:focus {
   overflow-wrap: anywhere;
 }
 
-.invite-action-banner {
-  align-items: flex-start;
-  background:
-    linear-gradient(135deg, #fff7ea 0%, #fff 56%, #eef6ff 100%);
-  border: 1px solid #f0d7a8;
-  border-radius: 8px;
-  display: flex;
-  gap: 10px;
-  justify-content: space-between;
-  margin-bottom: 10px;
-  padding: 10px;
-}
-
-.invite-action-banner strong {
-  color: #8b4e00;
-  display: block;
-  font-size: 13px;
-}
-
-.invite-action-banner span {
-  color: #6d5a3a;
-  display: block;
-  font-size: 11px;
-  line-height: 1.45;
-  margin-top: 4px;
-}
-
-.invite-action-banner__buttons {
-  display: grid;
-  gap: 8px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  margin-top: 10px;
-}
-
-.invite-action-banner__buttons .mini-button {
-  background: #ffffff;
-  border-color: #e8c98f;
-  justify-content: center;
-}
-
-.invite-action-banner__buttons .mini-button:first-child {
-  grid-column: 1 / -1;
-}
-
 .about-card {
   margin-bottom: 10px;
   padding: 10px;

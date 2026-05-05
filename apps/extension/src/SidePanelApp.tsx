@@ -4465,22 +4465,6 @@ export function SidePanelApp() {
                     <strong>{((referralState.data?.settings.rechargeCashbackRateBps ?? 0) / 100).toFixed(0)}%</strong>
                   </div>
                 </div>
-                <div className="invite-action-banner" id="referral-campaign">
-                  <div>
-                    <strong>邀请活动</strong>
-                    <span>好友通过你的链接注册后，双方获得生图张数；好友充值或买套餐后，你获得现金返现激励。</span>
-                  </div>
-                  <div className="invite-action-banner__buttons">
-                    <button className="mini-button" type="button" onClick={openReferralCampaignPage}>
-                      <ExternalLink size={13} />
-                      打开 PC 页面
-                    </button>
-                    <button className="mini-button" type="button" onClick={() => void copyInviteLink()}>
-                      <Gift size={13} />
-                      复制邀请链接
-                    </button>
-                  </div>
-                </div>
                 <div className="invite-list">
                   <div className="invite-list__head">
                     <strong>我邀请的人</strong>
