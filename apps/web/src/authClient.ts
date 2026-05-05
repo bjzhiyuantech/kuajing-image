@@ -255,6 +255,8 @@ export function parseAuthUser(value: unknown): AuthUser {
   return {
     id: stringFrom(value.id) || stringFrom(value.userId) || stringFrom(value.email) || "current-user",
     email: stringFrom(value.email) || "unknown@example.com",
+    phone: stringFrom(value.phone ?? value.mobile),
+    phoneVerifiedAt: stringFrom(value.phoneVerifiedAt ?? value.phone_verified_at),
     displayName: stringFrom(value.displayName) || stringFrom(value.name) || stringFrom(value.email) || "未命名用户",
     role: stringFrom(value.role) || "user",
     planId: stringFrom(value.planId ?? value.plan_id),
