@@ -1984,6 +1984,50 @@ export function App() {
     }
   }, [currentUser, isAuthenticated, navigateToRoute, route]);
 
+  const refreshCurrentUser = useCallback(async (): Promise<void> => {
+    if (!getStoredAuthToken()) {
+      return;
+    }
+    try {
+      const user = await fetchCurrentUser();
+      setCurrentUser(user);
+    } catch {
+      // Auth expiration is handled globally by authFetch.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      return;
+    }
+
+    const refreshWhenVisible = (): void => {
+      if (document.visibilityState === "visible") {
+        void refreshCurrentUser();
+      }
+    };
+
+    window.addEventListener("focus", refreshWhenVisible);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      window.removeEventListener("focus", refreshWhenVisible);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, [isAuthenticated, refreshCurrentUser]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !currentUser || currentUser.phone || isAdminUser(currentUser)) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void refreshCurrentUser();
+    }, 5000);
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [currentUser, isAuthenticated, refreshCurrentUser]);
+
   useEffect(() => {
     if (!isAuthenticated) {
       setEcommerceStats(emptyEcommerceStats);
