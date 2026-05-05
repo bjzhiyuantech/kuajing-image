@@ -1417,9 +1417,11 @@ textarea:focus {
 .customer-service-card img {
   border: 1px solid #e4ebe7;
   border-radius: 8px;
-  height: 112px;
-  object-fit: cover;
-  width: 112px;
+  display: block;
+  flex: 0 0 auto;
+  height: 88px;
+  object-fit: contain;
+  width: 88px;
 }
 
 .button-row {
@@ -2284,8 +2286,8 @@ textarea:focus {
   }
 
   .customer-service-card img {
-    height: 160px;
-    width: 100%;
+    height: 120px;
+    width: 120px;
   }
 }
 
