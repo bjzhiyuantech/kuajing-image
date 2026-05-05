@@ -745,8 +745,10 @@ export function AccountPage({
   }, [user.id]);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
     const dismissedKey = `referral-campaign-dismissed:${user.id}`;
-    if (!window.localStorage.getItem(dismissedKey)) {
+    const shouldForceOpen = params.get("inviteCampaign") === "1" || params.get("source") === "extension";
+    if (shouldForceOpen || !window.localStorage.getItem(dismissedKey)) {
       setIsInviteDialogOpen(true);
     }
   }, [user.id]);

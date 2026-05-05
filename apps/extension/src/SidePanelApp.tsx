@@ -2103,9 +2103,9 @@ export function SidePanelApp() {
   }
 
   function openReferralCampaign(): void {
-    setInviteDialogOpen(true);
     setActiveTool("referral");
     setToolPanelOpen(true);
+    void openReferralCampaignPage();
     void refreshReferral();
   }
 
@@ -2126,8 +2126,13 @@ export function SidePanelApp() {
 
   function openReferralCampaignPage(): void {
     const inviteCode = referralState.data?.inviteCode || auth.user?.inviteCode;
-    const url = inviteCode ? `${apiBaseUrl().replace(/\/$/u, "")}/register?inviteCode=${encodeURIComponent(inviteCode)}` : `${apiBaseUrl().replace(/\/$/u, "")}/register`;
-    void chrome.tabs.create({ url });
+    const url = new URL("/account", apiBaseUrl());
+    url.searchParams.set("source", "extension");
+    url.searchParams.set("inviteCampaign", "1");
+    if (inviteCode) {
+      url.searchParams.set("inviteCode", inviteCode);
+    }
+    void chrome.tabs.create({ url: url.toString() });
   }
 
   function scrollToPanel(panelId: string): void {
