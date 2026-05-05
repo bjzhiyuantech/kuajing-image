@@ -2103,7 +2103,10 @@ export function SidePanelApp() {
   }
 
   function openReferralCampaign(): void {
-    openTool("referral");
+    setInviteDialogOpen(true);
+    setActiveTool("referral");
+    setToolPanelOpen(true);
+    void refreshReferral();
   }
 
   function openQueuedJobHistory(): void {
