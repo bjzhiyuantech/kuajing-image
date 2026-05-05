@@ -1286,6 +1286,24 @@ body {
   padding: 1.25rem;
 }
 
+.invite-dialog__content-grid {
+  display: grid;
+  gap: 0.95rem;
+  grid-template-columns: minmax(0, 1fr) minmax(16rem, 0.82fr);
+  align-items: start;
+}
+
+.invite-dialog__side {
+  display: grid;
+  gap: 0.75rem;
+  align-content: start;
+}
+
+.invite-dialog__notes {
+  display: grid;
+  gap: 0.5rem;
+}
+
 .invite-rule-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1403,9 +1421,9 @@ body {
 }
 
 .invite-dialog__actions {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
   gap: 0.55rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .phone-verification-backdrop {
@@ -4713,6 +4731,14 @@ a:focus-visible {
 
   .invite-rule-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .invite-dialog__content-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .invite-dialog__actions {
+    grid-template-columns: 1fr;
   }
 }
 

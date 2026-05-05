@@ -2661,22 +2661,28 @@ function InviteCampaignDialog({
             <div><span>充值返现</span><strong>{formatOptionalPercent(rechargeCashbackRate)}</strong></div>
             <div><span>套餐返现</span><strong>{formatOptionalPercent(planCashbackRate)}</strong></div>
           </div>
-          <InviteShareCard inviteCode={inviteCode} inviteUrl={inviteUrl} invitedUserCount={invitedUserCount} inviteQrDataUrl={inviteQrDataUrl} />
-          {notice ? <p className="billing-alert billing-alert--success">{notice}</p> : null}
-          {error ? <p className="billing-alert billing-alert--warning">{error}</p> : null}
-          <div className="invite-dialog__actions">
-            <button className="primary-action h-10" disabled={!inviteUrl} type="button" onClick={onCopy}>
-              <Copy className="size-4" aria-hidden="true" />
-              复制邀请链接
-            </button>
-            <button className="secondary-action h-10" disabled={!inviteUrl} type="button" onClick={onDownload}>
-              <Download className="size-4" aria-hidden="true" />
-              下载分享海报
-            </button>
-            <button className="secondary-action h-10" disabled={loading} type="button" onClick={onRefresh}>
-              {loading ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <RefreshCw className="size-4" aria-hidden="true" />}
-              刷新邀请信息
-            </button>
+          <div className="invite-dialog__content-grid">
+            <InviteShareCard inviteCode={inviteCode} inviteUrl={inviteUrl} invitedUserCount={invitedUserCount} inviteQrDataUrl={inviteQrDataUrl} />
+            <div className="invite-dialog__side">
+              <div className="invite-dialog__notes">
+                {notice ? <p className="billing-alert billing-alert--success">{notice}</p> : null}
+                {error ? <p className="billing-alert billing-alert--warning">{error}</p> : null}
+              </div>
+              <div className="invite-dialog__actions">
+                <button className="primary-action h-10" disabled={!inviteUrl} type="button" onClick={onCopy}>
+                  <Copy className="size-4" aria-hidden="true" />
+                  复制邀请链接
+                </button>
+                <button className="secondary-action h-10" disabled={!inviteUrl} type="button" onClick={onDownload}>
+                  <Download className="size-4" aria-hidden="true" />
+                  下载分享海报
+                </button>
+                <button className="secondary-action h-10" disabled={loading} type="button" onClick={onRefresh}>
+                  {loading ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <RefreshCw className="size-4" aria-hidden="true" />}
+                  刷新邀请信息
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </section>
