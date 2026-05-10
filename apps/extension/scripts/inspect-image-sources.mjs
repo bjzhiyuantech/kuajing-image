@@ -19,9 +19,7 @@ function extractUrls(value) {
 
 function add(found, source, text) {
   for (const url of extractUrls(text)) {
-    if (/alicdn|ibank|O1CN|cbu01/i.test(url)) {
-      found.push({ source, url });
-    }
+    found.push({ source, url });
   }
 }
 

@@ -1,0 +1,51 @@
+<view class="page legal-page">
+  <view class="section">
+    <view class="title">隐私协议</view>
+    <view class="subtitle">生效日期：2026-05-08</view>
+  </view>
+
+  <view class="section legal-section">
+    <view class="legal-title">一、适用范围</view>
+    <view class="legal-copy">本隐私协议说明商图AI小程序在提供注册登录、图片生成处理、任务管理、会员额度、订单开票和客服支持等服务时，如何收集、使用、保存和保护你的个人信息。</view>
+  </view>
+
+  <view class="section legal-section">
+    <view class="legal-title">二、我们可能收集的信息</view>
+    <view class="legal-copy">为实现服务功能，我们可能收集你的账号信息、微信登录标识、昵称、邮箱、手机号、上传图片、输入文本、商品信息、生成任务记录、会员额度、订单开票信息、设备信息、日志信息及网络状态信息。</view>
+  </view>
+
+  <view class="section legal-section">
+    <view class="legal-title">三、信息使用目的</view>
+    <view class="legal-copy">我们会将上述信息用于账号注册与登录、身份验证、图片生成与处理、任务进度展示、历史记录同步、会员额度扣减、订单和开票管理、安全风控、故障排查、客服沟通及服务优化。</view>
+  </view>
+
+  <view class="section legal-section">
+    <view class="legal-title">四、权限与授权</view>
+    <view class="legal-copy">当你使用上传图片、保存图片、微信登录、客服沟通等功能时，小程序可能申请相册、文件、网络或微信授权能力。你可以拒绝或撤回授权，但对应功能可能无法正常使用。</view>
+  </view>
+
+  <view class="section legal-section">
+    <view class="legal-title">五、共享与第三方处理</view>
+    <view class="legal-copy">为完成图片生成、翻译、云存储、支付、消息通知、数据分析或安全风控等必要服务，我们可能向合作服务方提供实现功能所需的最少信息，并要求其按照约定保护你的信息。未经你同意，我们不会向无关第三方出售你的个人信息。</view>
+  </view>
+
+  <view class="section legal-section">
+    <view class="legal-title">六、存储与保护</view>
+    <view class="legal-copy">我们会在实现处理目的所需的最短期限内保存你的个人信息，并采取访问控制、传输加密、权限隔离、日志审计等合理措施保护数据安全。法律法规另有要求的，从其规定。</view>
+  </view>
+
+  <view class="section legal-section">
+    <view class="legal-title">七、你的权利</view>
+    <view class="legal-copy">你可以在小程序内查看或修改账号资料，也可以通过客服或官方联系方式向我们提出访问、更正、复制、删除个人信息、撤回授权或注销账号等请求。我们会在合理期限内处理你的请求。</view>
+  </view>
+
+  <view class="section legal-section">
+    <view class="legal-title">八、未成年人保护</view>
+    <view class="legal-copy">若你为未成年人，应在监护人同意和指导下使用本服务。我们不会主动面向未成年人收集非必要个人信息。</view>
+  </view>
+
+  <view class="section legal-section">
+    <view class="legal-title">九、协议更新与联系</view>
+    <view class="legal-copy">我们可能根据服务变化、法律法规或平台规则更新本隐私协议，并在小程序内展示。若你对个人信息处理有疑问，可通过小程序内客服或官方联系方式与我们联系。</view>
+  </view>
+</view>

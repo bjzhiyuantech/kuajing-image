@@ -1,19 +1,27 @@
 import {
   AlertTriangle,
   BadgeCheck,
+  Bell,
+  BookOpen,
   Brush,
   CheckCircle2,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Cloud,
   Copy,
   Download,
+  ExternalLink,
   Globe2,
   ImageIcon,
   Loader2,
   LogOut,
   MapPin,
+  Maximize2,
   Megaphone,
+  Home,
   Package,
+  MoreHorizontal,
   RotateCcw,
   ShieldCheck,
   ShoppingBag,
@@ -24,8 +32,13 @@ import {
   X,
   XCircle
 } from "lucide-react";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
+  DEFAULT_EMBED_DEFINITIONS,
+  Box,
+  LANGUAGES,
+  defaultEditorAssetUrls,
+  iconTypes,
   Tldraw,
   type Editor,
   type TLAsset,
@@ -36,8 +49,10 @@ import {
   type TLImageShape,
   type TLShapePartial,
   type TLShapeId,
+  type TLShape,
   type TLStoreSnapshot,
   type TLComponents,
+  type TLUiAssetUrlOverrides,
   type TldrawOptions
 } from "tldraw";
 import {
@@ -55,8 +70,9 @@ import {
   SIZE_PRESETS,
   STYLE_PRESETS,
   validateImageSize,
+  type DemoCanvasConfigResponse,
+  type DemoCanvasExample,
   type GalleryImageItem,
-  type CloudStorageProvider,
   type EcommerceBatchGenerateResponse,
   type EcommerceGenerationMode,
   type EcommerceMarket,
@@ -69,6 +85,7 @@ import {
   type GenerationResponse,
   type GenerationStatus,
   type GeneratedAsset,
+  ECOMMERCE_DETAIL_CATEGORY_KIT_SCENE_IDS,
   ECOMMERCE_MARKETS,
   ECOMMERCE_PLATFORMS,
   ECOMMERCE_SCENE_TEMPLATES,
@@ -78,13 +95,11 @@ import {
   type OutputFormat,
   type ProjectState,
   type ReferenceImageInput,
-  type SaveStorageConfigRequest,
   type SizePreset,
-  type StorageConfigResponse,
-  type StorageTestResult,
   type StylePresetId
 } from "@gpt-image-canvas/shared";
-import { AccountPage, AdminPage, AuthScreen, HomePage } from "./AuthViews";
+import { AccountPage, AdminPage, AuthScreen } from "./AuthViews";
+import { HelpCenterPage } from "./HelpCenter";
 import {
   authFetch,
   clearStoredAuthToken,
@@ -109,8 +124,15 @@ const MAX_REFERENCE_IMAGE_BYTES = 50 * 1024 * 1024;
 const MOBILE_DRAWER_MEDIA_QUERY = "(max-width: 1023px)";
 const ASSET_PREVIEW_WIDTHS = [256, 512, 1024, 2048] as const;
 type AssetPreviewWidth = (typeof ASSET_PREVIEW_WIDTHS)[number];
+type BrowserKind = "chrome" | "edge" | "firefox" | "other";
+type InstallHelpBrowser = "chrome" | "edge";
 const GENERATED_ASSET_INITIAL_PREVIEW_WIDTH: AssetPreviewWidth = 2048;
 const SUPPORTED_REFERENCE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp"]);
+const EXTENSION_RELEASE_API_URL = "/api/extension-release";
+const defaultPluginGuideLinks = {
+  downloadUrl: "/downloads/kuajing-image-extension-prod-latest.zip",
+  installHelpUrl: "/install-help.html"
+};
 const initialCanvasPreviewWidths = new Map<string, AssetPreviewWidth>();
 const shapeUtils = [GenerationPlaceholderShapeUtil];
 const tldrawOptions = {
@@ -119,33 +141,28 @@ const tldrawOptions = {
 const tldrawComponents = {
   StylePanel: null
 } satisfies TLComponents;
+const TLDRAW_ASSET_BASE_URL = "https://aiimages.neimou.com/4.5.10";
+const tldrawAssetUrls = {
+  fonts: Object.entries(defaultEditorAssetUrls.fonts ?? {}).reduce<Record<string, string>>((acc, [name, url]) => {
+    if (url) {
+      acc[name] = url.replace(/^https:\/\/cdn\.tldraw\.com\/4\.5\.10/, TLDRAW_ASSET_BASE_URL);
+    }
+    return acc;
+  }, {}),
+  icons: Object.fromEntries(iconTypes.map((name) => [name, `${TLDRAW_ASSET_BASE_URL}/icons/icon/0_merged.svg#${name}`])),
+  translations: Object.fromEntries(LANGUAGES.map((lang) => [lang.locale, `${TLDRAW_ASSET_BASE_URL}/translations/${lang.locale}.json`])),
+  embedIcons: Object.fromEntries(DEFAULT_EMBED_DEFINITIONS.map((def) => [def.type, `${TLDRAW_ASSET_BASE_URL}/embed-icons/${def.type}.png`]))
+} satisfies TLUiAssetUrlOverrides;
 const TLDRAW_LICENSE_KEY =
   "tldraw-2026-08-08/WyJ3dGU4bldjRyIsWyIqIl0sMTYsIjIwMjYtMDgtMDgiXQ.Xt7lTydUhMnKfHfp+g8Mrs9gtJjlB8uPyYMniFEfRfruCYdYEl9J0uZl0lMAf6o7GdDB1zXOVhWLFAipssI6Cw";
 
-const defaultStorageConfigForm: StorageConfigFormState = {
-  enabled: false,
-  provider: "oss",
-  secretId: "",
-  secretKey: "",
-  bucket: "",
-  region: "oss-cn-hangzhou",
-  keyPrefix: "gpt-image-canvas/assets"
-};
-
-const defaultCosStorageConfigForm: StorageConfigFormState = {
-  enabled: false,
-  provider: "cos",
-  secretId: "",
-  secretKey: "",
-  bucket: "source-1253253332",
-  region: "ap-nanjing",
-  keyPrefix: "gpt-image-canvas/assets"
-};
-
 const canvasAssetStore: TLAssetStore = {
   async upload(_asset, file) {
+    const asset = await uploadCanvasImageAsset(file);
+    initialCanvasPreviewWidths.set(asset.id, GENERATED_ASSET_INITIAL_PREVIEW_WIDTH);
     return {
-      src: await blobToDataUrl(file)
+      src: assetDisplayUrl(asset, GENERATED_ASSET_INITIAL_PREVIEW_WIDTH),
+      meta: createImageAssetMeta(asset)
     };
   },
   resolve(asset, context) {
@@ -171,8 +188,125 @@ const promptStarters = [
     prompt: "未来城市夜景，雨后街道，霓虹倒影，电影感光影"
   }
 ] as const;
+const demoComparisonExamples: DemoCanvasExample[] = [
+  {
+    id: "auto-category-listing",
+    title: "AI 品类 Listing 套图",
+    category: "品类套图",
+    beforeLabel: "产品参考图",
+    afterLabel: "自动拆解套图",
+    brief: "根据参考图和描述自动拆解主图、卖点、细节、说明和场景图。",
+    prompt: "根据 1-3 张产品参考图和商品描述，自动判断品类和平台要求，生成一套轻量 Listing Image Kit。",
+    presetId: "product",
+    size: { width: 1024, height: 1024 },
+    quality: "auto",
+    outputFormat: "png",
+    createdAt: "2026-05-01T09:20:00.000Z",
+    beforeUrl: createDemoImageDataUrl({
+      title: "Product refs",
+      subtitle: "source images",
+      label: "BEFORE",
+      tone: "amber",
+      variant: "before"
+    }),
+    afterUrl: createDemoImageDataUrl({
+      title: "Listing kit",
+      subtitle: "auto planned scenes",
+      label: "AFTER",
+      tone: "teal",
+      variant: "after"
+    })
+  },
+  {
+    id: "portable-blender-hero",
+    title: "便携榨汁杯主图",
+    category: "营销主图",
+    beforeLabel: "普通产品照",
+    afterLabel: "高点击夏季海报",
+    brief: "把单品图扩展成饮品场景、利益点和移动端主图构图。",
+    prompt: "以便携榨汁杯为主体，生成夏日厨房台面场景，突出轻量、可随身携带和一键清洗，文字简短醒目。",
+    presetId: "poster",
+    size: { width: 1344, height: 768 },
+    quality: "medium",
+    outputFormat: "png",
+    createdAt: "2026-05-02T10:40:00.000Z",
+    beforeUrl: createDemoImageDataUrl({
+      title: "Portable blender",
+      subtitle: "single SKU image",
+      label: "BEFORE",
+      tone: "blue",
+      variant: "before"
+    }),
+    afterUrl: createDemoImageDataUrl({
+      title: "Fresh juice anywhere",
+      subtitle: "campaign main image",
+      label: "AFTER",
+      tone: "coral",
+      variant: "after"
+    })
+  },
+  {
+    id: "pet-brush-detail",
+    title: "宠物梳详情图",
+    category: "原图增强",
+    beforeLabel: "杂乱实拍图",
+    afterLabel: "功能卖点详情图",
+    brief: "清理背景，保留产品结构，生成卖点标注和使用前后对比。",
+    prompt: "保留宠物梳真实结构和颜色，清理杂乱背景，生成干净详情图，展示除毛效果、圆润梳齿和握持舒适。",
+    presetId: "product",
+    size: { width: 1024, height: 1024 },
+    quality: "high",
+    outputFormat: "png",
+    createdAt: "2026-05-03T14:05:00.000Z",
+    beforeUrl: createDemoImageDataUrl({
+      title: "Pet grooming brush",
+      subtitle: "messy seller photo",
+      label: "BEFORE",
+      tone: "slate",
+      variant: "before"
+    }),
+    afterUrl: createDemoImageDataUrl({
+      title: "Gentle grooming",
+      subtitle: "benefit detail page",
+      label: "AFTER",
+      tone: "mint",
+      variant: "after"
+    })
+  },
+  {
+    id: "coffee-mug-translation",
+    title: "咖啡杯多语言海报",
+    category: "文字翻译",
+    beforeLabel: "中文活动图",
+    afterLabel: "英文市场素材",
+    brief: "保持版式节奏，替换文字并整理成独立站促销图。",
+    prompt: "将咖啡随行杯活动图改为英文独立站促销素材，保留产品位置和暖光氛围，文字更短、更适合海外用户。",
+    presetId: "poster",
+    size: { width: 768, height: 1344 },
+    quality: "auto",
+    outputFormat: "png",
+    createdAt: "2026-05-04T16:30:00.000Z",
+    beforeUrl: createDemoImageDataUrl({
+      title: "咖啡随行杯",
+      subtitle: "中文活动图",
+      label: "BEFORE",
+      tone: "brown",
+      variant: "before"
+    }),
+    afterUrl: createDemoImageDataUrl({
+      title: "Coffee on the go",
+      subtitle: "English promo poster",
+      label: "AFTER",
+      tone: "violet",
+      variant: "after"
+    })
+  }
+];
+const demoGalleryItems: GalleryImageItem[] = demoComparisonExamples.map(createDemoGalleryItem);
 const quickSizePresetIds = new Set(["square-1k", "poster-portrait", "poster-landscape", "story-9-16", "video-16-9", "wide-2k"]);
 const quickSizePresets = SIZE_PRESETS.filter((preset) => quickSizePresetIds.has(preset.id));
+const ORIGINAL_SIZE_PRESET_ID = "original-size";
+const ORIGINAL_SIZE_PRESET_LABEL = "原图尺寸";
 const sidebarTabs: Array<{ id: SidebarTab; label: string; icon: typeof Package }> = [
   { id: "plugins", label: "插件能力", icon: Package },
   { id: "creative", label: "自主生图", icon: Brush }
@@ -194,13 +328,19 @@ const ecommerceModeCards = [
     id: "category-kit",
     icon: Package,
     title: "品类套图",
-    desc: "按平台和类目生成整套 Listing Image Kit。"
+    desc: "后台先识别商品，再动态规划整套详情页图片。"
   },
   {
     id: "marketing-main",
     icon: BadgeCheck,
     title: "营销主图设计",
     desc: "按产品、人群、场景、卖点和信任元素设计点击主图。"
+  },
+  {
+    id: "single-poster",
+    icon: Maximize2,
+    title: "单品完整海报",
+    desc: "依据产品图自动提炼卖点，生成一张高比例详情长海报。"
   },
   {
     id: "text-translation",
@@ -214,27 +354,31 @@ const ecommerceModeLabels: Record<EcommerceGenerationMode, string> = {
   creative: "场景创作",
   "category-kit": "品类套图",
   "marketing-main": "营销主图设计",
+  "single-poster": "单品完整海报",
   "text-translation": "文字翻译"
 };
+const mobileScenePreviewById: Partial<Record<EcommerceSceneTemplateId, string>> = {
+  "category-kit-auto-main": "/images/mobile-scenes/category-main-apparel.png",
+  "category-kit-auto-hero": "/images/mobile-scenes/category-hero-model.png",
+  "category-kit-auto-overview": "/images/mobile-scenes/category-overview-toy.png",
+  "category-kit-auto-benefits": "/images/mobile-scenes/category-benefit-skincare.png",
+  "marketplace-main": "/images/mobile-scenes/category-main-apparel.png",
+  "marketing-main-hero": "/images/mobile-scenes/category-hero-model.png",
+  "marketing-main-people-scene": "/images/mobile-scenes/category-hero-model.png",
+  "marketing-main-benefit-hook": "/images/mobile-scenes/category-benefit-skincare.png",
+  lifestyle: "/images/mobile-scenes/category-overview-toy.png",
+  "model-wear": "/images/mobile-scenes/category-hero-model.png"
+};
+const detailCategoryKitSceneIds = [...ECOMMERCE_DETAIL_CATEGORY_KIT_SCENE_IDS] as EcommerceSceneTemplateId[];
 const ecommerceScenesByMode = {
   enhance: ["marketplace-main", "logo-benefit", "feature-benefit", "promo-poster"],
   creative: ["lifestyle", "model-wear", "accessory-match", "seasonal-campaign", "social-ad"],
-  "category-kit": [
-    "allegro-scarf-main-flat",
-    "allegro-scarf-main-styled",
-    "allegro-scarf-drape-product",
-    "allegro-scarf-fabric-detail",
-    "allegro-scarf-edge-detail",
-    "allegro-scarf-size-guide",
-    "allegro-scarf-wear-grid",
-    "allegro-scarf-neck-model",
-    "allegro-scarf-bag-styling",
-    "allegro-scarf-lifestyle"
-  ],
+  "category-kit": [...detailCategoryKitSceneIds],
   "marketing-main": ["marketing-main-hero", "marketing-main-people-scene", "marketing-main-benefit-hook", "marketing-main-trust-promo"],
+  "single-poster": ["single-product-long-poster"],
   "text-translation": ["text-translation"]
 } satisfies Record<EcommerceGenerationMode, EcommerceSceneTemplateId[]>;
-const ecommerceSizePresetIds = new Set(["square-1k", "poster-landscape", "poster-portrait", "story-9-16"]);
+const ecommerceSizePresetIds = new Set(["square-1k", "poster-landscape", "poster-portrait", "story-9-16", "ecommerce-long-poster"]);
 const ecommerceSizePresets = SIZE_PRESETS.filter((preset) => ecommerceSizePresetIds.has(preset.id));
 const emptyEcommerceStats: EcommerceStatsResponse = {
   totalJobs: 0,
@@ -264,15 +408,148 @@ function preloadGalleryPage(): void {
   void loadGalleryPageModule();
 }
 
+function resolveExtensionReleaseLink(target: ExtensionReleaseTarget | undefined): PluginGuideLinks {
+  const installHelpUrl = target?.installHelpUrl || defaultPluginGuideLinks.installHelpUrl;
+  const rawDownloadUrl = target?.latestDownloadUrl || target?.downloadUrl || defaultPluginGuideLinks.downloadUrl;
+  const downloadUrl = new URL(rawDownloadUrl, window.location.origin);
+  if (target?.version) {
+    downloadUrl.searchParams.set("v", target.version);
+  }
+
+  return {
+    downloadUrl: downloadUrl.toString(),
+    installHelpUrl: new URL(installHelpUrl, window.location.origin).toString()
+  };
+}
+
+function detectBrowserKind(): BrowserKind {
+  const userAgent = window.navigator.userAgent.toLowerCase();
+  if (userAgent.includes("edg/")) {
+    return "edge";
+  }
+  if (userAgent.includes("firefox/")) {
+    return "firefox";
+  }
+  if (userAgent.includes("chrome/") || userAgent.includes("crios/")) {
+    return "chrome";
+  }
+  return "other";
+}
+
+function browserLabel(browser: BrowserKind): string {
+  switch (browser) {
+    case "edge":
+      return "Edge";
+    case "firefox":
+      return "Firefox";
+    case "chrome":
+      return "Chrome";
+    default:
+      return "当前浏览器";
+  }
+}
+
+function installHelpBrowser(browser: BrowserKind): InstallHelpBrowser {
+  return browser === "edge" ? "edge" : "chrome";
+}
+
+function installHelpUrlForBrowser(baseUrl: string, browser: BrowserKind): string {
+  const url = new URL(baseUrl, window.location.origin);
+  url.searchParams.set("browser", installHelpBrowser(browser));
+  return url.toString();
+}
+
+function isExtensionProbeResponseMessage(value: unknown): value is ExtensionProbeResponseMessage {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { source?: unknown }).source === "kuajing-image-extension" &&
+    (value as { type?: unknown }).type === "kuajing-image:probe-extension-result" &&
+    typeof (value as { token?: unknown }).token === "string" &&
+    (value as { token: string }).token.trim().length > 0 &&
+    typeof (value as { installed?: unknown }).installed === "boolean"
+  );
+}
+
+function probeExtensionInstalled(timeoutMs = 1200): Promise<boolean> {
+  return new Promise((resolve) => {
+    const token =
+      typeof window.crypto.randomUUID === "function"
+        ? window.crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    let settled = false;
+    let timerId = 0;
+
+    const cleanup = (): void => {
+      window.removeEventListener("message", handleMessage);
+      if (timerId) {
+        window.clearTimeout(timerId);
+      }
+    };
+
+    const finish = (installed: boolean): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve(installed);
+    };
+
+    const handleMessage = (event: MessageEvent): void => {
+      if (event.source !== window || event.origin !== window.location.origin || !isExtensionProbeResponseMessage(event.data) || event.data.token !== token) {
+        return;
+      }
+
+      finish(event.data.installed);
+    };
+
+    window.addEventListener("message", handleMessage);
+    window.postMessage(
+      {
+        source: "kuajing-image-web",
+        type: "kuajing-image:probe-extension",
+        token
+      },
+      window.location.origin
+    );
+
+    timerId = window.setTimeout(() => {
+      finish(false);
+    }, timeoutMs);
+  });
+}
+
 type PersistedSnapshot = TLEditorSnapshot | TLStoreSnapshot;
-type AppRoute = "canvas" | "gallery" | "account" | "admin";
+type AppRoute = "canvas" | "gallery" | "account" | "help" | "admin";
 type AuthMode = "login" | "register";
 type AuthStatus = "checking" | "anonymous" | "authenticated";
 type SaveStatus = "loading" | "saved" | "pending" | "saving" | "error";
 type GenerationMode = "text" | "reference";
+type MobileCreateTab = "home" | "ecommerce" | "creative" | "history";
 type PanelStatusTone = "progress" | "success" | "warning" | "error";
 type SidebarTab = "plugins" | "creative";
 type EcommerceImageSource = { dataUrl: string; fileName: string; previewUrl: string };
+type MobileReferenceImageSource = EcommerceImageSource & { assetId?: string };
+type PluginGuideLinks = typeof defaultPluginGuideLinks;
+
+interface ExtensionReleaseTarget {
+  version?: string;
+  downloadUrl?: string;
+  latestDownloadUrl?: string;
+  installHelpUrl?: string;
+}
+
+interface ExtensionReleaseResponse {
+  prod?: ExtensionReleaseTarget;
+}
+
+interface ExtensionProbeResponseMessage {
+  source: "kuajing-image-extension";
+  type: "kuajing-image:probe-extension-result";
+  token: string;
+  installed: boolean;
+}
 
 interface PanelStatus {
   tone: PanelStatusTone;
@@ -321,16 +598,6 @@ interface ActiveGenerationTask {
   placeholderSet: ActiveGenerationPlaceholders;
 }
 
-interface StorageConfigFormState {
-  enabled: boolean;
-  provider: CloudStorageProvider;
-  secretId: string;
-  secretKey: string;
-  bucket: string;
-  region: string;
-  keyPrefix: string;
-}
-
 type ReferenceSelection =
   | {
       status: "none" | "multiple" | "non-image" | "unreadable";
@@ -338,12 +605,15 @@ type ReferenceSelection =
     }
   | {
       status: "ready";
+      shapeId: TLShapeId;
       assetId: TLAssetId | null;
       localAssetId?: string;
       name: string;
       sourceUrl: string;
       width: number;
       height: number;
+      selectionMode: "image" | "region";
+      markerShapeIds: TLShapeId[];
       hint: string;
     };
 
@@ -416,12 +686,120 @@ const historyStatusStyles: Record<GenerationStatus, string> = {
   cancelled: "history-status--cancelled"
 };
 
+function createDemoImageDataUrl({
+  title,
+  subtitle,
+  label,
+  tone,
+  variant
+}: {
+  title: string;
+  subtitle: string;
+  label: string;
+  tone: "amber" | "blue" | "brown" | "coral" | "mint" | "slate" | "teal" | "violet";
+  variant: "before" | "after";
+}): string {
+  const palettes = {
+    amber: ["#fff7ed", "#f59e0b", "#7c2d12", "#fed7aa"],
+    blue: ["#eff6ff", "#2563eb", "#172554", "#bfdbfe"],
+    brown: ["#faf7f2", "#92400e", "#2c1810", "#e7d2b8"],
+    coral: ["#fff1f2", "#f97316", "#7f1d1d", "#fecdd3"],
+    mint: ["#ecfdf5", "#0f766e", "#064e3b", "#bbf7d0"],
+    slate: ["#f8fafc", "#64748b", "#1e293b", "#cbd5e1"],
+    teal: ["#f0fdfa", "#0f766e", "#042f2e", "#99f6e4"],
+    violet: ["#f5f3ff", "#7c3aed", "#2e1065", "#ddd6fe"]
+  } satisfies Record<typeof tone, [string, string, string, string]>;
+  const [background, accent, ink, soft] = palettes[tone];
+  const safeTitle = escapeDemoSvgText(title);
+  const safeSubtitle = escapeDemoSvgText(subtitle);
+  const safeLabel = escapeDemoSvgText(label);
+  const showAfterDetails = variant === "after";
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900" viewBox="0 0 1200 900" role="img" aria-label="${safeTitle}">
+  <rect width="1200" height="900" fill="${background}"/>
+  <rect x="54" y="54" width="1092" height="792" rx="44" fill="#ffffff" opacity="0.72"/>
+  <rect x="94" y="96" width="1012" height="708" rx="34" fill="${soft}" opacity="0.42"/>
+  <circle cx="320" cy="410" r="142" fill="${accent}" opacity="${showAfterDetails ? "0.9" : "0.5"}"/>
+  <rect x="232" y="288" width="260" height="260" rx="64" fill="#ffffff" opacity="0.82"/>
+  <path d="M250 536c72-108 142-162 210-162 65 0 118 39 160 118 38-42 78-63 120-63 77 0 146 54 207 162" fill="none" stroke="${ink}" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" opacity="${showAfterDetails ? "0.92" : "0.42"}"/>
+  <circle cx="826" cy="282" r="92" fill="#ffffff" opacity="0.82"/>
+  <circle cx="826" cy="282" r="44" fill="${accent}" opacity="${showAfterDetails ? "0.9" : "0.4"}"/>
+  <rect x="660" y="452" width="296" height="34" rx="17" fill="${ink}" opacity="${showAfterDetails ? "0.82" : "0.25"}"/>
+  <rect x="660" y="514" width="382" height="26" rx="13" fill="${ink}" opacity="${showAfterDetails ? "0.42" : "0.18"}"/>
+  <rect x="660" y="566" width="318" height="26" rx="13" fill="${ink}" opacity="${showAfterDetails ? "0.34" : "0.16"}"/>
+  ${showAfterDetails ? `<path d="M166 706h868" stroke="${accent}" stroke-width="18" stroke-linecap="round" opacity="0.42"/>
+  <rect x="172" y="666" width="156" height="54" rx="27" fill="${accent}" opacity="0.92"/>
+  <rect x="360" y="666" width="156" height="54" rx="27" fill="#ffffff" opacity="0.82"/>
+  <rect x="548" y="666" width="156" height="54" rx="27" fill="#ffffff" opacity="0.82"/>` : `<path d="M156 700h860" stroke="${ink}" stroke-width="14" stroke-linecap="round" opacity="0.15"/>`}
+  <rect x="96" y="96" width="154" height="42" rx="21" fill="${ink}" opacity="0.9"/>
+  <text x="173" y="124" fill="#ffffff" font-family="Arial, sans-serif" font-size="22" font-weight="700" text-anchor="middle">${safeLabel}</text>
+  <text x="102" y="212" fill="${ink}" font-family="Arial, sans-serif" font-size="58" font-weight="800">${safeTitle}</text>
+  <text x="104" y="264" fill="${ink}" opacity="0.68" font-family="Arial, sans-serif" font-size="30" font-weight="600">${safeSubtitle}</text>
+</svg>`;
+
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+}
+
+function escapeDemoSvgText(value: string): string {
+  return value
+    .replace(/&/gu, "&amp;")
+    .replace(/</gu, "&lt;")
+    .replace(/>/gu, "&gt;")
+    .replace(/"/gu, "&quot;");
+}
+
+function createDemoGalleryItem(example: DemoCanvasExample): GalleryImageItem {
+  return {
+    outputId: `demo-output-${example.id}`,
+    generationId: `demo-generation-${example.id}`,
+    userId: "public-demo",
+    userDisplayName: "官方演示",
+    mode: "edit",
+    prompt: example.prompt,
+    effectivePrompt: example.prompt,
+    presetId: example.presetId,
+    size: example.size,
+    quality: example.quality,
+    outputFormat: example.outputFormat,
+    model: "demo-curated",
+    modelDisplayName: "Demo Curated",
+    createdAt: example.createdAt,
+    asset: {
+      id: `demo-asset-${example.id}`,
+      url: example.afterUrl,
+      cdnUrl: example.afterUrl,
+      cdnPreviewUrls: {
+        "512": example.afterUrl,
+        "1024": example.afterUrl
+      },
+      fileName: `${example.id}.svg`,
+      mimeType: "image/svg+xml",
+      width: example.size.width,
+      height: example.size.height
+    }
+  };
+}
+
+function parseDemoCanvasExamples(body: DemoCanvasConfigResponse): DemoCanvasExample[] {
+  const source = Array.isArray(body.examples) ? body.examples : [];
+  return source
+    .filter((example): example is DemoCanvasExample => Boolean(example?.id && example.beforeUrl && example.afterUrl))
+    .map((example, index) => ({
+      ...example,
+      sortOrder: typeof example.sortOrder === "number" ? example.sortOrder : index * 10
+    }))
+    .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.createdAt.localeCompare(b.createdAt));
+}
+
 function sizePresetLabel(preset: SizePreset): string {
   return sizePresetLabels[preset.id] ?? preset.label;
 }
 
 function sizePresetOptionLabel(preset: SizePreset): string {
   return `${sizePresetLabel(preset)} - ${preset.width} x ${preset.height}`;
+}
+
+function originalSizePresetOptionLabel(widthValue: number, heightValue: number): string {
+  return `${ORIGINAL_SIZE_PRESET_LABEL} - ${Math.round(widthValue)} x ${Math.round(heightValue)}`;
 }
 
 function normalizeDimension(value: string): number {
@@ -449,6 +827,9 @@ function routeFromLocation(): AppRoute {
   if (window.location.pathname === "/account") {
     return "account";
   }
+  if (window.location.pathname === "/help") {
+    return "help";
+  }
   if (window.location.pathname === "/admin") {
     return "admin";
   }
@@ -461,6 +842,9 @@ function pathForRoute(route: AppRoute): string {
   }
   if (route === "account") {
     return "/account";
+  }
+  if (route === "help") {
+    return "/help";
   }
   if (route === "admin") {
     return "/admin";
@@ -1141,24 +1525,35 @@ function resolveReferenceSelection(editor: Editor): ReferenceSelection {
     return missingReferenceSelection;
   }
 
-  if (selectedShapes.length > 1) {
+  const imageShapes = selectedShapes.filter((shape): shape is TLImageShape => shape.type === "image");
+  let imageShape: TLImageShape | undefined = chooseReferenceImageShape(editor, imageShapes, selectedShapes);
+  if (imageShapes.length > 1 && !imageShape) {
     return {
       status: "multiple",
-      hint: "当前选择了多个对象。只选择一张图片即可启用参考图到画布。"
+      hint: "当前选中了多张图片。只保留一张图片作为参考即可。"
     };
   }
 
-  const shape = selectedShapes[0];
-  if (shape.type !== "image") {
+  const regionShapeCount = selectedShapes.length - imageShapes.length;
+
+  if (!imageShape) {
+    const selectionBounds = editor.getSelectionPageBounds();
+    if (selectionBounds) {
+      const hitShapes = editor.getShapesAtPoint(selectionBounds.center, { hitInside: true, margin: 4 });
+      imageShape = hitShapes.find((shape): shape is TLImageShape => shape.type === "image");
+    }
+  }
+
+  if (!imageShape) {
     return {
-      status: "non-image",
-      hint: "当前对象不是图片。请选择画布中的单张图片作为参考。"
+      status: selectedShapes.length > 1 ? "multiple" : "non-image",
+      hint: "请先选中一张图片，或者先圈出图片上的局部区域。"
     };
   }
 
-  const imageShape = shape as TLImageShape;
   const asset = imageShape.props.assetId ? editor.getAsset(imageShape.props.assetId) : undefined;
   const sourceUrl = getImageSourceUrl(imageShape, asset);
+  const localAssetId = getLocalAssetId(asset, sourceUrl);
 
   if (!sourceUrl) {
     return {
@@ -1167,22 +1562,32 @@ function resolveReferenceSelection(editor: Editor): ReferenceSelection {
     };
   }
 
-  if (!isReadableReferenceSource(sourceUrl, asset)) {
+  if (!localAssetId && !isReadableReferenceSource(sourceUrl, asset)) {
     return {
       status: "unreadable",
       hint: "这张图片当前无法被浏览器读取，请选择本地生成或已导入的 PNG、JPEG、WebP 图片。"
     };
   }
 
+  const markerShapes = resolveReferenceMarkerShapes(editor, imageShape, selectedShapes, {
+    includeUnselectedMarkers: regionShapeCount === 0
+  });
+  const selectionMode = markerShapes.length > 0 ? "region" : "image";
   return {
     status: "ready",
+    shapeId: imageShape.id,
     assetId: imageShape.props.assetId,
-    localAssetId: getLocalAssetId(asset, sourceUrl),
+    localAssetId,
     name: getReferenceName(asset, sourceUrl),
     sourceUrl,
     width: asset?.type === "image" ? asset.props.w : imageShape.props.w,
     height: asset?.type === "image" ? asset.props.h : imageShape.props.h,
-    hint: "已选中一张图片，将使用它作为本次参考图。"
+    selectionMode,
+    markerShapeIds: markerShapes.map((shape) => shape.id),
+    hint:
+      selectionMode === "region"
+        ? "已识别图片上的局部标记，生成时会把标记范围当作编辑蒙版。"
+        : "已选中一张图片，将使用它作为本次参考图。"
   };
 }
 
@@ -1196,19 +1601,135 @@ function areReferenceSelectionsEqual(left: ReferenceSelection, right: ReferenceS
   }
 
   return (
+    left.shapeId === right.shapeId &&
     left.assetId === right.assetId &&
     left.localAssetId === right.localAssetId &&
     left.name === right.name &&
     left.sourceUrl === right.sourceUrl &&
     left.width === right.width &&
     left.height === right.height &&
+    left.selectionMode === right.selectionMode &&
+    areShapeIdListsEqual(left.markerShapeIds, right.markerShapeIds) &&
     left.hint === right.hint
   );
 }
 
+function areShapeIdListsEqual(left: TLShapeId[], right: TLShapeId[]): boolean {
+  return left.length === right.length && left.every((id, index) => id === right[index]);
+}
+
+function chooseReferenceImageShape(editor: Editor, imageShapes: TLImageShape[], selectedShapes: TLShape[]): TLImageShape | undefined {
+  if (imageShapes.length <= 1) {
+    return imageShapes[0];
+  }
+
+  const candidates = imageShapes
+    .map((shape) => {
+      const bounds = editor.getShapePageBounds(shape);
+      return {
+        shape,
+        area: bounds && bounds.isValid() ? rectArea(boundsToRect(bounds)) : 0
+      };
+    })
+    .sort((left, right) => right.area - left.area);
+  const primary = candidates[0];
+  if (!primary || primary.area <= 0) {
+    return undefined;
+  }
+
+  const selectedMarkerCandidates = selectedShapes.filter((shape) => shape.id !== primary.shape.id);
+  return selectedMarkerCandidates.every((shape) => isReferenceMarkerShape(editor, primary.shape, shape)) ? primary.shape : undefined;
+}
+
+function resolveReferenceMarkerShapes(
+  editor: Editor,
+  baseShape: TLImageShape,
+  selectedShapes: TLShape[],
+  options: { includeUnselectedMarkers: boolean }
+): TLShape[] {
+  const selectedShapeIds = new Set(selectedShapes.map((shape) => shape.id));
+  const candidates = [
+    ...selectedShapes.filter((shape) => shape.id !== baseShape.id),
+    ...(options.includeUnselectedMarkers
+      ? editor
+          .getCurrentPageShapes()
+          .filter((shape) => shape.id !== baseShape.id && shape.type !== "image" && !selectedShapeIds.has(shape.id))
+      : [])
+  ];
+  const markerShapes = candidates.filter((shape) => isReferenceMarkerShape(editor, baseShape, shape));
+  const markerShapeIds = new Set<TLShapeId>();
+  return markerShapes.filter((shape) => {
+    if (markerShapeIds.has(shape.id)) {
+      return false;
+    }
+    markerShapeIds.add(shape.id);
+    return true;
+  });
+}
+
+function isReferenceMarkerShape(editor: Editor, baseShape: TLImageShape, shape: TLShape): boolean {
+  if (shape.id === baseShape.id) {
+    return false;
+  }
+
+  const baseBounds = editor.getShapePageBounds(baseShape);
+  const shapeBounds = editor.getShapePageBounds(shape);
+  if (!baseBounds || !shapeBounds || !baseBounds.isValid() || !shapeBounds.isValid()) {
+    return false;
+  }
+
+  const baseRect = boundsToRect(baseBounds);
+  const shapeRect = boundsToRect(shapeBounds);
+  const shapeArea = rectArea(shapeRect);
+  const baseArea = rectArea(baseRect);
+  if (shapeArea <= 0 || baseArea <= 0) {
+    return false;
+  }
+
+  const overlapArea = rectOverlapArea(baseRect, shapeRect);
+  if (overlapArea <= 0 || overlapArea / shapeArea < 0.45) {
+    return false;
+  }
+
+  return shape.type !== "image" || shapeArea / baseArea < 0.25;
+}
+
+function boundsToRect(bounds: Box): { minX: number; minY: number; maxX: number; maxY: number } {
+  const xs = bounds.corners.map((point) => point.x);
+  const ys = bounds.corners.map((point) => point.y);
+  return {
+    minX: Math.min(...xs),
+    minY: Math.min(...ys),
+    maxX: Math.max(...xs),
+    maxY: Math.max(...ys)
+  };
+}
+
+function rectArea(rect: { minX: number; minY: number; maxX: number; maxY: number }): number {
+  return Math.max(0, rect.maxX - rect.minX) * Math.max(0, rect.maxY - rect.minY);
+}
+
+function rectOverlapArea(
+  left: { minX: number; minY: number; maxX: number; maxY: number },
+  right: { minX: number; minY: number; maxX: number; maxY: number }
+): number {
+  const width = Math.max(0, Math.min(left.maxX, right.maxX) - Math.max(left.minX, right.minX));
+  const height = Math.max(0, Math.min(left.maxY, right.maxY) - Math.max(left.minY, right.minY));
+  return width * height;
+}
+
 function getImageSourceUrl(shape: TLImageShape, asset: TLAsset | undefined): string | undefined {
-  const assetSrc = asset?.type === "image" && typeof asset.props.src === "string" ? asset.props.src : undefined;
-  return assetSrc || shape.props.url || undefined;
+  const assetSourceUrl = getCanvasAssetMetaString(asset, "sourceUrl");
+  if (assetSourceUrl) {
+    return assetSourceUrl;
+  }
+
+  const assetUrl = asset?.type === "image" && typeof asset.props.src === "string" ? asset.props.src : undefined;
+  if (assetUrl) {
+    return assetUrl;
+  }
+
+  return shape.props.url || undefined;
 }
 
 function getAssetMimeType(asset: TLAsset | undefined): string | undefined {
@@ -1311,6 +1832,10 @@ function assetDisplayUrl(asset: GeneratedAsset, preferredWidth?: number): string
 }
 
 function authenticatedAssetUrl(url: string): string {
+  if (/^https?:\/\//iu.test(url)) {
+    return url;
+  }
+
   const token = getStoredAuthToken();
   if (!token) {
     return url;
@@ -1320,12 +1845,18 @@ function authenticatedAssetUrl(url: string): string {
   return `${url}${separator}token=${encodeURIComponent(token)}`;
 }
 
-function getCanvasAssetMetaString(asset: TLAsset, key: string): string | undefined {
+function getCanvasAssetMetaString(asset: TLAsset | undefined, key: string): string | undefined {
+  if (!asset) {
+    return undefined;
+  }
   const value = (asset.meta as Record<string, unknown> | undefined)?.[key];
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
-function getCanvasAssetMetaRecord(asset: TLAsset, key: string): Record<string, string> | undefined {
+function getCanvasAssetMetaRecord(asset: TLAsset | undefined, key: string): Record<string, string> | undefined {
+  if (!asset) {
+    return undefined;
+  }
   const value = (asset.meta as Record<string, unknown> | undefined)?.[key];
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
@@ -1423,10 +1954,61 @@ async function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
-async function readReferenceImage(selection: Extract<ReferenceSelection, { status: "ready" }>, signal: AbortSignal): Promise<{
+async function imageDimensions(file: File): Promise<{ width: number; height: number }> {
+  const url = URL.createObjectURL(file);
+  try {
+    const image = new Image();
+    const loaded = new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error("无法读取图片尺寸。"));
+    });
+    image.src = url;
+    await loaded;
+    return {
+      width: image.naturalWidth,
+      height: image.naturalHeight
+    };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+async function uploadCanvasImageAsset(file: File): Promise<GeneratedAsset> {
+  const dimensions = await imageDimensions(file);
+  const formData = new FormData();
+  formData.set("file", file);
+  formData.set("width", String(dimensions.width));
+  formData.set("height", String(dimensions.height));
+
+  const response = await authFetch("/api/assets", {
+    method: "POST",
+    body: formData
+  });
+
+  if (!response.ok) {
+    throw new Error("图片上传失败。");
+  }
+
+  const body = (await response.json()) as { asset?: GeneratedAsset };
+  if (!body.asset) {
+    throw new Error("图片上传结果异常。");
+  }
+
+  return body.asset;
+}
+
+interface LoadedReferenceImage {
   dataUrl: string;
   fileName: string;
-}> {
+  width: number;
+  height: number;
+}
+
+async function readReferenceImage(selection: Extract<ReferenceSelection, { status: "ready" }>, signal: AbortSignal): Promise<LoadedReferenceImage> {
+  if (selection.localAssetId) {
+    return readStoredReferenceImage(selection.localAssetId, signal);
+  }
+
   let response: Response;
 
   try {
@@ -1448,14 +2030,18 @@ async function readReferenceImage(selection: Extract<ReferenceSelection, { statu
   if (blob.size > MAX_REFERENCE_IMAGE_BYTES) {
     throw new Error("参考图像不能超过 50MB。");
   }
+  const dataUrl = await blobToDataUrl(blob);
+  const image = await loadImageFromDataUrl(dataUrl);
 
   return {
-    dataUrl: await blobToDataUrl(blob),
-    fileName: fileNameWithImageExtension(selection.name, blob.type)
+    dataUrl,
+    fileName: fileNameWithImageExtension(selection.name, blob.type),
+    width: image.naturalWidth,
+    height: image.naturalHeight
   };
 }
 
-async function readStoredReferenceImage(assetId: string, signal: AbortSignal): Promise<ReferenceImageInput> {
+async function readStoredReferenceImage(assetId: string, signal: AbortSignal): Promise<LoadedReferenceImage> {
   const response = await authFetch(`/api/assets/${encodeURIComponent(assetId)}`, { signal });
   if (!response.ok) {
     throw new Error("无法读取历史参考图。请确认原始资源仍然存在。");
@@ -1468,11 +2054,172 @@ async function readStoredReferenceImage(assetId: string, signal: AbortSignal): P
   if (blob.size > MAX_REFERENCE_IMAGE_BYTES) {
     throw new Error("历史参考图像不能超过 50MB。");
   }
+  const dataUrl = await blobToDataUrl(blob);
+  const image = await loadImageFromDataUrl(dataUrl);
 
   return {
-    dataUrl: await blobToDataUrl(blob),
-    fileName: fileNameWithImageExtension(assetId, blob.type)
+    dataUrl,
+    fileName: fileNameWithImageExtension(assetId, blob.type),
+    width: image.naturalWidth,
+    height: image.naturalHeight
   };
+}
+
+async function buildReferenceGenerationInput(
+  editor: Editor,
+  selection: Extract<ReferenceSelection, { status: "ready" }>,
+  signal: AbortSignal
+): Promise<GenerationReferenceInput> {
+  const baseImage = await readReferenceImage(selection, signal);
+  const baseShape = editor.getShape(selection.shapeId);
+  if (!baseShape || baseShape.type !== "image") {
+    throw new Error("当前参考图已失效，请重新选择。");
+  }
+
+  const overlayShapes = selection.markerShapeIds.length > 0
+    ? selection.markerShapeIds.flatMap((shapeId) => {
+        const shape = editor.getShape(shapeId);
+        return shape ? [shape] : [];
+      })
+    : resolveReferenceMarkerShapes(editor, baseShape as TLImageShape, editor.getSelectedShapes(), {
+        includeUnselectedMarkers: true
+      });
+  const selectionPolygons =
+    overlayShapes.length > 0
+      ? createReferenceSelectionPolygons(editor, baseShape as TLImageShape, overlayShapes, baseImage.width, baseImage.height)
+      : [];
+  const maskDataUrl =
+    selectionPolygons.length > 0 ? createReferenceSelectionMaskDataUrl(selectionPolygons, baseImage.width, baseImage.height) : undefined;
+
+  return {
+    referenceImage: {
+      dataUrl: baseImage.dataUrl,
+      fileName: baseImage.fileName,
+      maskDataUrl
+    },
+    referenceAssetId: selection.localAssetId
+  };
+}
+
+async function buildHistoryReferenceGenerationInput(
+  record: GenerationRecord,
+  signal: AbortSignal
+): Promise<GenerationReferenceInput | undefined> {
+  if (!record.referenceAssetId) {
+    return undefined;
+  }
+
+  const baseImage = await readStoredReferenceImage(record.referenceAssetId, signal);
+
+  return {
+    referenceImage: {
+      dataUrl: baseImage.dataUrl,
+      fileName: baseImage.fileName,
+      maskDataUrl: record.referenceMaskDataUrl
+    },
+    referenceAssetId: record.referenceAssetId
+  };
+}
+
+type ReferenceSelectionPolygon = Array<{ x: number; y: number }>;
+
+function createReferenceSelectionPolygons(
+  editor: Editor,
+  baseShape: TLImageShape,
+  overlayShapes: TLShape[],
+  imageWidth: number,
+  imageHeight: number
+): ReferenceSelectionPolygon[] {
+  const pageTransform = editor.getShapePageTransform(baseShape).clone().invert();
+  const scaleX = imageWidth / Math.max(1, baseShape.props.w);
+  const scaleY = imageHeight / Math.max(1, baseShape.props.h);
+  return overlayShapes
+    .map((shape) => editor.getShapePageBounds(shape))
+    .filter((bounds): bounds is Box => Boolean(bounds && bounds.isValid()))
+    .map((bounds) => Box.ExpandBy(bounds, 6))
+    .map((bounds) =>
+      bounds.corners.map((point) => {
+        const localPoint = pageTransform.applyToPoint(point);
+        return {
+          x: clampNumber(localPoint.x * scaleX, 0, imageWidth),
+          y: clampNumber(localPoint.y * scaleY, 0, imageHeight)
+        };
+      })
+    )
+    .filter((points) => polygonArea(points) > 0.5);
+}
+
+function createReferenceSelectionMaskDataUrl(
+  polygons: ReferenceSelectionPolygon[],
+  imageWidth: number,
+  imageHeight: number
+): string | undefined {
+  if (polygons.length === 0) {
+    return undefined;
+  }
+
+  const maskCanvas = document.createElement("canvas");
+  maskCanvas.width = imageWidth;
+  maskCanvas.height = imageHeight;
+  const maskContext = maskCanvas.getContext("2d");
+  if (!maskContext) {
+    throw new Error("无法创建参考蒙版。");
+  }
+
+  maskContext.fillStyle = "#ffffff";
+  maskContext.fillRect(0, 0, imageWidth, imageHeight);
+  maskContext.fillStyle = "#000000";
+  maskContext.globalCompositeOperation = "destination-out";
+  for (const polygon of polygons) {
+    fillPolygon(maskContext, polygon);
+  }
+  maskContext.globalCompositeOperation = "source-over";
+
+  return maskCanvas.toDataURL("image/png");
+}
+
+function tracePolygon(context: CanvasRenderingContext2D, points: ReferenceSelectionPolygon): void {
+  if (points.length === 0) {
+    return;
+  }
+
+  context.beginPath();
+  context.moveTo(points[0].x, points[0].y);
+  for (let index = 1; index < points.length; index += 1) {
+    context.lineTo(points[index].x, points[index].y);
+  }
+  context.closePath();
+}
+
+function fillPolygon(context: CanvasRenderingContext2D, points: ReferenceSelectionPolygon): void {
+  tracePolygon(context, points);
+  context.fill();
+}
+
+function polygonArea(points: ReferenceSelectionPolygon): number {
+  if (points.length < 3) {
+    return 0;
+  }
+
+  let area = 0;
+  for (let index = 0; index < points.length; index += 1) {
+    const next = points[(index + 1) % points.length];
+    area += points[index].x * next.y - next.x * points[index].y;
+  }
+  return Math.abs(area) / 2;
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+async function loadImageFromDataUrl(dataUrl: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("无法读取参考图像。"));
+    image.src = dataUrl;
+  });
 }
 
 async function readErrorMessage(response: Response): Promise<string> {
@@ -1482,75 +2229,6 @@ async function readErrorMessage(response: Response): Promise<string> {
   } catch {
     return `生成请求失败，状态 ${response.status}。`;
   }
-}
-
-function storageConfigToForm(config: StorageConfigResponse | null): StorageConfigFormState {
-  if (!config) {
-    return defaultStorageConfigForm;
-  }
-
-  if (config.provider === "oss") {
-    return {
-      enabled: config.enabled,
-      provider: "oss",
-      secretId: config.oss.accessKeyId,
-      secretKey: config.oss.accessKeySecret.value ?? "",
-      bucket: config.oss.bucket,
-      region: config.oss.region,
-      keyPrefix: config.oss.keyPrefix
-    };
-  }
-
-  return {
-    enabled: config.enabled,
-    provider: "cos",
-    secretId: config.cos.secretId,
-    secretKey: config.cos.secretKey.value ?? "",
-    bucket: config.cos.bucket,
-    region: config.cos.region,
-    keyPrefix: config.cos.keyPrefix
-  };
-}
-
-function storageConfigRequestBody(
-  form: StorageConfigFormState,
-  options: { preserveSecret: boolean; forceEnabled?: boolean }
-): SaveStorageConfigRequest {
-  if (form.provider === "oss") {
-    return {
-      enabled: options.forceEnabled ?? form.enabled,
-      provider: "oss",
-      oss: {
-        accessKeyId: form.secretId.trim(),
-        accessKeySecret: options.preserveSecret ? undefined : form.secretKey,
-        preserveSecret: options.preserveSecret,
-        bucket: form.bucket.trim(),
-        region: form.region.trim(),
-        keyPrefix: form.keyPrefix.trim()
-      }
-    };
-  }
-
-  return {
-    enabled: options.forceEnabled ?? form.enabled,
-    provider: "cos",
-    cos: {
-      secretId: form.secretId.trim(),
-      secretKey: options.preserveSecret ? undefined : form.secretKey,
-      preserveSecret: options.preserveSecret,
-      bucket: form.bucket.trim(),
-      region: form.region.trim(),
-      keyPrefix: form.keyPrefix.trim()
-    }
-  };
-}
-
-function storageFormSecretHasSavedValue(config: StorageConfigResponse | null, form: StorageConfigFormState): boolean {
-  if (!config || config.provider !== form.provider) {
-    return false;
-  }
-
-  return form.provider === "oss" ? config.oss.accessKeySecret.hasSecret : config.cos.secretKey.hasSecret;
 }
 
 function requestGenerationNotificationPermission(): void {
@@ -1608,6 +2286,1046 @@ function SaveStatusIcon({ status }: { status: SaveStatus }) {
   }
 
   return <Cloud className="size-3.5" aria-hidden="true" />;
+}
+
+function PluginGuideOverlay({
+  links,
+  browserLabel: browserName,
+  onClose,
+  onOpenInstallHelp,
+  onRetryDetection
+}: {
+  links: PluginGuideLinks;
+  browserLabel: string;
+  onClose: () => void;
+  onOpenInstallHelp: () => void;
+  onRetryDetection: () => void;
+}) {
+  return (
+    <div className="plugin-guide-backdrop" data-testid="plugin-guide-overlay">
+      <section aria-labelledby="plugin-guide-title" aria-modal="true" className="plugin-guide" role="dialog">
+        <button aria-label="关闭插件提示" className="plugin-guide__close" type="button" onClick={onClose}>
+          <X className="size-4" aria-hidden="true" />
+        </button>
+        <div className="plugin-guide__content">
+          <div className="plugin-guide__intro">
+            <span className="plugin-guide__badge">
+              <ShieldCheck className="size-4" aria-hidden="true" />
+              插件未安装
+            </span>
+            <h2 id="plugin-guide-title">安装插件，解锁更快的采集和生成</h2>
+            <p>
+              检测到当前浏览器还没有安装插件{browserName === "当前浏览器" ? "" : `（${browserName}）`}。安装后，你可以在商品页直接采集主图、详情图和属性信息，再把任务更快送进画布，少来回切页面。
+            </p>
+          </div>
+
+          <ol className="plugin-guide__steps">
+            <li>
+              <span className="plugin-guide__step-number">1</span>
+              <div>
+                <div className="plugin-guide__step-title">
+                  <Download className="size-4" aria-hidden="true" />
+                  下载更方便
+                </div>
+                <p>获取最新版 Chrome / Edge 插件压缩包，下载后先解压。</p>
+                <a className="plugin-guide__step-link" href={links.downloadUrl} target="_blank" rel="noreferrer">
+                  打开下载链接
+                  <ExternalLink className="size-3.5" aria-hidden="true" />
+                </a>
+              </div>
+            </li>
+            <li>
+              <span className="plugin-guide__step-number">2</span>
+              <div>
+                <div className="plugin-guide__step-title">
+                  <Package className="size-4" aria-hidden="true" />
+                  安装后更省事
+                </div>
+                <p>打开扩展管理页，开启开发者模式，选择“加载已解压的扩展程序”。</p>
+                <a className="plugin-guide__step-link" href={links.installHelpUrl} target="_blank" rel="noreferrer">
+                  查看安装方法
+                  <ExternalLink className="size-3.5" aria-hidden="true" />
+                </a>
+              </div>
+            </li>
+            <li>
+              <span className="plugin-guide__step-number">3</span>
+              <div>
+                <div className="plugin-guide__step-title">
+                  <ImageIcon className="size-4" aria-hidden="true" />
+                  用起来更顺手
+                </div>
+                <p>打开浏览器插件，在商品页采集素材、带出信息并直接触发生成，速度和连贯性都会更好。</p>
+              </div>
+            </li>
+          </ol>
+        </div>
+
+        <div className="plugin-guide__visual" aria-hidden="true">
+          <div className="plugin-guide__browser">
+            <div className="plugin-guide__browser-bar">
+              <span />
+              <span />
+              <span />
+            </div>
+            <div className="plugin-guide__browser-body">
+              <div className="plugin-guide__product-card">
+                <ShoppingBag className="size-5" aria-hidden="true" />
+                <strong>直接采集商品页素材</strong>
+                <span>主图、详情图、商品标题</span>
+              </div>
+              <div className="plugin-guide__flow-line" />
+              <div className="plugin-guide__canvas-card">
+                <Sparkles className="size-5" aria-hidden="true" />
+                <strong>少切页面就能生成</strong>
+                <span>一键送入画布和场景任务</span>
+              </div>
+              <div className="plugin-guide__flow-line" />
+              <div className="plugin-guide__canvas-card">
+                <Loader2 className="size-5" aria-hidden="true" />
+                <strong>自动生成并回写画布</strong>
+                <span>更连贯，也更省手工操作</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="plugin-guide__actions">
+          <button className="secondary-action h-10" type="button" onClick={onClose}>
+            稍后再说
+          </button>
+          <button className="secondary-action h-10" type="button" onClick={onRetryDetection}>
+            <RotateCcw className="size-4" aria-hidden="true" />
+            我已安装，重新检测
+          </button>
+          <button className="primary-action h-10" type="button" onClick={onOpenInstallHelp}>
+            <Megaphone className="size-4" aria-hidden="true" />
+            去安装帮助
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function MobileWorkbench({
+  activeTab,
+  canGenerate,
+  count,
+  ecommerceCount,
+  ecommerceDescription,
+  ecommerceExtraDirection,
+  ecommerceImage,
+  ecommerceMarket,
+  ecommerceMode,
+  ecommercePlatform,
+  ecommerceRemoveWatermark,
+  ecommerceSceneIds,
+  ecommerceSizePresetId,
+  ecommerceTextLanguage,
+  ecommerceTitle,
+  generationError,
+  generationHistory,
+  generationMessage,
+  generationMode,
+  generationWarning,
+  height,
+  isEcommerceGenerating,
+  isGenerating,
+  mobileReferenceImage,
+  outputFormat,
+  panelStatus,
+  prompt,
+  quality,
+  selectedRecordId,
+  sizePresetId,
+  stylePreset,
+  user,
+  width,
+  onApplyPromptStarter,
+  onCopyHistoryPrompt,
+  onDownloadHistoryRecord,
+  onNavigate,
+  onOpenGallery,
+  onRerunHistoryRecord,
+  onSelectEcommerceImage,
+  onSelectEcommerceMode,
+  onSelectEcommerceScene,
+  onSelectMobileReferenceImage,
+  onSelectSizePreset,
+  onSetActiveTab,
+  onSetCount,
+  onSetEcommerceCount,
+  onSetEcommerceDescription,
+  onSetEcommerceExtraDirection,
+  onSetEcommerceMarket,
+  onSetEcommercePlatform,
+  onSetEcommerceRemoveWatermark,
+  onSetEcommerceSizePresetId,
+  onSetEcommerceTextLanguage,
+  onSetEcommerceTitle,
+  onSetGenerationMode,
+  onSetHeight,
+  onSetOutputFormat,
+  onSetPrompt,
+  onSetQuality,
+  onSetSelectedRecordId,
+  onSetStylePreset,
+  onSetWidth,
+  onSubmitEcommerce,
+  onSubmitGeneration
+}: {
+  activeTab: MobileCreateTab;
+  canGenerate: boolean;
+  count: GenerationCount;
+  ecommerceCount: GenerationCount;
+  ecommerceDescription: string;
+  ecommerceExtraDirection: string;
+  ecommerceImage: EcommerceImageSource | null;
+  ecommerceMarket: EcommerceMarket;
+  ecommerceMode: EcommerceGenerationMode;
+  ecommercePlatform: EcommercePlatform;
+  ecommerceRemoveWatermark: boolean;
+  ecommerceSceneIds: EcommerceSceneTemplateId[];
+  ecommerceSizePresetId: string;
+  ecommerceTextLanguage: EcommerceTextLanguage;
+  ecommerceTitle: string;
+  generationError: string;
+  generationHistory: GenerationRecord[];
+  generationMessage: string;
+  generationMode: GenerationMode;
+  generationWarning: string;
+  height: number;
+  isEcommerceGenerating: boolean;
+  isGenerating: boolean;
+  mobileReferenceImage: MobileReferenceImageSource | null;
+  outputFormat: OutputFormat;
+  panelStatus: PanelStatus | null;
+  prompt: string;
+  quality: ImageQuality;
+  selectedRecordId: string | null;
+  sizePresetId: string;
+  stylePreset: StylePresetId;
+  user: AuthUser;
+  width: number;
+  onApplyPromptStarter: (prompt: string) => void;
+  onCopyHistoryPrompt: (record: GenerationRecord) => void;
+  onDownloadHistoryRecord: (record: GenerationRecord) => void;
+  onNavigate: (route: AppRoute) => void;
+  onOpenGallery: () => void;
+  onRerunHistoryRecord: (record: GenerationRecord) => void;
+  onSelectEcommerceImage: (file: File | undefined) => void;
+  onSelectEcommerceMode: (mode: EcommerceGenerationMode) => void;
+  onSelectEcommerceScene: (sceneId: EcommerceSceneTemplateId) => void;
+  onSelectMobileReferenceImage: (file: File | undefined) => void;
+  onSelectSizePreset: (presetId: string) => void;
+  onSetActiveTab: (tab: MobileCreateTab) => void;
+  onSetCount: (count: GenerationCount) => void;
+  onSetEcommerceCount: (count: GenerationCount) => void;
+  onSetEcommerceDescription: (value: string) => void;
+  onSetEcommerceExtraDirection: (value: string) => void;
+  onSetEcommerceMarket: (market: EcommerceMarket) => void;
+  onSetEcommercePlatform: (platform: EcommercePlatform) => void;
+  onSetEcommerceRemoveWatermark: (value: boolean) => void;
+  onSetEcommerceSizePresetId: (presetId: string) => void;
+  onSetEcommerceTextLanguage: (language: EcommerceTextLanguage) => void;
+  onSetEcommerceTitle: (value: string) => void;
+  onSetGenerationMode: (mode: GenerationMode) => void;
+  onSetHeight: (value: string) => void;
+  onSetOutputFormat: (format: OutputFormat) => void;
+  onSetPrompt: (value: string) => void;
+  onSetQuality: (quality: ImageQuality) => void;
+  onSetSelectedRecordId: (recordId: string | null) => void;
+  onSetStylePreset: (presetId: StylePresetId) => void;
+  onSetWidth: (value: string) => void;
+  onSubmitEcommerce: () => void;
+  onSubmitGeneration: () => void;
+}) {
+  const selectedRecord = generationHistory.find((record) => record.id === selectedRecordId) ?? generationHistory[0] ?? null;
+  const resultAssets = selectedRecord ? generatedAssetsForRecord(selectedRecord) : [];
+  const packageRemaining = user.packageRemaining ?? Math.max(0, (user.quotaTotal ?? 0) - (user.quotaUsed ?? 0));
+  const activeScenes = ecommerceMode === "category-kit" ? [] : ECOMMERCE_SCENE_TEMPLATES.filter((item) => item.mode === ecommerceMode);
+  const ecommerceOutputCount = ecommerceMode === "category-kit" ? 0 : ecommerceSceneIds.length * (ecommerceMode === "single-poster" ? 1 : ecommerceCount);
+  const isCreateTab = activeTab === "ecommerce" || activeTab === "creative" || activeTab === "history";
+  const recentAssets = generationHistory
+    .flatMap((record) => generatedAssetsForRecord(record).map((asset) => ({ record, asset })))
+    .slice(0, 2);
+  const homeSampleCards = [
+    {
+      id: "sample-product",
+      title: "护肤品主图",
+      imageUrl: "/images/auth-register-hero.png"
+    },
+    {
+      id: "sample-lifestyle",
+      title: "生活场景图",
+      imageUrl: "/images/auth-carousel-product.png"
+    }
+  ];
+  const displayName = user.displayName || user.email || "创作者";
+  const homeMenuItems = [
+    {
+      label: "原图增强",
+      icon: BadgeCheck,
+      onClick: () => {
+        onSelectEcommerceMode("enhance");
+        onSetActiveTab("ecommerce");
+      }
+    },
+    {
+      label: "场景创作",
+      icon: Brush,
+      onClick: () => {
+        onSelectEcommerceMode("creative");
+        onSetActiveTab("ecommerce");
+      }
+    },
+    {
+      label: "品类套图",
+      icon: Package,
+      onClick: () => {
+        onSelectEcommerceMode("category-kit");
+        onSetActiveTab("ecommerce");
+      }
+    },
+    {
+      label: "营销主图",
+      icon: ShoppingBag,
+      onClick: () => {
+        onSelectEcommerceMode("marketing-main");
+        onSetActiveTab("ecommerce");
+      }
+    },
+    {
+      label: "长图海报",
+      icon: Maximize2,
+      onClick: () => {
+        onSelectEcommerceMode("single-poster");
+        onSetActiveTab("ecommerce");
+      }
+    },
+    {
+      label: "文字翻译",
+      icon: Globe2,
+      onClick: () => {
+        onSelectEcommerceMode("text-translation");
+        onSetActiveTab("ecommerce");
+      }
+    },
+    {
+      label: "作品图库",
+      icon: ImageIcon,
+      onClick: onOpenGallery
+    },
+    {
+      label: "帮助教程",
+      icon: BookOpen,
+      onClick: () => onNavigate("help")
+    }
+  ];
+  const homeStyleChips = [
+    {
+      label: "清新自然",
+      active: ecommerceMode === "creative",
+      onClick: () => onSelectEcommerceMode("creative")
+    },
+    {
+      label: "极简白底",
+      active: ecommerceMode === "enhance",
+      onClick: () => onSelectEcommerceMode("enhance")
+    },
+    {
+      label: "家居场景",
+      active: ecommerceMode === "marketing-main",
+      onClick: () => onSelectEcommerceMode("marketing-main")
+    },
+    {
+      label: "户外场景",
+      active: ecommerceMode === "category-kit",
+      onClick: () => onSelectEcommerceMode("category-kit")
+    }
+  ];
+  const homeSizeChips = [
+    { label: "1:1", presetId: "square-1k" },
+    { label: "3:4", presetId: "poster-portrait" },
+    { label: "4:3", presetId: "poster-landscape" },
+    { label: "9:16", presetId: "story-9-16" }
+  ];
+  const createTitle = activeTab === "history" ? "结果" : "生图";
+  const mobileModeTabs: Array<{ id: MobileCreateTab; label: string; count?: number }> = [
+    { id: "ecommerce", label: "电商图" },
+    { id: "creative", label: "自由生图" },
+    { id: "history", label: "结果", count: generationHistory.length }
+  ];
+  const mobileSceneCards = activeScenes.slice(0, 4);
+  const mobileSizeCards = [
+    { label: "1:1", presetId: "square-1k", meta: "1024 x 1024" },
+    { label: "3:4", presetId: "poster-portrait", meta: "1024 x 1365" },
+    { label: "4:3", presetId: "poster-landscape", meta: "1365 x 1024" },
+    { label: "9:16", presetId: "story-9-16", meta: "1024 x 1820" }
+  ];
+  const currentEcommerceModeIndex = Math.max(0, ecommerceModeCards.findIndex((item) => item.id === ecommerceMode));
+  const nextEcommerceMode: EcommerceGenerationMode = ecommerceModeCards[(currentEcommerceModeIndex + 1) % ecommerceModeCards.length]?.id ?? "enhance";
+
+  return (
+    <main className="mobile-workbench app-view" data-active-tab={activeTab} data-testid="mobile-workbench">
+      <header className="mobile-workbench__header" data-variant={activeTab === "home" ? "home" : "create"}>
+        {activeTab === "home" ? (
+          <div className="mobile-home-topbar">
+            <div className="mobile-home-topbar__brand">
+              <strong>{BRAND_NAME}</strong>
+              <span>AI 电商素材工作台</span>
+            </div>
+            <div className="mobile-home-topbar__actions" aria-label="账号入口">
+              <button type="button" onClick={() => onNavigate("account")}>登录</button>
+              <button type="button" data-primary="true" onClick={() => onNavigate("account")}>注册</button>
+            </div>
+          </div>
+        ) : (
+          <div className="mobile-app-header mobile-app-header--embedded">
+            <div className="mobile-app-header__side">
+              <button className="mobile-app-header__back" aria-label="返回首页" type="button" onClick={() => onSetActiveTab("home")}>
+                <ChevronLeft className="size-5" aria-hidden="true" />
+                <span>首页</span>
+              </button>
+            </div>
+            <div className="mobile-app-header__title">
+              <strong>{createTitle}</strong>
+            </div>
+            <button className="mobile-app-header__quota" type="button" onClick={() => onNavigate("account")}>
+              剩余额度 {packageRemaining}
+              <ChevronRight className="size-4" aria-hidden="true" />
+            </button>
+          </div>
+        )}
+      </header>
+
+      <div className="mobile-workbench__content">
+        {generationError ? (
+          <div className="mobile-alert" role="alert">
+            <XCircle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+            <p className="m-0">{generationError}</p>
+          </div>
+        ) : null}
+        {generationWarning ? (
+          <div className="mobile-alert" role="alert">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+            <p className="m-0">{generationWarning}</p>
+          </div>
+        ) : null}
+        {generationMessage ? (
+          <div className="mobile-alert" role="status">
+            <CheckCircle2 className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+            <p className="m-0">{generationMessage}</p>
+          </div>
+        ) : null}
+
+        {activeTab === "home" ? (
+          <>
+            <button className="mobile-home-notice" type="button" onClick={() => onNavigate("account")}>
+              <Bell className="size-5" aria-hidden="true" />
+              <span>新用户注册送 20 张生图额度</span>
+              <ChevronRight className="size-5" aria-hidden="true" />
+            </button>
+
+            <section className="mobile-home-banner" aria-label="电商素材生成入口">
+              <div className="mobile-home-banner__copy">
+                <h1>一张产品图，生成整套电商素材</h1>
+                <p>主图、海报、翻译、详情长图一次完成</p>
+                <button type="button" onClick={() => onSetActiveTab("ecommerce")}>
+                  立即生图
+                  <ChevronRight className="size-5" aria-hidden="true" />
+                </button>
+              </div>
+              <div className="mobile-home-banner__visual" aria-hidden="true">
+                <img src="/images/auth-carousel-product.png" alt="" />
+                <span className="mobile-home-banner__badge mobile-home-banner__badge--main">主图</span>
+                <span className="mobile-home-banner__badge mobile-home-banner__badge--scene">场景图</span>
+                <span className="mobile-home-banner__ai">AI</span>
+              </div>
+            </section>
+
+            <section className="mobile-home-menu" aria-label="功能菜单">
+              {homeMenuItems.map((item) => {
+                const Icon = item.icon;
+                return (
+                  <button key={item.label} type="button" onClick={item.onClick}>
+                    <Icon className="size-7" aria-hidden="true" />
+                    <span>{item.label}</span>
+                  </button>
+                );
+              })}
+            </section>
+
+            <section className="mobile-home-quick" aria-label="快捷生成">
+              <div className="mobile-home-section-head">
+                <h2>快捷生成</h2>
+              </div>
+              <div className="mobile-home-quick__body">
+                <label className={ecommerceImage ? "mobile-home-upload has-image" : "mobile-home-upload"}>
+                  {ecommerceImage ? (
+                    <img alt="产品图预览" src={ecommerceImage.previewUrl} />
+                  ) : (
+                    <span>
+                      <Cloud className="size-8" aria-hidden="true" />
+                      <strong>上传产品图</strong>
+                      <small>支持 JPG / PNG</small>
+                    </span>
+                  )}
+                  <input accept="image/png,image/jpeg,image/webp" type="file" onChange={(event) => onSelectEcommerceImage(event.target.files?.[0])} />
+                </label>
+
+                <div className="mobile-home-quick__controls">
+                  <div className="mobile-home-control-group">
+                    <span>选择场景或风格（可多选）</span>
+                    <div className="mobile-home-chip-row">
+                      {homeStyleChips.map((chip) => (
+                        <button key={chip.label} data-active={chip.active} type="button" onClick={chip.onClick}>
+                          {chip.label}
+                        </button>
+                      ))}
+                      <button aria-label="更多场景" type="button" onClick={() => onSetActiveTab("ecommerce")}>
+                        <ChevronDown className="size-4" aria-hidden="true" />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="mobile-home-control-group">
+                    <span>选择尺寸</span>
+                    <div className="mobile-home-size-row">
+                      {homeSizeChips.map((chip) => (
+                        <button
+                          key={chip.label}
+                          data-active={ecommerceSizePresetId === chip.presetId}
+                          type="button"
+                          onClick={() => onSetEcommerceSizePresetId(chip.presetId)}
+                        >
+                          {chip.label}
+                        </button>
+                      ))}
+                      <button type="button" onClick={() => onSetActiveTab("ecommerce")}>
+                        更多
+                        <ChevronDown className="size-4" aria-hidden="true" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <button className="mobile-home-generate" disabled={isEcommerceGenerating} type="button" onClick={onSubmitEcommerce}>
+                {isEcommerceGenerating ? <Loader2 className="size-5 animate-spin" aria-hidden="true" /> : <Sparkles className="size-5" aria-hidden="true" />}
+                {isEcommerceGenerating ? "生成中" : "生成电商图"}
+              </button>
+            </section>
+
+            <section className="mobile-home-recent" aria-label="最近作品">
+              <div className="mobile-home-section-head">
+                <h2>最近作品</h2>
+                <button type="button" onClick={onOpenGallery}>
+                  查看全部
+                  <ChevronRight className="size-4" aria-hidden="true" />
+                </button>
+              </div>
+              <div className="mobile-home-recent__grid">
+                {recentAssets.length > 0
+                  ? recentAssets.map(({ record, asset }) => (
+                      <article className="mobile-home-work-card" key={`${record.id}-${asset.id}`}>
+                        <img alt={record.prompt || "生成作品"} src={assetDisplayUrl(asset, 512)} />
+                        <div className="mobile-home-work-card__actions">
+                          <a aria-label="下载作品" href={authenticatedAssetUrl(`/api/assets/${encodeURIComponent(asset.id)}/download`)} target="_blank" rel="noreferrer">
+                            <Download className="size-5" aria-hidden="true" />
+                          </a>
+                          <button aria-label="查看作品" type="button" onClick={() => {
+                            onSetSelectedRecordId(record.id);
+                            onSetActiveTab("history");
+                          }}>
+                            <MoreHorizontal className="size-5" aria-hidden="true" />
+                          </button>
+                        </div>
+                      </article>
+                    ))
+                  : homeSampleCards.map((item) => (
+                      <article className="mobile-home-work-card" key={item.id}>
+                        <img alt={item.title} src={item.imageUrl} />
+                        <div className="mobile-home-work-card__actions">
+                          <button aria-label="打开图库" type="button" onClick={onOpenGallery}>
+                            <ImageIcon className="size-5" aria-hidden="true" />
+                          </button>
+                          <button aria-label="开始生成" type="button" onClick={() => onSetActiveTab("ecommerce")}>
+                            <MoreHorizontal className="size-5" aria-hidden="true" />
+                          </button>
+                        </div>
+                      </article>
+                    ))}
+              </div>
+            </section>
+          </>
+        ) : null}
+
+        {activeTab === "ecommerce" ? (
+          <>
+            <nav className="mobile-create-tabs" aria-label="生图页面导航">
+              {mobileModeTabs.map((item) => (
+                <button key={item.id} data-active={activeTab === item.id} type="button" onClick={() => onSetActiveTab(item.id)}>
+                  {item.label}{typeof item.count === "number" && item.count > 0 ? ` (${item.count})` : ""}
+                </button>
+              ))}
+            </nav>
+
+            <section className="mobile-create-panel mobile-create-panel--mode">
+              <div className="mobile-create-panel__head">
+                <Sparkles className="size-5" aria-hidden="true" />
+                <h2>生成方式</h2>
+              </div>
+              <button className="mobile-create-mode-toggle" type="button" onClick={() => onSelectEcommerceMode(nextEcommerceMode)}>
+                <span>
+                  <ImageIcon className="size-5" aria-hidden="true" />
+                  <strong>{ecommerceModeLabels[ecommerceMode]}</strong>
+                  <small>保留原图主体，智能优化画质与光影</small>
+                </span>
+                <i aria-hidden="true" />
+              </button>
+              <div className="mobile-create-mode-strip" aria-label="切换生成方式">
+                {ecommerceModeCards.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <button key={item.id} data-active={ecommerceMode === item.id} type="button" onClick={() => onSelectEcommerceMode(item.id)}>
+                      <Icon className="size-4" aria-hidden="true" />
+                      <span>{item.title}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+
+            <section className="mobile-create-panel">
+              <div className="mobile-create-panel__head">
+                <Cloud className="size-5" aria-hidden="true" />
+                <h2>上传产品图</h2>
+              </div>
+              <div className="mobile-create-upload-grid">
+                <label className={ecommerceImage ? "mobile-create-product-shot has-image" : "mobile-create-product-shot"}>
+                  {ecommerceImage ? (
+                    <img alt="产品图预览" src={ecommerceImage.previewUrl} />
+                  ) : (
+                    <span className="mobile-create-upload-empty">
+                      <Cloud className="size-8" aria-hidden="true" />
+                      <strong>上传产品图</strong>
+                      <small>支持 JPG / PNG</small>
+                    </span>
+                  )}
+                  <input accept="image/png,image/jpeg,image/webp" type="file" onChange={(event) => onSelectEcommerceImage(event.target.files?.[0])} />
+                </label>
+                <label className="mobile-create-reupload">
+                  <Cloud className="size-9" aria-hidden="true" />
+                  <strong>{ecommerceImage ? "重新上传" : "选择图片"}</strong>
+                  <small>建议正面图，效果更佳</small>
+                  <input accept="image/png,image/jpeg,image/webp" type="file" onChange={(event) => onSelectEcommerceImage(event.target.files?.[0])} />
+                </label>
+              </div>
+              {ecommerceImage ? <p className="mobile-create-image-ok"><CheckCircle2 className="size-4" aria-hidden="true" />图像清晰，主体完整</p> : null}
+            </section>
+
+            <section className="mobile-create-panel">
+              <div className="mobile-create-panel__head">
+                <Package className="size-5" aria-hidden="true" />
+                <h2>商品信息</h2>
+              </div>
+              <div className="mobile-create-info-table">
+                <label>
+                  <span>商品名称</span>
+                  <input placeholder="例如：舒缓修护精华液" value={ecommerceTitle} onChange={(event) => onSetEcommerceTitle(event.target.value)} />
+                </label>
+                <label>
+                  <span>商品描述</span>
+                  <input placeholder="核心卖点、材质、适用场景" value={ecommerceDescription} onChange={(event) => onSetEcommerceDescription(event.target.value)} />
+                </label>
+                <label>
+                  <span>{ecommerceMode === "text-translation" ? "目标语言" : "平台模板"}</span>
+                  {ecommerceMode === "text-translation" ? (
+                    <select value={ecommerceTextLanguage} onChange={(event) => onSetEcommerceTextLanguage(event.target.value as EcommerceTextLanguage)}>
+                      {ECOMMERCE_TEXT_LANGUAGES.filter((item) => item.id !== "none").map((item) => (
+                        <option key={item.id} value={item.id}>{item.label}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <select value={ecommercePlatform} onChange={(event) => onSetEcommercePlatform(event.target.value as EcommercePlatform)}>
+                      {ECOMMERCE_PLATFORMS.map((item) => (
+                        <option key={item.id} value={item.id}>{item.label}</option>
+                      ))}
+                    </select>
+                  )}
+                </label>
+                <div className="mobile-create-color-row">
+                  <span>主色调（可选）</span>
+                  <div className="mobile-create-swatches" aria-hidden="true">
+                    <em style={{ background: "#b43a1c" }} />
+                    <em style={{ background: "#e7c9a5" }} />
+                    <em style={{ background: "#e9dfd0" }} />
+                    <em style={{ background: "#73845d" }} />
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section className="mobile-create-panel">
+              <div className="mobile-create-panel__head">
+                <BadgeCheck className="size-5" aria-hidden="true" />
+                <h2>生成场景</h2>
+              </div>
+              {ecommerceMode === "category-kit" ? (
+                <p>后台会根据参考图自动识别商品并规划图片清单，不再固定选择场景模板。</p>
+              ) : (
+                <div className="mobile-create-scene-strip">
+                  {mobileSceneCards.map((item) => {
+                    const active = ecommerceSceneIds.includes(item.id);
+                    const preview = mobileScenePreviewById[item.id] ?? "/images/mobile-scenes/category-overview-toy.png";
+                    return (
+                      <button key={item.id} data-active={active} type="button" onClick={() => onSelectEcommerceScene(item.id)}>
+                        <img src={preview} alt="" aria-hidden="true" />
+                        <span>{item.label}</span>
+                        {active ? <CheckCircle2 className="size-5" aria-hidden="true" /> : null}
+                      </button>
+                    );
+                  })}
+                  <button className="mobile-create-scene-more" type="button">
+                    <MoreHorizontal className="size-6" aria-hidden="true" />
+                    <span>更多</span>
+                  </button>
+                </div>
+              )}
+            </section>
+
+            <section className="mobile-create-panel">
+              <div className="mobile-create-panel__head">
+                <Square className="size-5" aria-hidden="true" />
+                <h2>输出尺寸</h2>
+              </div>
+              <div className="mobile-create-size-strip">
+                {mobileSizeCards.map((item) => (
+                  <button key={item.presetId} data-active={ecommerceSizePresetId === item.presetId} type="button" onClick={() => onSetEcommerceSizePresetId(item.presetId)}>
+                    <strong>{item.label}</strong>
+                    <span>{item.meta}</span>
+                  </button>
+                ))}
+                <button type="button" onClick={() => onSetActiveTab("ecommerce")}>
+                  <MoreHorizontal className="size-5" aria-hidden="true" />
+                  <span>自定义</span>
+                </button>
+              </div>
+            </section>
+
+            <section className="mobile-create-count">
+              <span>生成数量</span>
+              <div>
+                {ecommerceMode === "category-kit" ? (
+                  <strong>后台动态规划</strong>
+                ) : (
+                  <>
+                    <button type="button" onClick={() => onSetEcommerceCount(Math.max(1, ecommerceCount - 1) as GenerationCount)}>−</button>
+                    <strong>{ecommerceMode === "single-poster" ? 1 : ecommerceCount}</strong>
+                    <button type="button" onClick={() => onSetEcommerceCount(Math.min(4, ecommerceCount + 1) as GenerationCount)}>+</button>
+                  </>
+                )}
+              </div>
+            </section>
+
+            <section className="mobile-create-panel">
+              <div className="mobile-create-panel__head">
+                <Workflow className="size-5" aria-hidden="true" />
+                <h2>细节优化</h2>
+              </div>
+              <label className="mobile-create-watermark-row">
+                <span>
+                  <strong>去水印 / Logo</strong>
+                  <small>清理旧平台标识、店铺水印和无关角标</small>
+                </span>
+                <input checked={ecommerceRemoveWatermark} type="checkbox" onChange={(event) => onSetEcommerceRemoveWatermark(event.target.checked)} />
+              </label>
+              <label className="mobile-create-note">
+                <span>补充方向</span>
+                <textarea placeholder="例如：模特不露脸；不要新增夸大宣传文字" value={ecommerceExtraDirection} onChange={(event) => onSetEcommerceExtraDirection(event.target.value)} />
+              </label>
+            </section>
+
+            <div className="mobile-sticky-action">
+              <button className="mobile-create-submit" disabled={isEcommerceGenerating} type="button" onClick={onSubmitEcommerce}>
+                {isEcommerceGenerating ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Workflow className="size-4" aria-hidden="true" />}
+                <span>
+                  <strong>{isEcommerceGenerating ? "电商图生成中" : ecommerceMode === "category-kit" ? "生成品类套图" : `生成 ${ecommerceOutputCount || 1} 张电商图`}</strong>
+                  <small>{ecommerceMode === "category-kit" ? "由后台规划后按实际图片数计费" : `预计消耗 ${ecommerceOutputCount || 1} 额度`}</small>
+                </span>
+              </button>
+            </div>
+          </>
+        ) : null}
+
+        {activeTab === "creative" ? (
+          <>
+            <nav className="mobile-create-tabs" aria-label="生图页面导航">
+              {mobileModeTabs.map((item) => (
+                <button key={item.id} data-active={activeTab === item.id} type="button" onClick={() => onSetActiveTab(item.id)}>
+                  {item.label}{typeof item.count === "number" && item.count > 0 ? ` (${item.count})` : ""}
+                </button>
+              ))}
+            </nav>
+
+            <section className="mobile-create-hero">
+              <div>
+                <h1>描述你的需求，AI 生成商品图</h1>
+                <p>文字生成图片，也可上传参考图优化</p>
+                <button type="button" onClick={onSubmitGeneration} disabled={!canGenerate || isGenerating}>
+                  <Sparkles className="size-5" aria-hidden="true" />
+                  生成图片
+                  <ChevronRight className="size-5" aria-hidden="true" />
+                </button>
+              </div>
+              <img src={mobileReferenceImage?.previewUrl ?? "/images/auth-register-hero.png"} alt="" aria-hidden="true" />
+            </section>
+
+            <section className="mobile-section">
+              <div className="mobile-section__head">
+                <div>
+                  <p className="sidebar-section__eyebrow">自主生图</p>
+                  <h2 className="m-0 text-lg font-black">{generationMode === "reference" ? "参考图生成" : "提示词生成"}</h2>
+                </div>
+                <Brush className="size-5 text-teal-700" aria-hidden="true" />
+              </div>
+              <div className="mobile-mode-grid" role="group" aria-label="生成模式">
+                <button className={generationMode === "text" ? "segmented-control is-active" : "segmented-control"} type="button" onClick={() => onSetGenerationMode("text")}>
+                  提示词
+                </button>
+                <button className={generationMode === "reference" ? "segmented-control is-active" : "segmented-control"} type="button" onClick={() => onSetGenerationMode("reference")}>
+                  参考图
+                </button>
+              </div>
+              <label>
+                <span className="control-label">提示词</span>
+                <textarea className="prompt-textarea" placeholder="描述画面主体、场景、光线、构图和关键细节" value={prompt} onChange={(event) => onSetPrompt(event.target.value)} />
+              </label>
+              {!prompt.trim() ? (
+                <div className="mobile-chip-grid">
+                  {promptStarters.map((starter) => (
+                    <button className="prompt-chip" key={starter.label} type="button" title={starter.prompt} onClick={() => onApplyPromptStarter(starter.prompt)}>
+                      {starter.label}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              {panelStatus ? (
+                <div className={`panel-status-strip ${panelStatusStyles[panelStatus.tone]}`} role={panelStatus.tone === "error" || panelStatus.tone === "warning" ? "alert" : "status"}>
+                  <PanelStatusIcon tone={panelStatus.tone} />
+                  <p className="min-w-0 flex-1">{panelStatus.message}</p>
+                </div>
+              ) : null}
+            </section>
+
+            {generationMode === "reference" ? (
+              <section className="mobile-section">
+                <div className="mobile-section__head">
+                  <div>
+                    <p className="sidebar-section__eyebrow">参考图</p>
+                    <h2 className="m-0 text-lg font-black">{mobileReferenceImage ? "已添加参考图" : "上传参考图"}</h2>
+                  </div>
+                  <ImageIcon className="size-5 text-teal-700" aria-hidden="true" />
+                </div>
+                <label className={mobileReferenceImage ? "mobile-upload ecommerce-upload has-image" : "mobile-upload ecommerce-upload"}>
+                  {mobileReferenceImage ? (
+                    <img alt="参考图预览" src={mobileReferenceImage.previewUrl} />
+                  ) : (
+                    <span className="mobile-upload__empty">
+                      <ImageIcon className="size-6" aria-hidden="true" />
+                      上传或拍摄参考图
+                    </span>
+                  )}
+                  <input accept="image/png,image/jpeg,image/webp" type="file" onChange={(event) => onSelectMobileReferenceImage(event.target.files?.[0])} />
+                </label>
+              </section>
+            ) : null}
+
+            <section className="mobile-section">
+              <div className="mobile-section__head">
+                <div>
+                  <p className="sidebar-section__eyebrow">参数</p>
+                  <h2 className="m-0 text-lg font-black">{width} x {height}</h2>
+                </div>
+                <Square className="size-5 text-teal-700" aria-hidden="true" />
+              </div>
+              <label>
+                <span className="control-label">风格</span>
+                <select className="field-control" value={stylePreset} onChange={(event) => onSetStylePreset(event.target.value as StylePresetId)}>
+                  {STYLE_PRESETS.map((preset) => (
+                    <option key={preset.id} value={preset.id}>{stylePresetLabels[preset.id]}</option>
+                  ))}
+                </select>
+              </label>
+              <div className="mobile-chip-grid">
+                {quickSizePresets.map((preset) => (
+                  <button aria-pressed={sizePresetId === preset.id} className={sizePresetId === preset.id ? "quick-size-button is-active" : "quick-size-button"} key={preset.id} type="button" onClick={() => onSelectSizePreset(preset.id)}>
+                    <span>{sizePresetLabel(preset)}</span>
+                    <small>{preset.width} x {preset.height}</small>
+                  </button>
+                ))}
+                <button aria-pressed={sizePresetId === CUSTOM_SIZE_PRESET_ID} className={sizePresetId === CUSTOM_SIZE_PRESET_ID ? "quick-size-button is-active" : "quick-size-button"} type="button" onClick={() => onSelectSizePreset(CUSTOM_SIZE_PRESET_ID)}>
+                  <span>自定义</span>
+                  <small>手动输入</small>
+                </button>
+              </div>
+              <div className="mobile-field-grid">
+                <label>
+                  <span className="control-label">宽度</span>
+                  <input className="field-control" min={MIN_IMAGE_DIMENSION} max={MAX_IMAGE_DIMENSION} step={1} type="number" value={Number.isNaN(width) ? "" : width} onChange={(event) => onSetWidth(event.target.value)} />
+                </label>
+                <label>
+                  <span className="control-label">高度</span>
+                  <input className="field-control" min={MIN_IMAGE_DIMENSION} max={MAX_IMAGE_DIMENSION} step={1} type="number" value={Number.isNaN(height) ? "" : height} onChange={(event) => onSetHeight(event.target.value)} />
+                </label>
+                <label>
+                  <span className="control-label">数量</span>
+                  <select className="field-control" value={count} onChange={(event) => onSetCount(Number(event.target.value) as GenerationCount)}>
+                    {GENERATION_COUNTS.map((item) => (
+                      <option key={item} value={item}>{item} 张</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <details>
+                <summary className="cursor-pointer text-sm font-black text-neutral-800">高级设置</summary>
+                <div className="mobile-field-grid mt-3">
+                  <label>
+                    <span className="control-label">质量</span>
+                    <select className="field-control" value={quality} onChange={(event) => onSetQuality(event.target.value as ImageQuality)}>
+                      {IMAGE_QUALITIES.map((item) => (
+                        <option key={item} value={item}>{qualityLabels[item]}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span className="control-label">输出格式</span>
+                    <select className="field-control" value={outputFormat} onChange={(event) => onSetOutputFormat(event.target.value as OutputFormat)}>
+                      {OUTPUT_FORMATS.map((item) => (
+                        <option key={item} value={item}>{formatLabels[item]}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              </details>
+            </section>
+
+            <div className="mobile-sticky-action">
+              <button className="primary-action" disabled={!canGenerate || isGenerating} type="button" onClick={onSubmitGeneration}>
+                {isGenerating ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Sparkles className="size-4" aria-hidden="true" />}
+                {isGenerating ? "生成中" : generationMode === "reference" ? "用参考图生成" : "开始生成"}
+              </button>
+            </div>
+          </>
+        ) : null}
+
+        {activeTab === "history" ? (
+          <>
+            <section className="mobile-section">
+              <div className="mobile-section__head">
+                <div>
+                  <p className="sidebar-section__eyebrow">结果</p>
+                  <h2 className="m-0 text-lg font-black">{selectedRecord ? statusLabels[selectedRecord.status] : "暂无结果"}</h2>
+                </div>
+                <button className="secondary-action h-9 px-3 text-xs" type="button" onClick={onOpenGallery}>
+                  <ImageIcon className="size-4" aria-hidden="true" />
+                  图库
+                </button>
+              </div>
+              {resultAssets.length > 0 ? (
+                <div className="mobile-result-grid">
+                  {resultAssets.map((asset) => (
+                    <article className="mobile-result-card" key={asset.id}>
+                      <img alt={selectedRecord?.prompt ?? "生成结果"} src={assetDisplayUrl(asset, 512)} />
+                      <div className="grid gap-2">
+                        <p className="m-0 truncate text-xs font-bold text-neutral-600">{asset.width} x {asset.height}</p>
+                        <a className="secondary-action h-9 text-xs" href={authenticatedAssetUrl(`/api/assets/${encodeURIComponent(asset.id)}/download`)} target="_blank" rel="noreferrer">
+                          <Download className="size-4" aria-hidden="true" />
+                          下载
+                        </a>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <p className="m-0 rounded-md border border-dashed border-neutral-300 px-3 py-5 text-sm font-semibold text-neutral-500">
+                  {isGenerating || isEcommerceGenerating ? "生成中，结果会自动出现在这里。" : "生成成功的图片会出现在这里。"}
+                </p>
+              )}
+              {selectedRecord ? (
+                <div className="mobile-chip-grid">
+                  <button className="secondary-action h-10" type="button" onClick={() => onCopyHistoryPrompt(selectedRecord)}>
+                    <Copy className="size-4" aria-hidden="true" />
+                    复制提示词
+                  </button>
+                  <button className="secondary-action h-10" type="button" onClick={() => onRerunHistoryRecord(selectedRecord)}>
+                    <RotateCcw className="size-4" aria-hidden="true" />
+                    重新生成
+                  </button>
+                  <button className="secondary-action h-10" type="button" onClick={() => onDownloadHistoryRecord(selectedRecord)}>
+                    <Download className="size-4" aria-hidden="true" />
+                    下载首图
+                  </button>
+                </div>
+              ) : null}
+            </section>
+
+            <section className="mobile-section">
+              <div className="mobile-section__head">
+                <div>
+                  <p className="sidebar-section__eyebrow">历史</p>
+                  <h2 className="m-0 text-lg font-black">{generationHistory.length} 条记录</h2>
+                </div>
+                <ClockIconFallback />
+              </div>
+              {generationHistory.length > 0 ? (
+                <div className="mobile-history-list">
+                  {generationHistory.map((record) => {
+                    const asset = firstDownloadableAsset(record);
+                    return (
+                      <button className="mobile-history-card text-left" key={record.id} type="button" onClick={() => onSetSelectedRecordId(record.id)}>
+                        {asset ? <img alt={record.prompt} src={assetDisplayUrl(asset, 512)} /> : <div className="grid place-items-center bg-neutral-100"><Loader2 className={record.status === "running" ? "size-5 animate-spin" : "size-5"} aria-hidden="true" /></div>}
+                        <span className="grid content-center gap-1">
+                          <strong className="truncate text-sm">{promptExcerpt(record.prompt)}</strong>
+                          <small className="text-xs font-semibold text-neutral-500">{statusLabels[record.status]} · {successfulOutputCount(record)} / {record.outputs.length || record.count} 张 · {formatCreatedTime(record.createdAt)}</small>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="m-0 rounded-md border border-dashed border-neutral-300 px-3 py-5 text-sm font-semibold text-neutral-500">暂无生成记录。</p>
+              )}
+            </section>
+          </>
+        ) : null}
+      </div>
+
+      <nav className="mobile-bottom-nav" aria-label="手机底部导航">
+        <button className="mobile-workbench__tab" data-active={activeTab === "home"} type="button" onClick={() => onSetActiveTab("home")}>
+          <Home className="size-5" aria-hidden="true" />
+          <span>首页</span>
+        </button>
+        <button className="mobile-workbench__tab" data-active={isCreateTab} type="button" onClick={() => onSetActiveTab(activeTab === "creative" ? "creative" : "ecommerce")}>
+          <Sparkles className="size-5" aria-hidden="true" />
+          <span>生图</span>
+        </button>
+        <button className="mobile-workbench__tab" type="button" onClick={onOpenGallery}>
+          <ImageIcon className="size-5" aria-hidden="true" />
+          <span>图库</span>
+        </button>
+        <button className="mobile-workbench__tab" type="button" onClick={() => onNavigate("account")}>
+          <User className="size-5" aria-hidden="true" />
+          <span>我的</span>
+        </button>
+      </nav>
+    </main>
+  );
+}
+
+function ClockIconFallback() {
+  return <Cloud className="size-5 text-teal-700" aria-hidden="true" />;
 }
 
 function TopNavigation({
@@ -1689,6 +3407,20 @@ function TopNavigation({
             <User className="size-4" aria-hidden="true" />
             账户
           </a>
+          <a
+            aria-current={route === "help" ? "page" : undefined}
+            className="top-navigation__link"
+            data-active={route === "help"}
+            data-testid="nav-help"
+            href="/help"
+            onClick={(event) => {
+              event.preventDefault();
+              onNavigate("help");
+            }}
+          >
+            <BookOpen className="size-4" aria-hidden="true" />
+            帮助
+          </a>
           {isAdminUser(user) ? (
             <a
               aria-current={route === "admin" ? "page" : undefined}
@@ -1740,7 +3472,7 @@ function TopNavigation({
           <button
             className="account-chip"
             data-testid="account-chip"
-            title={user.email}
+            title={user.email || user.phone || user.displayName}
             type="button"
             onClick={() => onNavigate("account")}
           >
@@ -1756,6 +3488,610 @@ function TopNavigation({
         </div>
       </div>
     </header>
+  );
+}
+
+function GuestTopNavigation({
+  route,
+  onNavigate,
+  onAuthNavigate,
+  onOpenPluginGuide
+}: {
+  route: "canvas" | "gallery" | "help";
+  onNavigate: (route: AppRoute) => void;
+  onAuthNavigate: (mode: AuthMode) => void;
+  onOpenPluginGuide: () => void;
+}) {
+  return (
+    <header className="top-navigation guest-navigation">
+      <div className="top-navigation__inner">
+        <a
+          className="brand-lockup guest-navigation__brand min-w-0"
+          href="/"
+          aria-label={`${BRAND_NAME}演示工作台`}
+          onClick={(event) => {
+            event.preventDefault();
+            onNavigate("canvas");
+          }}
+        >
+          <BrandMark />
+          <div className="min-w-0">
+            <BrandName />
+            <p className="brand-tagline">公开演示工作台</p>
+          </div>
+        </a>
+        <nav aria-label="演示页面" className="top-navigation__links">
+          <a
+            aria-current={route === "canvas" ? "page" : undefined}
+            className="top-navigation__link"
+            data-active={route === "canvas"}
+            href="/"
+            onClick={(event) => {
+              event.preventDefault();
+              onNavigate("canvas");
+            }}
+          >
+            <Square className="size-4" aria-hidden="true" />
+            画布
+          </a>
+          <a
+            aria-current={route === "gallery" ? "page" : undefined}
+            className="top-navigation__link"
+            data-active={route === "gallery"}
+            href="/gallery"
+            onClick={(event) => {
+              event.preventDefault();
+              onNavigate("gallery");
+            }}
+          >
+            <ImageIcon className="size-4" aria-hidden="true" />
+            案例库
+          </a>
+          <a
+            aria-current={route === "help" ? "page" : undefined}
+            className="top-navigation__link"
+            data-active={route === "help"}
+            href="/help"
+            onClick={(event) => {
+              event.preventDefault();
+              onNavigate("help");
+            }}
+          >
+            <BookOpen className="size-4" aria-hidden="true" />
+            帮助
+          </a>
+        </nav>
+        <div className="guest-navigation__actions">
+          <button className="secondary-action h-9" type="button" onClick={onOpenPluginGuide}>
+            <Package className="size-4" aria-hidden="true" />
+            插件
+          </button>
+          <button className="secondary-action h-9" type="button" onClick={() => onAuthNavigate("login")}>
+            登录
+          </button>
+          <button className="primary-action h-9" type="button" onClick={() => onAuthNavigate("register")}>
+            注册试用
+          </button>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+function GuestDemoWorkbench({
+  examples,
+  selectedExampleId,
+  isAiPanelOpen,
+  isMobileDrawer,
+  panelCloseButtonRef,
+  pluginGuideLinks,
+  onClosePanel,
+  onGenerationBlocked,
+  onOpenPanel,
+  onOpenPluginGuide,
+  onSelectExample
+}: {
+  examples: DemoCanvasExample[];
+  selectedExampleId: string;
+  isAiPanelOpen: boolean;
+  isMobileDrawer: boolean;
+  panelCloseButtonRef: RefObject<HTMLButtonElement>;
+  pluginGuideLinks: PluginGuideLinks;
+  onClosePanel: () => void;
+  onGenerationBlocked: () => void;
+  onOpenPanel: () => void;
+  onOpenPluginGuide: () => void;
+  onSelectExample: (exampleId: string) => void;
+}) {
+  const selectedExample = examples.find((example) => example.id === selectedExampleId) ?? examples[0];
+  const previewImages = useMemo<GuestDemoPreviewImage[]>(
+    () =>
+      examples.flatMap((example) => [
+        {
+          key: `${example.id}:before`,
+          exampleId: example.id,
+          category: example.category,
+          title: example.title,
+          label: example.beforeLabel,
+          url: example.beforeUrl,
+          alt: `${example.title}${example.beforeLabel}`
+        },
+        {
+          key: `${example.id}:after`,
+          exampleId: example.id,
+          category: example.category,
+          title: example.title,
+          label: example.afterLabel,
+          url: example.afterUrl,
+          alt: `${example.title}${example.afterLabel}`
+        }
+      ]),
+    [examples]
+  );
+  const [previewImageKey, setPreviewImageKey] = useState<string | null>(null);
+  const previewImageIndex = previewImageKey ? previewImages.findIndex((image) => image.key === previewImageKey) : -1;
+  const previewImage = previewImageIndex >= 0 ? previewImages[previewImageIndex] : null;
+
+  const openPreviewImage = (imageKey: string, exampleId: string): void => {
+    onSelectExample(exampleId);
+    setPreviewImageKey(imageKey);
+  };
+
+  const navigatePreviewImage = (direction: -1 | 1): void => {
+    if (previewImages.length === 0) {
+      return;
+    }
+    const currentIndex = previewImageIndex >= 0 ? previewImageIndex : 0;
+    const nextIndex = (currentIndex + direction + previewImages.length) % previewImages.length;
+    const nextImage = previewImages[nextIndex];
+    onSelectExample(nextImage.exampleId);
+    setPreviewImageKey(nextImage.key);
+  };
+
+  return (
+    <main className="app-shell guest-workbench app-view relative flex min-h-0 overflow-hidden text-neutral-900" data-testid="guest-workbench">
+      <section className="guest-canvas-shell relative min-w-0 flex-1 outline-none" aria-label={`${BRAND_NAME}演示画布`} tabIndex={-1}>
+        <div className="guest-canvas-toolbar" aria-label="演示画布状态">
+          <span>
+            <Sparkles className="size-3.5" aria-hidden="true" />
+            Demo Canvas
+          </span>
+          <button type="button" onClick={onGenerationBlocked}>
+            试用生成
+          </button>
+        </div>
+        <div className="guest-canvas-board">
+          {examples.map((example) => {
+            const beforePreviewKey = `${example.id}:before`;
+            const afterPreviewKey = `${example.id}:after`;
+
+            return (
+              <article className="guest-comparison-card" data-selected={selectedExample.id === example.id} key={example.id}>
+                <div className="guest-comparison-card__head">
+                  <span>{example.category}</span>
+                  <strong>{example.title}</strong>
+                </div>
+                <div className="guest-comparison-pair">
+                  <figure>
+                    <button
+                      aria-label={`查看大图：${example.title}${example.beforeLabel}`}
+                      className="guest-comparison-thumb"
+                      type="button"
+                      onClick={() => openPreviewImage(beforePreviewKey, example.id)}
+                    >
+                      <img alt={`${example.title}${example.beforeLabel}`} loading="lazy" src={example.beforeUrl} />
+                      <span className="guest-comparison-thumb__zoom" aria-hidden="true">
+                        <Maximize2 className="size-4" />
+                      </span>
+                    </button>
+                    <figcaption>{example.beforeLabel}</figcaption>
+                  </figure>
+                  <figure>
+                    <button
+                      aria-label={`查看大图：${example.title}${example.afterLabel}`}
+                      className="guest-comparison-thumb"
+                      type="button"
+                      onClick={() => openPreviewImage(afterPreviewKey, example.id)}
+                    >
+                      <img alt={`${example.title}${example.afterLabel}`} loading="lazy" src={example.afterUrl} />
+                      <span className="guest-comparison-thumb__zoom" aria-hidden="true">
+                        <Maximize2 className="size-4" />
+                      </span>
+                    </button>
+                    <figcaption>{example.afterLabel}</figcaption>
+                  </figure>
+                </div>
+                <p>{example.brief}</p>
+              </article>
+            );
+          })}
+        </div>
+      </section>
+
+      {isMobileDrawer && isAiPanelOpen ? (
+        <button
+          aria-label="关闭演示工作台面板"
+          className="ai-panel-backdrop"
+          data-testid="guest-ai-panel-backdrop"
+          type="button"
+          onClick={onClosePanel}
+        />
+      ) : null}
+
+      <button
+        aria-controls="guest-ai-panel"
+        aria-expanded={isAiPanelOpen}
+        aria-haspopup="dialog"
+        className="mobile-ai-trigger"
+        data-drawer-state={isAiPanelOpen ? "open" : "closed"}
+        data-testid="open-guest-ai-panel"
+        type="button"
+        onClick={onOpenPanel}
+      >
+        <Sparkles className="size-4" aria-hidden="true" />
+        体验工作台
+      </button>
+
+      <aside
+        aria-hidden={isMobileDrawer && !isAiPanelOpen ? true : undefined}
+        aria-labelledby="guest-ai-panel-title"
+        aria-modal={isMobileDrawer && isAiPanelOpen ? true : undefined}
+        className="ai-panel guest-ai-panel fixed inset-y-0 left-0 z-20 flex flex-col border-r border-neutral-200 bg-white shadow-2xl shadow-neutral-950/15"
+        data-drawer-state={isAiPanelOpen ? "open" : "closed"}
+        data-testid="guest-ai-panel"
+        id="guest-ai-panel"
+        role={isMobileDrawer ? "dialog" : "complementary"}
+        {...(isMobileDrawer && !isAiPanelOpen ? { inert: "" } : {})}
+      >
+        <div className="ai-panel-header border-b border-neutral-200 px-5 py-4">
+          <div className="flex items-start justify-between gap-3">
+            <span className="guest-demo-badge">
+              <Sparkles className="size-3.5" aria-hidden="true" />
+              演示模式
+            </span>
+            <button
+              aria-label="关闭演示工作台面板"
+              className="ai-panel-close"
+              ref={panelCloseButtonRef}
+              type="button"
+              onClick={onClosePanel}
+            >
+              <X className="size-4" aria-hidden="true" />
+            </button>
+          </div>
+          <h1 className="mt-3 text-xl font-semibold text-neutral-950" id="guest-ai-panel-title">
+            访客演示工作台
+          </h1>
+        </div>
+
+        <div className="ai-panel-body flex-1 space-y-5 overflow-y-auto px-5 py-5">
+          <section className="sidebar-hero guest-sidebar-hero">
+            <div className="sidebar-hero__top">
+              <span>PUBLIC DEMO</span>
+              <Workflow className="size-4" aria-hidden="true" />
+            </div>
+            <h2>先看工作流，再登录试用额度</h2>
+            <p>访客可以浏览固定案例和画布结构；真正生成、保存和重跑会在登录或注册后消耗试用额度。</p>
+            <div className="sidebar-hero__actions">
+              <a className="sidebar-cta" href={pluginGuideLinks.downloadUrl} target="_blank" rel="noreferrer">
+                <Download className="size-4" aria-hidden="true" />
+                下载插件
+              </a>
+              <button className="sidebar-ghost" type="button" onClick={onOpenPluginGuide}>
+                <ShieldCheck className="size-4" aria-hidden="true" />
+                安装提示
+              </button>
+            </div>
+          </section>
+
+          <section className="plugin-flow-card" aria-label="访客试用流程">
+            <div className="plugin-flow-card__item">
+              <span>1</span>
+              <strong>浏览案例</strong>
+              <small>对比生成前后</small>
+            </div>
+            <div className="plugin-flow-card__item">
+              <span>2</span>
+              <strong>注册试用</strong>
+              <small>领取生图额度</small>
+            </div>
+            <div className="plugin-flow-card__item">
+              <span>3</span>
+              <strong>安装插件</strong>
+              <small>获取更多额度</small>
+            </div>
+          </section>
+
+          <section className="sidebar-section">
+            <div className="sidebar-section__head">
+              <div>
+                <p className="sidebar-section__eyebrow">固定演示</p>
+                <h3>{selectedExample.title}</h3>
+              </div>
+              <ImageIcon className="size-4 text-amber-700" aria-hidden="true" />
+            </div>
+            <div className="guest-example-list">
+              {examples.map((example) => (
+                <button
+                  aria-pressed={selectedExample.id === example.id}
+                  className="guest-example-button"
+                  data-active={selectedExample.id === example.id}
+                  key={example.id}
+                  type="button"
+                  onClick={() => onSelectExample(example.id)}
+                >
+                  <img alt="" src={example.afterUrl} />
+                  <span>
+                    <strong>{example.title}</strong>
+                    <small>{example.category}</small>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </section>
+
+          <section className="sidebar-section">
+            <div className="sidebar-section__head">
+              <div>
+                <p className="sidebar-section__eyebrow">演示提示词</p>
+                <h3>生成依据</h3>
+              </div>
+              <Brush className="size-4 text-amber-700" aria-hidden="true" />
+            </div>
+            <textarea className="prompt-textarea guest-prompt-preview" readOnly value={selectedExample.prompt} />
+          </section>
+
+          <section className="sidebar-section">
+            <div className="sidebar-section__head">
+              <div>
+                <p className="sidebar-section__eyebrow">输出设置</p>
+                <h3>演示参数</h3>
+              </div>
+              <Square className="size-4 text-amber-700" aria-hidden="true" />
+            </div>
+            <div className="guest-setting-grid">
+              <span>{stylePresetLabels[selectedExample.presetId]}</span>
+              <span>{selectedExample.size.width} x {selectedExample.size.height}</span>
+              <span>{qualityLabels[selectedExample.quality]}</span>
+              <span>{selectedExample.outputFormat.toUpperCase()}</span>
+            </div>
+          </section>
+        </div>
+
+        <div className="ai-panel-actions grid grid-cols-1 gap-3 border-t border-neutral-200 bg-white px-5 py-4">
+          <button className="primary-action" type="button" onClick={onGenerationBlocked}>
+            <Sparkles className="size-4" aria-hidden="true" />
+            登录后生成到画布
+          </button>
+        </div>
+      </aside>
+
+      {previewImage ? (
+        <GuestImagePreviewDialog
+          image={previewImage}
+          imageCount={previewImages.length}
+          imageIndex={previewImageIndex}
+          onClose={() => setPreviewImageKey(null)}
+          onNext={() => navigatePreviewImage(1)}
+          onPrevious={() => navigatePreviewImage(-1)}
+        />
+      ) : null}
+    </main>
+  );
+}
+
+interface GuestDemoPreviewImage {
+  key: string;
+  exampleId: string;
+  category: string;
+  title: string;
+  label: string;
+  url: string;
+  alt: string;
+}
+
+function GuestImagePreviewDialog({
+  image,
+  imageCount,
+  imageIndex,
+  onClose,
+  onNext,
+  onPrevious
+}: {
+  image: GuestDemoPreviewImage;
+  imageCount: number;
+  imageIndex: number;
+  onClose: () => void;
+  onNext: () => void;
+  onPrevious: () => void;
+}) {
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        onPrevious();
+        return;
+      }
+
+      if (event.key === "ArrowRight") {
+        event.preventDefault();
+        onNext();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [onClose, onNext, onPrevious]);
+
+  return (
+    <div
+      className="guest-image-preview-backdrop"
+      data-testid="guest-image-preview"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <div aria-labelledby="guest-image-preview-title" aria-modal="true" className="guest-image-preview" role="dialog">
+        <header className="guest-image-preview__header">
+          <div className="guest-image-preview__title">
+            <span>{image.category}</span>
+            <h2 id="guest-image-preview-title">{image.title}</h2>
+            <p>
+              {image.label}
+              {imageCount > 1 ? <small>{imageIndex + 1} / {imageCount}</small> : null}
+            </p>
+          </div>
+          <button aria-label="关闭大图预览" className="guest-image-preview__close" type="button" onClick={onClose}>
+            <X className="size-4" aria-hidden="true" />
+          </button>
+        </header>
+        <div className="guest-image-preview__stage">
+          {imageCount > 1 ? (
+            <button
+              aria-label="上一张大图"
+              className="guest-image-preview__nav guest-image-preview__nav--previous"
+              type="button"
+              onClick={onPrevious}
+            >
+              <ChevronLeft className="size-5" aria-hidden="true" />
+            </button>
+          ) : null}
+          <img alt={image.alt} src={image.url} />
+          {imageCount > 1 ? (
+            <button aria-label="下一张大图" className="guest-image-preview__nav guest-image-preview__nav--next" type="button" onClick={onNext}>
+              <ChevronRight className="size-5" aria-hidden="true" />
+            </button>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GuestQuotaOverlay({
+  links,
+  onAuthNavigate,
+  onClose,
+  onOpenInstallHelp
+}: {
+  links: PluginGuideLinks;
+  onAuthNavigate: (mode: AuthMode) => void;
+  onClose: () => void;
+  onOpenInstallHelp: () => void;
+}) {
+  return (
+    <div className="plugin-guide-backdrop guest-quota-backdrop" data-testid="guest-quota-overlay">
+      <section aria-labelledby="guest-quota-title" aria-modal="true" className="plugin-guide guest-quota-dialog" role="dialog">
+        <button aria-label="关闭试用额度提示" className="plugin-guide__close" type="button" onClick={onClose}>
+          <X className="size-4" aria-hidden="true" />
+        </button>
+        <div className="plugin-guide__content">
+          <div className="plugin-guide__intro">
+            <span className="plugin-guide__badge">
+              <Sparkles className="size-4" aria-hidden="true" />
+              需要试用额度
+            </span>
+            <h2 id="guest-quota-title">登录或注册后再开始生成</h2>
+            <p>
+              当前是公开演示工作台，可以浏览案例和参数。真正生成、重跑和保存作品需要账号试用额度；安装浏览器插件后可获得更多额度和商品页采集能力，需要更高额度时可以联系支持处理。
+            </p>
+          </div>
+
+          <ol className="plugin-guide__steps">
+            <li>
+              <span className="plugin-guide__step-number">1</span>
+              <div>
+                <div className="plugin-guide__step-title">
+                  <User className="size-4" aria-hidden="true" />
+                  登录或注册领取试用
+                </div>
+                <p>注册后进入正式工作台，生成任务会从账号额度中扣减，作品也会同步到图库。</p>
+              </div>
+            </li>
+            <li>
+              <span className="plugin-guide__step-number">2</span>
+              <div>
+                <div className="plugin-guide__step-title">
+                  <Package className="size-4" aria-hidden="true" />
+                  安装插件获得更多额度
+                </div>
+                <p>插件会把商品页采集、素材回传和生成任务串起来，同时提供更多使用额度入口。</p>
+                <a className="plugin-guide__step-link" href={links.downloadUrl} target="_blank" rel="noreferrer">
+                  打开下载链接
+                  <ExternalLink className="size-3.5" aria-hidden="true" />
+                </a>
+              </div>
+            </li>
+            <li>
+              <span className="plugin-guide__step-number">3</span>
+              <div>
+                <div className="plugin-guide__step-title">
+                  <Megaphone className="size-4" aria-hidden="true" />
+                  需要更多额度请联系支持
+                </div>
+                <p>如果要批量生成、团队试用或提高额度，可以联系客户支持申请更适合的额度方案。</p>
+              </div>
+            </li>
+          </ol>
+        </div>
+
+        <div className="plugin-guide__visual" aria-hidden="true">
+          <div className="plugin-guide__browser">
+            <div className="plugin-guide__browser-bar">
+              <span />
+              <span />
+              <span />
+            </div>
+            <div className="plugin-guide__browser-body">
+              <div className="plugin-guide__product-card">
+                <User className="size-5" aria-hidden="true" />
+                <strong>注册试用账号</strong>
+                <span>领取额度并保存作品</span>
+              </div>
+              <div className="plugin-guide__flow-line" />
+              <div className="plugin-guide__canvas-card">
+                <Package className="size-5" aria-hidden="true" />
+                <strong>安装浏览器插件</strong>
+                <span>更多额度和商品页入口</span>
+              </div>
+              <div className="plugin-guide__flow-line" />
+              <div className="plugin-guide__canvas-card">
+                <Sparkles className="size-5" aria-hidden="true" />
+                <strong>开始正式生成</strong>
+                <span>同步画布和作品图库</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="plugin-guide__actions">
+          <button className="secondary-action h-10" type="button" onClick={onClose}>
+            继续看演示
+          </button>
+          <button className="secondary-action h-10" type="button" onClick={onOpenInstallHelp}>
+            <Package className="size-4" aria-hidden="true" />
+            安装帮助
+          </button>
+          <button className="secondary-action h-10" type="button" onClick={() => onAuthNavigate("login")}>
+            登录
+          </button>
+          <button className="primary-action h-10" type="button" onClick={() => onAuthNavigate("register")}>
+            注册领取额度
+          </button>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -1801,6 +4137,9 @@ export function App() {
   const [ecommerceExtraDirection, setEcommerceExtraDirection] = useState("");
   const [isEcommerceGenerating, setIsEcommerceGenerating] = useState(false);
   const [ecommerceStats, setEcommerceStats] = useState<EcommerceStatsResponse>(emptyEcommerceStats);
+  const [mobileCreateTab, setMobileCreateTab] = useState<MobileCreateTab>("home");
+  const [mobileReferenceImage, setMobileReferenceImage] = useState<MobileReferenceImageSource | null>(null);
+  const [mobileSelectedRecordId, setMobileSelectedRecordId] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
   const [stylePreset, setStylePreset] = useState<StylePresetId>("none");
   const [sizePresetId, setSizePresetId] = useState(SIZE_PRESETS[0].id);
@@ -1821,15 +4160,23 @@ export function App() {
   const [isHistoryExpanded, setIsHistoryExpanded] = useState(false);
   const [isMobileDrawer, setIsMobileDrawer] = useState(false);
   const [isAiPanelOpen, setIsAiPanelOpen] = useState(false);
-  const [isStorageDialogOpen, setIsStorageDialogOpen] = useState(false);
-  const [storageConfig, setStorageConfig] = useState<StorageConfigResponse | null>(null);
-  const [storageForm, setStorageForm] = useState<StorageConfigFormState>(defaultStorageConfigForm);
-  const [storageSecretTouched, setStorageSecretTouched] = useState(false);
-  const [storageError, setStorageError] = useState("");
-  const [storageMessage, setStorageMessage] = useState("");
-  const [isStorageSaving, setIsStorageSaving] = useState(false);
-  const [isStorageTesting, setIsStorageTesting] = useState(false);
+  const [pluginGuideLinks, setPluginGuideLinks] = useState<PluginGuideLinks>(defaultPluginGuideLinks);
+  const [isPluginGuideOpen, setIsPluginGuideOpen] = useState(false);
+  const [isGuestQuotaModalOpen, setIsGuestQuotaModalOpen] = useState(false);
+  const [demoCanvasExamples, setDemoCanvasExamples] = useState<DemoCanvasExample[]>(demoComparisonExamples);
+  const [selectedDemoExampleId, setSelectedDemoExampleId] = useState(demoComparisonExamples[0]?.id ?? "");
   const [referenceSelection, setReferenceSelection] = useState<ReferenceSelection>(missingReferenceSelection);
+  const browserKind = useMemo(() => detectBrowserKind(), []);
+  const pluginGuideDisplayLinks = useMemo(
+    () => ({
+      ...pluginGuideLinks,
+      installHelpUrl: installHelpUrlForBrowser(pluginGuideLinks.installHelpUrl, browserKind)
+    }),
+    [browserKind, pluginGuideLinks]
+  );
+  const pluginBrowserLabel = useMemo(() => browserLabel(browserKind), [browserKind]);
+  const dismissedPluginPromptRef = useRef(false);
+  const pluginProbeRequestRef = useRef(0);
   const canvasShellRef = useRef<HTMLElement | null>(null);
   const panelCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const editorRef = useRef<Editor | null>(null);
@@ -1857,6 +4204,98 @@ export function App() {
   const isGenerating = activeGenerationCount > 0;
   const isAuthenticated = authStatus === "authenticated" && currentUser !== null;
 
+  const closePluginGuide = useCallback((): void => {
+    dismissedPluginPromptRef.current = true;
+    setIsPluginGuideOpen(false);
+  }, []);
+
+  const openPluginGuide = useCallback((): void => {
+    dismissedPluginPromptRef.current = false;
+    setSidebarTab("plugins");
+    setIsAiPanelOpen(true);
+    setIsPluginGuideOpen(true);
+  }, []);
+
+  const openGuestQuotaModal = useCallback((): void => {
+    setIsGuestQuotaModalOpen(true);
+  }, []);
+
+  const navigateFromGuestQuota = useCallback(
+    (mode: AuthMode): void => {
+      setIsGuestQuotaModalOpen(false);
+      navigateToAuth(mode);
+    },
+    [navigateToAuth]
+  );
+
+  const probeAndMaybeShowPluginPrompt = useCallback(
+    async (forceShowPrompt: boolean): Promise<void> => {
+      const requestId = ++pluginProbeRequestRef.current;
+      const installed = await probeExtensionInstalled();
+      if (requestId !== pluginProbeRequestRef.current) {
+        return;
+      }
+      if (installed) {
+        dismissedPluginPromptRef.current = false;
+        setIsPluginGuideOpen(false);
+        return;
+      }
+
+      if (forceShowPrompt || !dismissedPluginPromptRef.current) {
+        setIsPluginGuideOpen(true);
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function loadDemoCanvasExamples(): Promise<void> {
+      try {
+        const response = await fetch("/api/public/demo-canvas", { signal: controller.signal });
+        if (!response.ok) {
+          return;
+        }
+        const examples = parseDemoCanvasExamples((await response.json()) as DemoCanvasConfigResponse);
+        if (!controller.signal.aborted && examples.length > 0) {
+          setDemoCanvasExamples(examples);
+          setSelectedDemoExampleId((current) => (examples.some((example) => example.id === current) ? current : examples[0]?.id ?? ""));
+        }
+      } catch {
+        // Keep bundled examples when the public config is unavailable.
+      }
+    }
+
+    void loadDemoCanvasExamples();
+    return () => {
+      controller.abort();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      return;
+    }
+
+    const resolvedRoute = route === "admin" && !isAdminUser(currentUser) ? "canvas" : route;
+    const requiresPhoneVerification = !!currentUser && !currentUser.phone && !isAdminUser(currentUser);
+    const visibleRoute = requiresPhoneVerification && resolvedRoute !== "help" ? "account" : resolvedRoute;
+    if (visibleRoute !== "canvas") {
+      return;
+    }
+
+    pluginProbeRequestRef.current += 1;
+    const timerId = window.setTimeout(() => {
+      void probeAndMaybeShowPluginPrompt(false);
+    }, 240);
+
+    return () => {
+      pluginProbeRequestRef.current += 1;
+      window.clearTimeout(timerId);
+    };
+  }, [currentUser, isAuthenticated, probeAndMaybeShowPluginPrompt, route]);
+
   const handleAuthenticated = useCallback((session: AuthSession): void => {
     storeAuthToken(session.token);
     setCurrentUser(session.user);
@@ -1878,8 +4317,6 @@ export function App() {
     setProjectSnapshot(undefined);
     setGenerationHistory([]);
     setIsProjectLoaded(false);
-    setStorageConfig(null);
-    setStorageForm(defaultStorageConfigForm);
     setGenerationError("");
     setGenerationMessage("");
     setGenerationWarning("");
@@ -1954,6 +4391,31 @@ export function App() {
       window.removeEventListener("message", handleExtensionAuthMessage);
     };
   }, [restoreStoredSession]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function loadExtensionRelease(): Promise<void> {
+      try {
+        const response = await fetch(`${EXTENSION_RELEASE_API_URL}?t=${Date.now()}`, {
+          cache: "no-store",
+          signal: controller.signal
+        });
+        if (!response.ok) {
+          return;
+        }
+        const manifest = (await response.json()) as ExtensionReleaseResponse;
+        if (!controller.signal.aborted) {
+          setPluginGuideLinks(resolveExtensionReleaseLink(manifest.prod));
+        }
+      } catch {
+        // Keep the baked-in links if release settings are unavailable.
+      }
+    }
+
+    void loadExtensionRelease();
+    return () => controller.abort();
+  }, []);
 
   useEffect(() => {
     const handleUnauthorized = (): void => {
@@ -2061,10 +4523,39 @@ export function App() {
   const dimensionValidationMessage = sizeValidationMessage(width, height);
   const isReferenceMode = generationMode === "reference";
   const isReferenceReady = isReferenceMode && referenceSelection.status === "ready";
-  const referenceValidationMessage = isReferenceMode && !isReferenceReady ? referenceSelection.hint : "";
+  const isMobileReferenceReady = isReferenceMode && Boolean(mobileReferenceImage);
+  const canUseReferenceGeneration = isMobileDrawer ? isMobileReferenceReady : isReferenceReady;
+  const referenceValidationMessage =
+    isReferenceMode && !canUseReferenceGeneration
+      ? isMobileDrawer
+        ? "请先上传一张参考图，或从历史结果中选择一张继续生成。"
+        : referenceSelection.hint
+      : "";
   const validationMessage = promptValidationMessage || dimensionValidationMessage || referenceValidationMessage;
   const shouldShowValidation = Boolean(validationMessage);
   const canGenerate = !validationMessage;
+  const referenceSelectionWidth = referenceSelection.status === "ready" ? referenceSelection.width : undefined;
+  const referenceSelectionHeight = referenceSelection.status === "ready" ? referenceSelection.height : undefined;
+
+  useEffect(() => {
+    if (sizePresetId !== ORIGINAL_SIZE_PRESET_ID) {
+      return;
+    }
+
+    if (referenceSelectionWidth === undefined || referenceSelectionHeight === undefined) {
+      setSizePresetId(CUSTOM_SIZE_PRESET_ID);
+      return;
+    }
+
+    const nextWidth = Math.round(referenceSelectionWidth);
+    const nextHeight = Math.round(referenceSelectionHeight);
+    if (width !== nextWidth) {
+      setWidth(nextWidth);
+    }
+    if (height !== nextHeight) {
+      setHeight(nextHeight);
+    }
+  }, [height, referenceSelectionHeight, referenceSelectionWidth, sizePresetId, width]);
 
   const visibleHistory = useMemo(
     () => (isHistoryExpanded ? generationHistory : generationHistory.slice(0, HISTORY_COLLAPSED_LIMIT)),
@@ -2076,7 +4567,9 @@ export function App() {
     if (isGenerating) {
       return {
         tone: "progress",
-        message: `当前 ${activeGenerationCount} 个任务正在生成到画布，可继续下发新任务。`,
+        message: isMobileDrawer
+          ? `当前 ${activeGenerationCount} 个任务正在生成，结果会保存到图库。`
+          : `当前 ${activeGenerationCount} 个任务正在生成到画布，可继续下发新任务。`,
         testId: "generation-progress"
       };
     }
@@ -2120,6 +4613,7 @@ export function App() {
     generationMessage,
     generationWarning,
     isGenerating,
+    isMobileDrawer,
     shouldShowValidation,
     validationMessage
   ]);
@@ -2208,44 +4702,6 @@ export function App() {
   }, [currentUser?.id, isAuthenticated]);
 
   useEffect(() => {
-    if (!isAuthenticated) {
-      return;
-    }
-
-    const controller = new AbortController();
-
-    async function loadStorageConfig(): Promise<void> {
-      try {
-        const response = await authFetch("/api/storage/config", {
-          signal: controller.signal
-        });
-        if (!response.ok) {
-          throw new Error(`Storage config load failed with ${response.status}`);
-        }
-
-        const config = (await response.json()) as StorageConfigResponse;
-        if (controller.signal.aborted) {
-          return;
-        }
-
-        setStorageConfig(config);
-        setStorageForm(storageConfigToForm(config));
-        setStorageSecretTouched(false);
-      } catch {
-        if (!controller.signal.aborted) {
-          setStorageError("Unable to load cloud storage settings.");
-        }
-      }
-    }
-
-    void loadStorageConfig();
-
-    return () => {
-      controller.abort();
-    };
-  }, [currentUser?.id, isAuthenticated]);
-
-  useEffect(() => {
     const mediaQuery = window.matchMedia(MOBILE_DRAWER_MEDIA_QUERY);
     const updateDrawerMode = (): void => {
       setIsMobileDrawer(mediaQuery.matches);
@@ -2265,114 +4721,6 @@ export function App() {
       canvasShellRef.current?.focus({ preventScroll: true });
     });
   }, []);
-
-  function openStorageDialog(): void {
-    setStorageForm(storageConfigToForm(storageConfig));
-    setStorageSecretTouched(false);
-    setStorageError("");
-    setStorageMessage("");
-    setIsStorageDialogOpen(true);
-  }
-
-  function closeStorageDialog(): void {
-    setIsStorageDialogOpen(false);
-    setStorageError("");
-    setStorageMessage("");
-  }
-
-  function updateStorageForm(patch: Partial<StorageConfigFormState>): void {
-    setStorageForm((current) => ({
-      ...current,
-      ...patch
-    }));
-    setStorageError("");
-    setStorageMessage("");
-  }
-
-  function updateStorageProvider(provider: CloudStorageProvider): void {
-    const nextDefaults = provider === "oss" ? defaultStorageConfigForm : defaultCosStorageConfigForm;
-    setStorageForm((current) => ({
-      ...nextDefaults,
-      enabled: current.enabled,
-      provider
-    }));
-    setStorageSecretTouched(false);
-    setStorageError("");
-    setStorageMessage("");
-  }
-
-  async function testStorageSettings(): Promise<void> {
-    setIsStorageTesting(true);
-    setStorageError("");
-    setStorageMessage("");
-
-    try {
-      const response = await authFetch("/api/storage/config/test", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(
-          storageConfigRequestBody(storageForm, {
-            preserveSecret: !storageSecretTouched && storageFormSecretHasSavedValue(storageConfig, storageForm),
-            forceEnabled: true
-          })
-        )
-      });
-
-      if (!response.ok) {
-        throw new Error(await readErrorMessage(response));
-      }
-
-      const result = (await response.json()) as StorageTestResult;
-      if (!result.ok) {
-        setStorageError(result.message);
-        return;
-      }
-
-      setStorageMessage(result.message);
-    } catch (error) {
-      setStorageError(error instanceof Error ? error.message : "Cloud storage test failed.");
-    } finally {
-      setIsStorageTesting(false);
-    }
-  }
-
-  async function saveStorageSettings(): Promise<void> {
-    setIsStorageSaving(true);
-    setStorageError("");
-    setStorageMessage("");
-
-    try {
-      const response = await authFetch("/api/storage/config", {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(
-          storageConfigRequestBody(storageForm, {
-            preserveSecret: !storageSecretTouched && storageFormSecretHasSavedValue(storageConfig, storageForm)
-          })
-        )
-      });
-
-      if (!response.ok) {
-        throw new Error(await readErrorMessage(response));
-      }
-
-      const config = (await response.json()) as StorageConfigResponse;
-      setStorageConfig(config);
-      setStorageForm(storageConfigToForm(config));
-      setStorageSecretTouched(false);
-      setStorageMessage("Cloud storage settings saved.");
-      setGenerationMessage(config.enabled ? "Cloud storage is enabled." : "Cloud storage is disabled.");
-      setGenerationWarning("");
-    } catch (error) {
-      setStorageError(error instanceof Error ? error.message : "Cloud storage settings could not be saved.");
-    } finally {
-      setIsStorageSaving(false);
-    }
-  }
 
   useEffect(() => {
     if (!isMobileDrawer || !isAiPanelOpen) {
@@ -2423,6 +4771,14 @@ export function App() {
       areReferenceSelectionsEqual(currentSelection, missingReferenceSelection) ? currentSelection : missingReferenceSelection
     );
   }, [generationMode]);
+
+  useEffect(() => {
+    if (generationMode === "reference" || sizePresetId !== ORIGINAL_SIZE_PRESET_ID) {
+      return;
+    }
+
+    setSizePresetId(CUSTOM_SIZE_PRESET_ID);
+  }, [generationMode, sizePresetId]);
 
   const handleEditorMount = useCallback((editor: Editor) => {
     editorRef.current = editor;
@@ -2525,6 +4881,17 @@ export function App() {
       return;
     }
 
+    if (nextPresetId === ORIGINAL_SIZE_PRESET_ID) {
+      if (referenceSelection.status !== "ready") {
+        return;
+      }
+
+      setSizePresetId(ORIGINAL_SIZE_PRESET_ID);
+      setWidth(Math.round(referenceSelection.width));
+      setHeight(Math.round(referenceSelection.height));
+      return;
+    }
+
     const preset = SIZE_PRESETS.find((item) => item.id === nextPresetId);
     if (!preset) {
       return;
@@ -2560,6 +4927,9 @@ export function App() {
     setEcommerceMode(nextMode);
     setEcommerceSceneIds(nextScenes);
     setEcommerceSizePresetId(nextPreset?.id ?? "square-1k");
+    if (nextMode === "single-poster" || nextMode === "category-kit") {
+      setEcommerceCount(1);
+    }
     setEcommerceTextLanguage(nextMode === "text-translation" ? ecommerceTextLanguage === "none" ? "en" : ecommerceTextLanguage : "none");
   }
 
@@ -2589,6 +4959,35 @@ export function App() {
     setGenerationError("");
   }
 
+  async function selectMobileReferenceImage(file: File | undefined): Promise<void> {
+    if (!file) {
+      return;
+    }
+    if (!isSupportedReferenceImageType(file.type)) {
+      setGenerationError("请上传 PNG、JPEG 或 WebP 图片。");
+      return;
+    }
+    if (file.size > MAX_REFERENCE_IMAGE_BYTES) {
+      setGenerationError("参考图不能超过 50MB。");
+      return;
+    }
+
+    const previousPreviewUrl = mobileReferenceImage?.previewUrl;
+    const previewUrl = URL.createObjectURL(file);
+    setMobileReferenceImage({
+      dataUrl: await blobToDataUrl(file),
+      fileName: fileNameWithImageExtension(file.name || "reference-image", file.type),
+      previewUrl
+    });
+    if (previousPreviewUrl) {
+      URL.revokeObjectURL(previousPreviewUrl);
+    }
+    setGenerationMode("reference");
+    setGenerationError("");
+    setGenerationMessage("已添加参考图。");
+    setGenerationWarning("");
+  }
+
   function toggleEcommerceScene(sceneId: EcommerceSceneTemplateId): void {
     setEcommerceSceneIds((sceneIds) =>
       sceneIds.includes(sceneId) ? sceneIds.filter((id) => id !== sceneId) : [...sceneIds, sceneId]
@@ -2613,10 +5012,54 @@ export function App() {
     }
   }
 
+  function buildEcommerceGenerationPayload(input: {
+    selectedSize: SizePreset;
+    outputCountPerScene: number;
+    ecommercePresetId: StylePresetId;
+    title: string;
+  }) {
+    return {
+      product: {
+        title: input.title || (ecommerceMode === "category-kit" ? "AI 自拆品类套图" : ecommerceMode === "single-poster" ? "单品完整电商海报" : `${ecommerceModeLabels[ecommerceMode]}产品`),
+        description: ecommerceDescription.trim(),
+        targetCustomer: ecommerceTargetCustomer.trim(),
+        usageScene: ecommerceUsageScene.trim(),
+        material: ecommerceMaterial.trim(),
+        color: ecommerceColor.trim()
+      },
+      platform: ecommerceMode === "text-translation" ? "other" : ecommercePlatform,
+      market: ecommerceMode === "text-translation" ? "global" : ecommerceMarket,
+      textLanguage: ecommerceMode === "text-translation" ? ecommerceTextLanguage : "none",
+      allowTextRecreation: ecommerceMode !== "text-translation",
+      removeWatermarkAndLogo: ecommerceRemoveWatermark,
+      sceneTemplateIds: ecommerceMode === "category-kit" && ecommerceSceneIds.length === 0 ? ecommerceScenesByMode["category-kit"] : ecommerceSceneIds,
+      sizePresetId: input.selectedSize.id,
+      size: {
+        width: input.selectedSize.width,
+        height: input.selectedSize.height
+      },
+      stylePresetId: input.ecommercePresetId,
+      quality: "auto" as const,
+      outputFormat: "png" as const,
+      countPerScene: input.outputCountPerScene,
+      referenceImage: ecommerceImage
+        ? {
+            dataUrl: ecommerceImage.dataUrl,
+            fileName: ecommerceImage.fileName
+          }
+        : undefined,
+      extraDirection: ecommerceExtraDirection.trim()
+    };
+  }
+
   async function submitEcommerceGeneration(): Promise<void> {
     const title = ecommerceTitle.trim();
     const selectedSize = SIZE_PRESETS.find((item) => item.id === ecommerceSizePresetId) ?? SIZE_PRESETS[0];
-    const totalOutputs = ecommerceSceneIds.length * ecommerceCount;
+    const outputCountPerScene = ecommerceMode === "single-poster" || ecommerceMode === "category-kit" ? 1 : ecommerceCount;
+    const ecommercePresetId: StylePresetId =
+      ecommerceMode === "creative" ? "photoreal" : ecommerceMode === "single-poster" ? "poster" : "product";
+    const effectiveEcommerceSceneIds = ecommerceMode === "category-kit" && ecommerceSceneIds.length === 0 ? ecommerceScenesByMode["category-kit"] : ecommerceSceneIds;
+    const totalOutputs = effectiveEcommerceSceneIds.length * outputCountPerScene;
 
     setGenerationError("");
     setGenerationMessage("");
@@ -2626,14 +5069,72 @@ export function App() {
       setGenerationError("请先上传一张产品图。");
       return;
     }
-    if (!title) {
+    const titleOptionalMode = ecommerceMode === "single-poster" || ecommerceMode === "category-kit";
+    if (!title && !titleOptionalMode && !isMobileDrawer) {
       setGenerationError("请输入商品标题。");
       return;
     }
-    if (ecommerceSceneIds.length === 0) {
+    if (ecommerceMode !== "category-kit" && ecommerceSceneIds.length === 0) {
       setGenerationError("请至少选择一个生成场景。");
       return;
     }
+
+    const payload = buildEcommerceGenerationPayload({
+      selectedSize,
+      outputCountPerScene,
+      ecommercePresetId,
+      title
+    });
+
+    const generateEndpoint = ecommerceMode === "category-kit" ? "/api/ecommerce/images/category-kit-generate" : "/api/ecommerce/images/batch-generate";
+
+    if (isMobileDrawer) {
+      const controller = new AbortController();
+      setIsEcommerceGenerating(true);
+      setActiveGenerationCount((value) => value + 1);
+      setMobileCreateTab("history");
+      setMobileSelectedRecordId(null);
+
+      try {
+        const response = await authFetch(generateEndpoint, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(payload),
+          signal: controller.signal
+        });
+        if (!response.ok) {
+          throw new Error(await readErrorMessage(response));
+        }
+        const createdJob = (await response.json()) as EcommerceBatchGenerateResponse;
+        setGenerationMessage(createdJob.message || "电商批量任务已创建。");
+        const completedJob = await pollEcommerceJob(createdJob.jobId, controller.signal);
+        await Promise.all(
+          completedJob.records.flatMap((record) =>
+            record.outputs.flatMap((output) => (output.asset ? [preloadGeneratedAssetPreview(output.asset, controller.signal)] : []))
+          )
+        );
+        const succeededCount = completedJob.records.reduce((total, record) => total + successfulOutputCount(record), 0);
+        setGenerationHistory((history) => [
+          ...completedJob.records,
+          ...history.filter((record) => !completedJob.records.some((item) => item.id === record.id))
+        ].slice(0, 20));
+        setMobileSelectedRecordId(completedJob.records[0]?.id ?? null);
+        if (succeededCount > 0) {
+          setGenerationMessage(`已生成 ${succeededCount} 张电商图，结果已保存到作品图库。`);
+        } else {
+          setGenerationError(completedJob.message || "电商生成未返回可用图片。");
+        }
+      } catch (error) {
+        setGenerationError(error instanceof Error ? error.message : "电商生成失败，请重试。");
+      } finally {
+        setIsEcommerceGenerating(false);
+        setActiveGenerationCount((value) => Math.max(0, value - 1));
+      }
+      return;
+    }
+
     if (!editorRef.current) {
       setGenerationError("画布未就绪。");
       return;
@@ -2642,44 +5143,13 @@ export function App() {
     const editor = editorRef.current;
     const requestId = generationRequestRef.current + 1;
     generationRequestRef.current = requestId;
-    const placeholderSet = createEcommerceBatchPlaceholders(editor, totalOutputs, selectedSize, requestId);
     const controller = new AbortController();
+    let placeholderSet: ActiveGenerationPlaceholders | undefined;
 
     setIsEcommerceGenerating(true);
     setActiveGenerationCount((value) => value + 1);
     try {
-      const payload = {
-        product: {
-          title,
-          description: ecommerceDescription.trim(),
-          targetCustomer: ecommerceTargetCustomer.trim(),
-          usageScene: ecommerceUsageScene.trim(),
-          material: ecommerceMaterial.trim(),
-          color: ecommerceColor.trim()
-        },
-        platform: ecommercePlatform,
-        market: ecommerceMarket,
-        textLanguage: ecommerceMode === "text-translation" ? ecommerceTextLanguage : "none",
-        allowTextRecreation: ecommerceMode !== "text-translation",
-        removeWatermarkAndLogo: ecommerceRemoveWatermark,
-        sceneTemplateIds: ecommerceSceneIds,
-        sizePresetId: selectedSize.id,
-        size: {
-          width: selectedSize.width,
-          height: selectedSize.height
-        },
-        stylePresetId: ecommerceMode === "creative" ? "photoreal" : "product",
-        quality: "auto",
-        outputFormat: "png",
-        countPerScene: ecommerceCount,
-        referenceImage: {
-          dataUrl: ecommerceImage.dataUrl,
-          fileName: ecommerceImage.fileName
-        },
-        extraDirection: ecommerceExtraDirection.trim()
-      };
-
-      const response = await authFetch("/api/ecommerce/images/batch-generate", {
+      const response = await authFetch(generateEndpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -2691,22 +5161,28 @@ export function App() {
         throw new Error(await readErrorMessage(response));
       }
       const createdJob = (await response.json()) as EcommerceBatchGenerateResponse;
+      const placeholderCount = ecommerceMode === "category-kit" ? Math.max(1, createdJob.totalScenes || totalOutputs) : totalOutputs;
+      placeholderSet = createEcommerceBatchPlaceholders(editor, placeholderCount, selectedSize, requestId);
       setGenerationMessage(createdJob.message || "电商批量任务已创建。");
       const completedJob = await pollEcommerceJob(createdJob.jobId, controller.signal);
+      const finalOutputCount = ecommerceMode === "category-kit" ? Math.max(1, completedJob.totalScenes || completedJob.records.length) : placeholderCount;
       const combinedRecord = createEcommerceCombinedRecord({
         job: completedJob,
-        prompt: `${ecommerceModeLabels[ecommerceMode]}：${title}`,
+        prompt: `${ecommerceModeLabels[ecommerceMode]}：${title || "移动端快捷生成"}`,
         size: {
           width: selectedSize.width,
           height: selectedSize.height
         },
-        presetId: ecommerceMode === "creative" ? "photoreal" : "product",
+        presetId: ecommercePresetId,
         outputFormat: "png",
-        count: totalOutputs
+        count: finalOutputCount
       });
+      if (!placeholderSet) {
+        throw new Error("生成占位内容失败。");
+      }
       await Promise.all(combinedRecord.outputs.flatMap((output) => (output.asset ? [preloadGeneratedAssetPreview(output.asset, controller.signal)] : [])));
       const insertedCount = replaceGenerationPlaceholders(editor, placeholderSet, combinedRecord);
-      const failedCount = Math.max(0, totalOutputs - insertedCount);
+      const failedCount = Math.max(0, finalOutputCount - insertedCount);
       setGenerationHistory((history) => [
         ...completedJob.records,
         ...history.filter((record) => !completedJob.records.some((item) => item.id === record.id))
@@ -2722,10 +5198,117 @@ export function App() {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "电商生成失败，请重试。";
-      markGenerationPlaceholdersFailed(editor, placeholderSet, message);
+      if (placeholderSet) {
+        markGenerationPlaceholdersFailed(editor, placeholderSet, message);
+      }
       setGenerationError(message);
     } finally {
       setIsEcommerceGenerating(false);
+      setActiveGenerationCount((value) => Math.max(0, value - 1));
+    }
+  }
+
+  async function executeMobileGeneration(
+    input: GenerationSubmitInput,
+    requestMode: GenerationMode,
+    referenceForRequest?: GenerationReferenceInput,
+    referenceAssetId?: string
+  ): Promise<void> {
+    setGenerationError("");
+    setGenerationMessage("");
+    setGenerationWarning("");
+
+    const inputValidationMessage = generationValidationMessage(input.prompt, input.size.width, input.size.height);
+    if (inputValidationMessage) {
+      setGenerationError(inputValidationMessage);
+      return;
+    }
+    if (requestMode === "reference" && !referenceForRequest) {
+      setGenerationError("请先上传一张可用的参考图。");
+      return;
+    }
+
+    requestGenerationNotificationPermission();
+
+    const controller = new AbortController();
+    const requestId = generationRequestRef.current + 1;
+    generationRequestRef.current = requestId;
+    const temporaryRecord = createTemporaryGenerationRecord({
+      requestId,
+      submitInput: input,
+      requestMode,
+      referenceAssetId
+    });
+
+    setMobileCreateTab("history");
+    setMobileSelectedRecordId(temporaryRecord.id);
+    setActiveGenerationCount((value) => value + 1);
+    setGenerationHistory((history) => [temporaryRecord, ...history.filter((record) => record.id !== temporaryRecord.id)].slice(0, 20));
+
+    try {
+      const requestBody: Record<string, unknown> = {
+        prompt: input.prompt.trim(),
+        presetId: input.presetId,
+        sizePresetId: input.sizePresetId === ORIGINAL_SIZE_PRESET_ID ? CUSTOM_SIZE_PRESET_ID : input.sizePresetId,
+        size: input.size,
+        quality: input.quality,
+        outputFormat: input.outputFormat,
+        count: input.count,
+        modelConfigId: input.modelConfigId
+      };
+
+      if (requestMode === "reference" && referenceForRequest) {
+        requestBody.referenceImage = referenceForRequest.referenceImage;
+        if (referenceForRequest.referenceAssetId) {
+          requestBody.referenceAssetId = referenceForRequest.referenceAssetId;
+        }
+      }
+
+      const response = await authFetch(requestMode === "reference" ? "/api/images/edit" : "/api/images/generate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(requestBody),
+        signal: controller.signal
+      });
+
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+
+      const body = (await response.json()) as unknown;
+      if (!isGenerationResponse(body)) {
+        throw new Error("生成服务返回了无法识别的结果。");
+      }
+
+      await preloadGenerationRecordPreviews(body.record, controller.signal);
+      const succeededCount = successfulOutputCount(body.record);
+      const failedCount = body.record.outputs.filter((output) => output.status === "failed").length;
+      setGenerationHistory((history) =>
+        [body.record, ...history.filter((record) => record.id !== temporaryRecord.id && record.id !== body.record.id)].slice(0, 20)
+      );
+      setMobileSelectedRecordId(body.record.id);
+
+      if (succeededCount > 0) {
+        setGenerationMessage(
+          failedCount > 0
+            ? `已生成 ${succeededCount} 张图，${failedCount} 张失败。结果已保存到作品图库。`
+            : `已生成 ${succeededCount} 张图，结果已保存到作品图库。`
+        );
+      } else {
+        setGenerationError(body.record.error || "没有生成成功的图片。");
+      }
+    } catch (error) {
+      if (controller.signal.aborted) {
+        return;
+      }
+      const message = error instanceof Error ? error.message : "生成失败，请重试。";
+      setGenerationHistory((history) =>
+        history.map((record) => (record.id === temporaryRecord.id ? { ...record, status: "failed", error: message } : record))
+      );
+      setGenerationError(message);
+    } finally {
       setActiveGenerationCount((value) => Math.max(0, value - 1));
     }
   }
@@ -2784,7 +5367,7 @@ export function App() {
       const requestBody: Record<string, unknown> = {
         prompt: input.prompt.trim(),
         presetId: input.presetId,
-        sizePresetId: input.sizePresetId,
+        sizePresetId: input.sizePresetId === ORIGINAL_SIZE_PRESET_ID ? CUSTOM_SIZE_PRESET_ID : input.sizePresetId,
         size: input.size,
         quality: input.quality,
         outputFormat: input.outputFormat,
@@ -2843,7 +5426,7 @@ export function App() {
       const cloudFailedCount = cloudFailureCount(body.record);
       if (insertedCount > 0) {
         if (cloudFailedCount > 0) {
-          setGenerationWarning(`已向画布插入 ${insertedCount} 张图像，本地已保存，${cloudFailedCount} 张云端上传失败。`);
+          setGenerationWarning(`已向画布插入 ${insertedCount} 张图像，${cloudFailedCount} 张云端上传失败，已保留本地副本。`);
         } else {
           setGenerationMessage(
             failedCount > 0
@@ -2887,17 +5470,48 @@ export function App() {
       count
     };
 
+    if (isMobileDrawer) {
+      if (generationMode === "reference") {
+        await executeMobileGeneration(
+          input,
+          "reference",
+          mobileReferenceImage
+            ? {
+                referenceImage: {
+                  dataUrl: mobileReferenceImage.dataUrl,
+                  fileName: mobileReferenceImage.fileName
+                },
+                referenceAssetId: mobileReferenceImage.assetId
+              }
+            : undefined,
+          mobileReferenceImage?.assetId
+        );
+        return;
+      }
+
+      await executeMobileGeneration(input, "text");
+      return;
+    }
+
     if (generationMode === "reference") {
-      await executeGeneration(input, "reference", async (signal) => {
-        if (referenceSelection.status !== "ready") {
+      await executeGeneration(
+        input,
+        "reference",
+        async (signal) => {
+        const editor = editorRef.current;
+        if (!editor) {
           return undefined;
         }
 
-        return {
-          referenceImage: await readReferenceImage(referenceSelection, signal),
-          referenceAssetId: referenceSelection.localAssetId
-        };
-      }, referenceSelection.status === "ready" ? referenceSelection.localAssetId : undefined);
+        const currentSelection = resolveReferenceSelection(editor);
+        if (currentSelection.status !== "ready") {
+          return undefined;
+        }
+
+        return buildReferenceGenerationInput(editor, currentSelection, signal);
+      },
+        referenceSelection.status === "ready" ? referenceSelection.localAssetId : undefined
+      );
       return;
     }
 
@@ -2976,6 +5590,24 @@ export function App() {
     const nextGenerationMode: GenerationMode = record.referenceAssetId ? "reference" : "text";
     setGenerationMode(nextGenerationMode);
 
+    if (isMobileDrawer) {
+      await executeMobileGeneration(
+        {
+          prompt: record.prompt,
+          presetId: nextPresetId,
+          sizePresetId: nextSizePresetId,
+          size: record.size,
+          quality: record.quality,
+          outputFormat: record.outputFormat,
+          count: nextCount
+        },
+        nextGenerationMode,
+        record.referenceAssetId ? await buildHistoryReferenceGenerationInput(record, new AbortController().signal) : undefined,
+        record.referenceAssetId
+      );
+      return;
+    }
+
     await executeGeneration(
       {
         prompt: record.prompt,
@@ -2988,10 +5620,7 @@ export function App() {
       },
       nextGenerationMode,
       record.referenceAssetId
-        ? async (signal) => ({
-            referenceImage: await readStoredReferenceImage(record.referenceAssetId!, signal),
-            referenceAssetId: record.referenceAssetId
-          })
+        ? async (signal) => buildHistoryReferenceGenerationInput(record, signal)
         : undefined,
       record.referenceAssetId
     );
@@ -3026,6 +5655,47 @@ export function App() {
     setGenerationWarning("");
     setGenerationMode("text");
     navigateToRoute("canvas");
+
+    if (isMobileDrawer) {
+      setMobileCreateTab("creative");
+
+      if (shouldRetryWithModel) {
+        setGenerationMessage("已按所选模型重新提交生成。");
+        void executeMobileGeneration(
+          {
+            prompt: item.prompt,
+            presetId: nextPresetId,
+            sizePresetId: nextSizePresetId,
+            size: item.size,
+            quality: item.quality,
+            outputFormat: item.outputFormat,
+            count: 1,
+            modelConfigId
+          },
+          "text"
+        );
+        return;
+      }
+
+      setGenerationMode("reference");
+      setGenerationMessage("正在把图库图片设为参考图。");
+      void (async () => {
+        try {
+          const reference = await readStoredReferenceImage(item.asset.id, new AbortController().signal);
+          setMobileReferenceImage({
+            dataUrl: reference.dataUrl,
+            fileName: reference.fileName,
+            previewUrl: assetDisplayUrl(item.asset, 512),
+            assetId: item.asset.id
+          });
+          setGenerationMessage("已从图库填入参数，并把图片设为参考图。");
+        } catch (error) {
+          setGenerationError(error instanceof Error ? error.message : "无法读取图库图片。");
+          setGenerationMessage("");
+        }
+      })();
+      return;
+    }
 
     window.requestAnimationFrame(() => {
       const editor = editorRef.current;
@@ -3156,6 +5826,7 @@ export function App() {
 
   if (!isAuthenticated) {
     const publicAuthMode = publicPath === "/register" ? "register" : publicPath === "/login" ? "login" : null;
+    const guestVisibleRoute = publicPath === "/gallery" ? "gallery" : publicPath === "/help" ? "help" : "canvas";
 
     return (
       <div className="app-root">
@@ -3169,7 +5840,81 @@ export function App() {
             onSendSmsCode={sendRegisterSmsCode}
           />
         ) : (
-          <HomePage onAuthNavigate={navigateToAuth} />
+          <>
+            <GuestTopNavigation
+              route={guestVisibleRoute}
+              onAuthNavigate={navigateToAuth}
+              onNavigate={navigateToRoute}
+              onOpenPluginGuide={openPluginGuide}
+            />
+            {guestVisibleRoute === "help" ? (
+              <HelpCenterPage />
+            ) : guestVisibleRoute === "gallery" ? (
+              <Suspense
+                fallback={
+                  <main className="gallery-page app-view" data-testid="gallery-loading-page">
+                    <div className="gallery-empty-state gallery-empty-state--boot" role="status">
+                      <Loader2 className="size-5 animate-spin" aria-hidden="true" />
+                      <p>正在载入案例库...</p>
+                    </div>
+                  </main>
+                }
+              >
+                <LazyGalleryPage
+                  demoItems={demoGalleryItems}
+                  fetcher={fetch}
+                  mode="demo"
+                  onAuthRequired={openGuestQuotaModal}
+                  onDeleted={() => undefined}
+                  onReuse={() => openGuestQuotaModal()}
+                />
+              </Suspense>
+            ) : (
+              <GuestDemoWorkbench
+                examples={demoCanvasExamples}
+                isAiPanelOpen={isAiPanelOpen}
+                isMobileDrawer={isMobileDrawer}
+                panelCloseButtonRef={panelCloseButtonRef}
+                pluginGuideLinks={pluginGuideDisplayLinks}
+                selectedExampleId={selectedDemoExampleId}
+                onClosePanel={closeAiPanel}
+                onGenerationBlocked={openGuestQuotaModal}
+                onOpenPanel={() => setIsAiPanelOpen(true)}
+                onOpenPluginGuide={openPluginGuide}
+                onSelectExample={setSelectedDemoExampleId}
+              />
+            )}
+            {isGuestQuotaModalOpen ? (
+              <GuestQuotaOverlay
+                links={pluginGuideDisplayLinks}
+                onAuthNavigate={navigateFromGuestQuota}
+                onClose={() => setIsGuestQuotaModalOpen(false)}
+                onOpenInstallHelp={() => {
+                  const opened = window.open(pluginGuideDisplayLinks.installHelpUrl, "_blank", "noopener,noreferrer");
+                  if (!opened) {
+                    window.location.assign(pluginGuideDisplayLinks.installHelpUrl);
+                  }
+                }}
+              />
+            ) : null}
+            {isPluginGuideOpen ? (
+              <PluginGuideOverlay
+                browserLabel={pluginBrowserLabel}
+                links={pluginGuideDisplayLinks}
+                onClose={closePluginGuide}
+                onOpenInstallHelp={() => {
+                  const opened = window.open(pluginGuideDisplayLinks.installHelpUrl, "_blank", "noopener,noreferrer");
+                  if (!opened) {
+                    window.location.assign(pluginGuideDisplayLinks.installHelpUrl);
+                  }
+                }}
+                onRetryDetection={() => {
+                  dismissedPluginPromptRef.current = false;
+                  void probeAndMaybeShowPluginPrompt(true);
+                }}
+              />
+            ) : null}
+          </>
         )}
       </div>
     );
@@ -3177,25 +5922,100 @@ export function App() {
 
   const resolvedRoute = route === "admin" && !isAdminUser(currentUser) ? "canvas" : route;
   const requiresPhoneVerification = !currentUser.phone && !isAdminUser(currentUser);
-  const visibleRoute = requiresPhoneVerification ? "account" : resolvedRoute;
+  const visibleRoute = requiresPhoneVerification && resolvedRoute !== "help" ? "account" : resolvedRoute;
+  const showMobileWorkbench = isMobileDrawer && visibleRoute === "canvas";
+  const showMobileAppShell = isMobileDrawer && (visibleRoute === "canvas" || visibleRoute === "gallery" || visibleRoute === "account");
+  const packageRemaining = currentUser.packageRemaining ?? Math.max(0, (currentUser.quotaTotal ?? 0) - (currentUser.quotaUsed ?? 0));
 
   return (
     <div className="app-root">
-      <TopNavigation
-        ecommerceStats={ecommerceStats}
-        generationHistoryCount={generationHistory.length}
-        route={visibleRoute}
-        user={currentUser}
-        onLogout={handleLogout}
-        onNavigate={navigateToRoute}
-        onOpenGenerationHistory={() => {
-          navigateToRoute("canvas");
-          setSidebarTab("creative");
-          setIsHistoryExpanded(true);
-        }}
-        onPreloadGallery={preloadGalleryPage}
-      />
-      <main className="app-shell app-view relative flex min-h-0 overflow-hidden bg-neutral-950 text-neutral-900" data-active-route={visibleRoute} hidden={visibleRoute !== "canvas"}>
+      {!showMobileAppShell ? (
+        <TopNavigation
+          ecommerceStats={ecommerceStats}
+          generationHistoryCount={generationHistory.length}
+          route={visibleRoute}
+          user={currentUser}
+          onLogout={handleLogout}
+          onNavigate={navigateToRoute}
+          onOpenGenerationHistory={() => {
+            navigateToRoute("canvas");
+            setSidebarTab("creative");
+            setIsHistoryExpanded(true);
+            setMobileCreateTab("history");
+          }}
+          onPreloadGallery={preloadGalleryPage}
+        />
+      ) : null}
+      {showMobileWorkbench ? (
+        <MobileWorkbench
+          activeTab={mobileCreateTab}
+          canGenerate={canGenerate}
+          count={count}
+          ecommerceCount={ecommerceCount}
+          ecommerceDescription={ecommerceDescription}
+          ecommerceExtraDirection={ecommerceExtraDirection}
+          ecommerceImage={ecommerceImage}
+          ecommerceMarket={ecommerceMarket}
+          ecommerceMode={ecommerceMode}
+          ecommercePlatform={ecommercePlatform}
+          ecommerceRemoveWatermark={ecommerceRemoveWatermark}
+          ecommerceSceneIds={ecommerceSceneIds}
+          ecommerceSizePresetId={ecommerceSizePresetId}
+          ecommerceTextLanguage={ecommerceTextLanguage}
+          ecommerceTitle={ecommerceTitle}
+          generationError={generationError}
+          generationHistory={generationHistory}
+          generationMessage={generationMessage}
+          generationMode={generationMode}
+          generationWarning={generationWarning}
+          height={height}
+          isEcommerceGenerating={isEcommerceGenerating}
+          isGenerating={isGenerating}
+          mobileReferenceImage={mobileReferenceImage}
+          outputFormat={outputFormat}
+          panelStatus={panelStatus}
+          prompt={prompt}
+          quality={quality}
+          selectedRecordId={mobileSelectedRecordId}
+          sizePresetId={sizePresetId}
+          stylePreset={stylePreset}
+          user={currentUser}
+          width={width}
+          onApplyPromptStarter={applyPromptStarter}
+          onCopyHistoryPrompt={(record) => void copyHistoryPrompt(record)}
+          onDownloadHistoryRecord={downloadHistoryRecord}
+          onNavigate={navigateToRoute}
+          onOpenGallery={() => navigateToRoute("gallery")}
+          onRerunHistoryRecord={(record) => void rerunHistoryRecord(record)}
+          onSelectEcommerceImage={(file) => void selectEcommerceImage(file)}
+          onSelectEcommerceMode={selectEcommerceMode}
+          onSelectEcommerceScene={toggleEcommerceScene}
+          onSelectMobileReferenceImage={(file) => void selectMobileReferenceImage(file)}
+          onSelectSizePreset={selectScenePreset}
+          onSetActiveTab={setMobileCreateTab}
+          onSetCount={setCount}
+          onSetEcommerceCount={setEcommerceCount}
+          onSetEcommerceDescription={setEcommerceDescription}
+          onSetEcommerceExtraDirection={setEcommerceExtraDirection}
+          onSetEcommerceMarket={setEcommerceMarket}
+          onSetEcommercePlatform={setEcommercePlatform}
+          onSetEcommerceRemoveWatermark={setEcommerceRemoveWatermark}
+          onSetEcommerceSizePresetId={setEcommerceSizePresetId}
+          onSetEcommerceTextLanguage={setEcommerceTextLanguage}
+          onSetEcommerceTitle={setEcommerceTitle}
+          onSetGenerationMode={setGenerationMode}
+          onSetHeight={updateHeight}
+          onSetOutputFormat={setOutputFormat}
+          onSetPrompt={setPrompt}
+          onSetQuality={setQuality}
+          onSetSelectedRecordId={setMobileSelectedRecordId}
+          onSetStylePreset={setStylePreset}
+          onSetWidth={updateWidth}
+          onSubmitEcommerce={() => void submitEcommerceGeneration()}
+          onSubmitGeneration={() => void submitGeneration()}
+        />
+      ) : null}
+      <main className="app-shell app-view relative flex min-h-0 overflow-hidden bg-neutral-950 text-neutral-900" data-active-route={visibleRoute} hidden={visibleRoute !== "canvas" || showMobileWorkbench}>
       <section
         className="relative min-w-0 flex-1 bg-neutral-100 outline-none"
         aria-label={`${BRAND_NAME}创作画布`}
@@ -3206,6 +6026,7 @@ export function App() {
         {isProjectLoaded ? (
           <Tldraw
             assets={canvasAssetStore}
+            assetUrls={tldrawAssetUrls}
             components={tldrawComponents}
             licenseKey={TLDRAW_LICENSE_KEY}
             options={tldrawOptions}
@@ -3262,20 +6083,6 @@ export function App() {
         <div className="ai-panel-header border-b border-neutral-200 px-5 py-4">
           <div className="flex items-start justify-end gap-3">
             <div className="flex shrink-0 items-center gap-2">
-              <button
-                aria-label="云存储设置"
-                className={`inline-flex h-7 w-7 items-center justify-center rounded-md border text-xs transition focus:outline-none focus:ring-2 focus:ring-cyan-100 ${
-                  storageConfig?.enabled
-                    ? "border-cyan-200 bg-cyan-50 text-cyan-700 hover:bg-cyan-100"
-                    : "border-neutral-200 bg-white text-neutral-500 hover:bg-neutral-50 hover:text-neutral-900"
-                }`}
-                data-testid="storage-settings-button"
-                title={storageConfig?.enabled ? "云存储已开启" : "云存储设置"}
-                type="button"
-                onClick={openStorageDialog}
-              >
-                <Cloud className="size-4" aria-hidden="true" />
-              </button>
               <div
                 className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-medium ${
                   saveStatus === "error" ? "bg-red-50 text-red-700" : "bg-neutral-100 text-neutral-600"
@@ -3330,6 +6137,34 @@ export function App() {
                 </div>
                 <h2>一张产品图，串起整套电商素材</h2>
                 <p>PC 主站可直接上传产品图、录入商品信息、选择场景并生成到画布；浏览器插件继续保留采集和网页侧入口。</p>
+                <div className="sidebar-hero__actions">
+                  <a className="sidebar-cta" href={pluginGuideLinks.downloadUrl} target="_blank" rel="noreferrer">
+                    <Download className="size-4" aria-hidden="true" />
+                    下载插件
+                  </a>
+                  <button className="sidebar-ghost" type="button" onClick={openPluginGuide}>
+                    <ShieldCheck className="size-4" aria-hidden="true" />
+                    安装提示
+                  </button>
+                </div>
+              </section>
+
+              <section className="plugin-flow-card" aria-label="插件使用流程">
+                <div className="plugin-flow-card__item">
+                  <span>1</span>
+                  <strong>下载插件</strong>
+                  <small>打开最新安装包</small>
+                </div>
+                <div className="plugin-flow-card__item">
+                  <span>2</span>
+                  <strong>安装插件</strong>
+                  <small>解压并加载扩展</small>
+                </div>
+                <div className="plugin-flow-card__item">
+                  <span>3</span>
+                  <strong>使用插件</strong>
+                  <small>打开插件直接使用</small>
+                </div>
               </section>
 
               <section className="sidebar-section">
@@ -3393,16 +6228,16 @@ export function App() {
                     <h3>生成依据</h3>
                   </div>
                   <Package className="size-4 text-amber-700" aria-hidden="true" />
-                </div>
-                <label className="block">
-                  <span className="control-label">商品标题</span>
-                  <input
-                    className="field-control"
-                    placeholder="例如：真丝方巾 / 便携榨汁杯"
-                    value={ecommerceTitle}
-                    onChange={(event) => setEcommerceTitle(event.target.value)}
-                  />
-                </label>
+	                </div>
+	                <label className="block">
+	                  <span className="control-label">{ecommerceMode === "single-poster" || ecommerceMode === "category-kit" ? "商品标题（可选）" : "商品标题"}</span>
+	                  <input
+	                    className="field-control"
+	                    placeholder={ecommerceMode === "single-poster" || ecommerceMode === "category-kit" ? "可留空，由模型依据产品图和描述归纳" : "例如：便携榨汁杯 / 雪地靴"}
+	                    value={ecommerceTitle}
+	                    onChange={(event) => setEcommerceTitle(event.target.value)}
+	                  />
+	                </label>
                 <label className="mt-3 block">
                   <span className="control-label">商品描述</span>
                   <textarea
@@ -3435,31 +6270,13 @@ export function App() {
               <section className="sidebar-section">
                 <div className="sidebar-section__head">
                   <div>
-                    <p className="sidebar-section__eyebrow">平台与市场</p>
-                    <h3>输出目标</h3>
+                    <p className="sidebar-section__eyebrow">{ecommerceMode === "text-translation" ? "翻译设置" : "平台与市场"}</p>
+                    <h3>{ecommerceMode === "text-translation" ? "目标语言" : "输出目标"}</h3>
                   </div>
                   <Globe2 className="size-4 text-amber-700" aria-hidden="true" />
                 </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <label>
-                    <span className="control-label">平台</span>
-                    <select className="field-control" value={ecommercePlatform} onChange={(event) => setEcommercePlatform(event.target.value as EcommercePlatform)}>
-                      {ECOMMERCE_PLATFORMS.map((item) => (
-                        <option key={item.id} value={item.id}>{item.label}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    <span className="control-label">市场</span>
-                    <select className="field-control" value={ecommerceMarket} onChange={(event) => setEcommerceMarket(event.target.value as EcommerceMarket)}>
-                      {ECOMMERCE_MARKETS.map((item) => (
-                        <option key={item.id} value={item.id}>{item.label}</option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
                 {ecommerceMode === "text-translation" ? (
-                  <label className="mt-3 block">
+                  <label className="block">
                     <span className="control-label">目标语言</span>
                     <select className="field-control" value={ecommerceTextLanguage} onChange={(event) => setEcommerceTextLanguage(event.target.value as EcommerceTextLanguage)}>
                       {ECOMMERCE_TEXT_LANGUAGES.filter((item) => item.id !== "none").map((item) => (
@@ -3467,34 +6284,57 @@ export function App() {
                       ))}
                     </select>
                   </label>
-                ) : null}
+                ) : (
+                  <div className="grid grid-cols-2 gap-3">
+                    <label>
+                      <span className="control-label">平台</span>
+                      <select className="field-control" value={ecommercePlatform} onChange={(event) => setEcommercePlatform(event.target.value as EcommercePlatform)}>
+                        {ECOMMERCE_PLATFORMS.map((item) => (
+                          <option key={item.id} value={item.id}>{item.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      <span className="control-label">市场</span>
+                      <select className="field-control" value={ecommerceMarket} onChange={(event) => setEcommerceMarket(event.target.value as EcommerceMarket)}>
+                        {ECOMMERCE_MARKETS.map((item) => (
+                          <option key={item.id} value={item.id}>{item.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                )}
               </section>
 
               <section className="sidebar-section">
                 <div className="sidebar-section__head">
                   <div>
                     <p className="sidebar-section__eyebrow">生成场景</p>
-                    <h3>{ecommerceSceneIds.length} 个场景</h3>
+                    <h3>{ecommerceMode === "category-kit" ? "后台动态规划" : `${ecommerceSceneIds.length} 个场景`}</h3>
                   </div>
                   <BadgeCheck className="size-4 text-emerald-600" aria-hidden="true" />
                 </div>
-                <div className="sidebar-template-grid">
-                  {ECOMMERCE_SCENE_TEMPLATES.filter((item) => item.mode === ecommerceMode).map((item) => {
-                    const active = ecommerceSceneIds.includes(item.id);
-                    return (
-                      <button
-                        key={item.id}
-                        className={active ? "sidebar-template is-active" : "sidebar-template"}
-                        type="button"
-                        aria-pressed={active}
-                        onClick={() => toggleEcommerceScene(item.id)}
-                      >
-                        <span className="sidebar-template__title">{item.label}</span>
-                        <span className="sidebar-template__desc">{active ? "已选择" : "点击加入"}</span>
-                      </button>
-                    );
-                  })}
-                </div>
+                {ecommerceMode === "category-kit" ? (
+                  <p>后台会根据参考图自动识别商品并规划图片清单，不再固定选择场景模板。</p>
+                ) : (
+                  <div className="sidebar-template-grid">
+                    {ECOMMERCE_SCENE_TEMPLATES.filter((item) => item.mode === ecommerceMode).map((item) => {
+                      const active = ecommerceSceneIds.includes(item.id);
+                      return (
+                        <button
+                          key={item.id}
+                          className={active ? "sidebar-template is-active" : "sidebar-template"}
+                          type="button"
+                          aria-pressed={active}
+                          onClick={() => toggleEcommerceScene(item.id)}
+                        >
+                          <span className="sidebar-template__title">{item.label}</span>
+                          <span className="sidebar-template__desc">{active ? "已选择" : "点击加入"}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </section>
 
               <section className="sidebar-section">
@@ -3506,22 +6346,31 @@ export function App() {
                   <Square className="size-4 text-amber-700" aria-hidden="true" />
                 </div>
                 <div className="grid grid-cols-2 gap-3">
-                  <label>
-                    <span className="control-label">输出尺寸</span>
-                    <select className="field-control" value={ecommerceSizePresetId} onChange={(event) => setEcommerceSizePresetId(event.target.value)}>
-                      {ecommerceSizePresets.map((item) => (
-                        <option key={item.id} value={item.id}>{sizePresetLabel(item)}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    <span className="control-label">每场景张数</span>
-                    <select className="field-control" value={ecommerceCount} onChange={(event) => setEcommerceCount(Number(event.target.value) as GenerationCount)}>
-                      {GENERATION_COUNTS.map((item) => (
-                        <option key={item} value={item}>{item} 张</option>
-                      ))}
-                    </select>
-                  </label>
+	                  <label>
+	                    <span className="control-label">输出尺寸</span>
+	                    <select className="field-control" value={ecommerceSizePresetId} onChange={(event) => setEcommerceSizePresetId(event.target.value)}>
+	                      {ecommerceSizePresets.map((item) => (
+	                        <option key={item.id} value={item.id}>{sizePresetLabel(item)}</option>
+	                      ))}
+	                    </select>
+	                  </label>
+	                  <label>
+	                    <span className="control-label">{ecommerceMode === "single-poster" || ecommerceMode === "category-kit" ? "输出张数" : "每场景张数"}</span>
+	                    {ecommerceMode === "category-kit" ? (
+	                      <input className="field-control" readOnly value="后台动态规划" />
+	                    ) : (
+	                      <select
+	                        className="field-control"
+	                        disabled={ecommerceMode === "single-poster"}
+	                        value={ecommerceMode === "single-poster" ? 1 : ecommerceCount}
+	                        onChange={(event) => setEcommerceCount(Number(event.target.value) as GenerationCount)}
+	                      >
+	                        {(ecommerceMode === "single-poster" ? [1] : GENERATION_COUNTS).map((item) => (
+	                          <option key={item} value={item}>{item} 张</option>
+	                        ))}
+	                      </select>
+	                    )}
+	                  </label>
                 </div>
                 <label className="ecommerce-switch-row">
                   <span>
@@ -3697,6 +6546,22 @@ export function App() {
                   </small>
                 </button>
               ))}
+              {isReferenceMode ? (
+                <button
+                  aria-pressed={sizePresetId === ORIGINAL_SIZE_PRESET_ID}
+                  className={sizePresetId === ORIGINAL_SIZE_PRESET_ID ? "quick-size-button is-active" : "quick-size-button"}
+                  disabled={!isReferenceReady}
+                  type="button"
+                  onClick={() => selectScenePreset(ORIGINAL_SIZE_PRESET_ID)}
+                >
+                  <span>{ORIGINAL_SIZE_PRESET_LABEL}</span>
+                  <small>
+                    {referenceSelection.status === "ready"
+                      ? originalSizePresetOptionLabel(referenceSelection.width, referenceSelection.height)
+                      : "选择参考图后可用"}
+                  </small>
+                </button>
+              ) : null}
               <button
                 aria-pressed={sizePresetId === CUSTOM_SIZE_PRESET_ID}
                 className={sizePresetId === CUSTOM_SIZE_PRESET_ID ? "quick-size-button is-active" : "quick-size-button"}
@@ -3722,6 +6587,13 @@ export function App() {
                     {sizePresetOptionLabel(preset)}
                   </option>
                 ))}
+                {isReferenceMode ? (
+                  <option disabled={!isReferenceReady} value={ORIGINAL_SIZE_PRESET_ID}>
+                    {referenceSelection.status === "ready"
+                      ? originalSizePresetOptionLabel(referenceSelection.width, referenceSelection.height)
+                      : ORIGINAL_SIZE_PRESET_LABEL}
+                  </option>
+                ) : null}
                 <option value={CUSTOM_SIZE_PRESET_ID}>自定义尺寸</option>
               </select>
             </label>
@@ -3971,7 +6843,7 @@ export function App() {
           {sidebarTab === "plugins" ? (
             <button className="primary-action" disabled={isEcommerceGenerating} type="button" onClick={() => void submitEcommerceGeneration()}>
               {isEcommerceGenerating ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Workflow className="size-4" aria-hidden="true" />}
-              {isEcommerceGenerating ? "电商图生成中" : "生成电商图到画布"}
+              {isEcommerceGenerating ? "电商图生成中" : ecommerceMode === "category-kit" ? "生成品类套图到画布" : "生成电商图到画布"}
             </button>
           ) : (
             <button
@@ -3995,161 +6867,6 @@ export function App() {
         </div>
       </aside>
 
-      {isStorageDialogOpen ? (
-        <div className="fixed inset-0 z-[3000] flex items-center justify-center bg-neutral-950/45 px-4 py-6" data-testid="storage-dialog">
-          <div
-            aria-labelledby="storage-dialog-title"
-            aria-modal="true"
-            className="flex max-h-full w-full max-w-lg flex-col overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-2xl"
-            role="dialog"
-          >
-            <div className="flex items-start justify-between gap-3 border-b border-neutral-200 px-5 py-4">
-              <div className="min-w-0">
-                <h2 className="text-base font-semibold text-neutral-950" id="storage-dialog-title">
-                  云存储设置
-                </h2>
-                <p className="mt-1 text-xs leading-5 text-neutral-500">支持阿里云 OSS / 腾讯云 COS，生成图本地保存后同步上传。</p>
-              </div>
-              <button
-                aria-label="关闭云存储设置"
-                className="history-icon-action"
-                type="button"
-                onClick={closeStorageDialog}
-              >
-                <X className="size-4" aria-hidden="true" />
-              </button>
-            </div>
-
-            <div className="space-y-4 overflow-y-auto px-5 py-5">
-              {storageError ? (
-                <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm leading-5 text-red-700" role="alert">
-                  {storageError}
-                </p>
-              ) : null}
-              {storageMessage ? (
-                <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm leading-5 text-emerald-700" role="status">
-                  {storageMessage}
-                </p>
-              ) : null}
-
-              <label className="flex items-center justify-between gap-3 rounded-md border border-neutral-200 px-3 py-3">
-                <span className="min-w-0">
-                  <span className="block text-sm font-semibold text-neutral-900">启用云存储双写</span>
-                  <span className="mt-0.5 block text-xs leading-5 text-neutral-500">关闭后新图只写本地，已有云端对象保留。</span>
-                </span>
-                <input
-                  checked={storageForm.enabled}
-                  className="size-4 accent-blue-600"
-                  data-testid="storage-enabled"
-                  id="storage-enabled"
-                  name="storageEnabled"
-                  type="checkbox"
-                  onChange={(event) => updateStorageForm({ enabled: event.target.checked })}
-                />
-              </label>
-
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <label className="block sm:col-span-2">
-                  <span className="control-label">Provider</span>
-                  <select
-                    className="field-control"
-                    data-testid="storage-provider"
-                    id="storage-provider"
-                    name="storageProvider"
-                    value={storageForm.provider}
-                    onChange={(event) => updateStorageProvider(event.target.value === "cos" ? "cos" : "oss")}
-                  >
-                    <option value="oss">阿里云 OSS</option>
-                    <option value="cos">腾讯云 COS</option>
-                  </select>
-                </label>
-                <label className="block sm:col-span-2">
-                  <span className="control-label">{storageForm.provider === "oss" ? "AccessKey ID" : "SecretId"}</span>
-                  <input
-                    className="field-control"
-                    data-testid="storage-secret-id"
-                    id="storage-secret-id"
-                    name="storageSecretId"
-                    value={storageForm.secretId}
-                    onChange={(event) => updateStorageForm({ secretId: event.target.value })}
-                  />
-                </label>
-                <label className="block sm:col-span-2">
-                  <span className="control-label">{storageForm.provider === "oss" ? "AccessKey Secret" : "SecretKey"}</span>
-                  <input
-                    className="field-control"
-                    data-testid="storage-secret-key"
-                    id="storage-secret-key"
-                    name="storageSecretKey"
-                    type={storageSecretTouched ? "password" : "text"}
-                    value={storageForm.secretKey}
-                    onChange={(event) => {
-                      setStorageSecretTouched(true);
-                      updateStorageForm({ secretKey: event.target.value });
-                    }}
-                  />
-                </label>
-                <label className="block">
-                  <span className="control-label">Bucket</span>
-                  <input
-                    className="field-control"
-                    data-testid="storage-bucket"
-                    id="storage-bucket"
-                    name="storageBucket"
-                    value={storageForm.bucket}
-                    onChange={(event) => updateStorageForm({ bucket: event.target.value })}
-                  />
-                </label>
-                <label className="block">
-                  <span className="control-label">Region</span>
-                  <input
-                    className="field-control"
-                    data-testid="storage-region"
-                    id="storage-region"
-                    name="storageRegion"
-                    value={storageForm.region}
-                    onChange={(event) => updateStorageForm({ region: event.target.value })}
-                  />
-                </label>
-                <label className="block sm:col-span-2">
-                  <span className="control-label">Key Prefix</span>
-                  <input
-                    className="field-control"
-                    data-testid="storage-prefix"
-                    id="storage-prefix"
-                    name="storagePrefix"
-                    value={storageForm.keyPrefix}
-                    onChange={(event) => updateStorageForm({ keyPrefix: event.target.value })}
-                  />
-                </label>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3 border-t border-neutral-200 px-5 py-4">
-              <button
-                className="secondary-action h-10"
-                data-testid="storage-test"
-                disabled={isStorageTesting || isStorageSaving}
-                type="button"
-                onClick={() => void testStorageSettings()}
-              >
-                {isStorageTesting ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Cloud className="size-4" aria-hidden="true" />}
-                测试
-              </button>
-              <button
-                className="primary-action h-10"
-                data-testid="storage-save"
-                disabled={isStorageSaving || isStorageTesting}
-                type="button"
-                onClick={() => void saveStorageSettings()}
-              >
-                {isStorageSaving ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <CheckCircle2 className="size-4" aria-hidden="true" />}
-                保存
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
       </main>
       {visibleRoute === "gallery" ? (
         <Suspense
@@ -4162,11 +6879,59 @@ export function App() {
             </main>
           }
         >
-          <LazyGalleryPage fetcher={authFetch} onDeleted={removeGalleryOutputFromHistory} onReuse={reuseGalleryImage} />
+          <LazyGalleryPage
+            fetcher={authFetch}
+            mobile={isMobileDrawer}
+            mobileQuota={packageRemaining}
+            onDeleted={removeGalleryOutputFromHistory}
+            onMobileAccount={() => navigateToRoute("account")}
+            onMobileCreate={() => {
+              navigateToRoute("canvas");
+              setMobileCreateTab("ecommerce");
+            }}
+            onMobileHome={() => {
+              navigateToRoute("canvas");
+              setMobileCreateTab("home");
+            }}
+            onReuse={reuseGalleryImage}
+          />
         </Suspense>
       ) : null}
-      {visibleRoute === "account" ? <AccountPage user={currentUser} onUserUpdated={setCurrentUser} onSendPhoneCode={sendBindPhoneSmsCode} onBindPhone={bindPhone} /> : null}
+      {visibleRoute === "help" ? <HelpCenterPage onBack={() => navigateToRoute("canvas")} /> : null}
+      {visibleRoute === "account" ? (
+        <AccountPage
+          mobile={isMobileDrawer}
+          user={currentUser}
+          onLogout={handleLogout}
+          onNavigate={(nextRoute) => {
+            navigateToRoute(nextRoute);
+            if (nextRoute === "canvas") {
+              setMobileCreateTab("home");
+            }
+          }}
+          onUserUpdated={setCurrentUser}
+          onSendPhoneCode={sendBindPhoneSmsCode}
+          onBindPhone={bindPhone}
+        />
+      ) : null}
       {visibleRoute === "admin" && isAdminUser(currentUser) ? <AdminPage /> : null}
+      {isPluginGuideOpen && visibleRoute === "canvas" ? (
+        <PluginGuideOverlay
+          browserLabel={pluginBrowserLabel}
+          links={pluginGuideDisplayLinks}
+          onClose={closePluginGuide}
+          onOpenInstallHelp={() => {
+            const opened = window.open(pluginGuideDisplayLinks.installHelpUrl, "_blank", "noopener,noreferrer");
+            if (!opened) {
+              window.location.assign(pluginGuideDisplayLinks.installHelpUrl);
+            }
+          }}
+          onRetryDetection={() => {
+            dismissedPluginPromptRef.current = false;
+            void probeAndMaybeShowPluginPrompt(true);
+          }}
+        />
+      ) : null}
     </div>
   );
 }

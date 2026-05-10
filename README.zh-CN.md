@@ -11,8 +11,8 @@
 ## 亮点
 
 - 基于 tldraw 的 AI 画布，支持文生图和参考图生成。
-- 生成图像和项目快照默认本地优先保存。
-- 可选阿里云 OSS / 腾讯云 COS 备份，新生成图支持本地 + 云端双写。
+- 项目快照默认本地优先保存；生成图可启用云端上传，成功后不保留本地原图。
+- 可选阿里云 OSS / 腾讯云 COS 上传，新生成图支持云端备份。
 - 生成历史支持定位、重跑、下载和云端上传状态提示。
 - 支持 OpenAI 兼容图像端点，并兼容 PackyCode / `gpt-image` 风格响应。
 
@@ -88,7 +88,7 @@ pnpm build
 
 使用右侧 AI 面板输入提示词、选择画面尺寸并生成图像。当画布中选中一张图片形状时，生成按钮会切换为参考图生成。画布编辑后会自动保存到本地 API，最近生成历史提供定位、重跑和下载已存储输出的操作。
 
-AI 面板顶部也提供云存储按钮。需要将新生成图保存到 OSS 或 COS 时，可在弹窗中启用云存储双写。
+云存储由后台统一配置。管理员启用 OSS 或 COS 后，所有用户的新生成图都会使用同一套云端目标。
 
 完成改动前请运行：
 
@@ -114,6 +114,11 @@ pnpm build
 pnpm --filter @gpt-image-canvas/extension build:dev
 pnpm --filter @gpt-image-canvas/extension build:prod
 ```
+
+版本号的发布口径如下：
+
+- 走 `./scripts/server-release.sh dev` 或 `./scripts/server-release.sh promote` 时，版本号以后台“插件发布配置”里对应通道的版本号为准。脚本会先读取远端后台配置，再写入插件 `manifest.json`、zip 文件名和 `latest.json`。
+- 手动运行 `pnpm --filter @gpt-image-canvas/extension build:dev` / `build:prod` 时，不会自动读取后台；如需手动指定版本，可传 `EXTENSION_DEV_VERSION=1.1.7` 或 `EXTENSION_PROD_VERSION=1.1.7`。未传时回退到 `apps/extension/package.json`。
 
 构建产物：
 
@@ -173,19 +178,19 @@ MYSQL_DATABASE=gpt_image_canvas
 
 容器内不要使用 `127.0.0.1` 或 `localhost` 连接宿主机 MySQL；它们会指向 app 容器自身。Compose 已配置 `host.docker.internal` 到宿主机网关的解析。
 
-Compose 构建支持与参考项目 `open-managed-flow` 相同的网络相关 build args：`NODE_IMAGE`、`NPM_CONFIG_REGISTRY`、`APT_MIRROR` 和 `APT_SECURITY_MIRROR`。Compose 中默认的 `NODE_IMAGE` 是 `node:23-bullseye-slim`，因为它满足应用的 `>=22` 运行时要求，并且在 Docker Hub 不可用时更常见于本地缓存。如需强制使用 Node 22 基础镜像，可以运行：
+Compose 构建支持与参考项目 `open-managed-flow` 相同的网络相关 build args：`NODE_IMAGE`、`NPM_CONFIG_REGISTRY`、`APT_MIRROR` 和 `APT_SECURITY_MIRROR`。Compose 中默认的 `NODE_IMAGE` 是 `public.ecr.aws/docker/library/node:22-bookworm-slim`，与 Dockerfile 默认值一致，也能避开 Docker Hub。若要显式覆盖它，可以运行：
 
 Windows PowerShell：
 
 ```powershell
-$env:NODE_IMAGE = 'node:22-bookworm-slim'
+$env:NODE_IMAGE = 'public.ecr.aws/docker/library/node:22-bookworm-slim'
 docker compose up --build
 ```
 
 macOS/Linux：
 
 ```sh
-NODE_IMAGE=node:22-bookworm-slim docker compose up --build
+NODE_IMAGE=public.ecr.aws/docker/library/node:22-bookworm-slim docker compose up --build
 ```
 
 `OPENAI_API_KEY` 可以在本地启动检查时留空。应用仍会启动，生成端点会返回缺少 key 的 JSON 错误，直到配置凭证为止。
@@ -272,7 +277,7 @@ Docker 内部 Nginx 会自动维护两条线路：生产入口指向当前上线
 
 ## 云存储备份
 
-生成图始终先保存到本地。用户在应用内云存储弹窗启用阿里云 OSS 或腾讯云 COS 后，新生成图还会上传到：
+在后台启用阿里云 OSS 或腾讯云 COS，或者在 `.env` 里直接配置对应凭据后，新生成图会上传到云端；上传成功后不会保留本地原图或预览缓存：
 
 ```text
 <key-prefix>/YYYY/MM/<assetId>.<ext>
@@ -290,9 +295,9 @@ COS 表单默认值来自 `.env`：
 - `COS_DEFAULT_REGION`
 - `COS_DEFAULT_KEY_PREFIX`
 
-保存 OSS / COS 配置前会执行一次测试上传和删除。由于当前应用没有服务端账号系统，AccessKey Secret / SecretKey 会保存在本地数据库中，但读取配置接口只返回掩码状态，不会回显明文。
+后台保存 OSS / COS 配置前会执行一次测试上传和删除。AccessKey Secret / SecretKey 会保存在系统设置中，但读取配置接口只返回掩码状态，不会回显明文。
 
-云端上传失败不会导致生成失败。图片仍可从本地读取，生成历史中会显示云备份失败标记。
+云端上传失败不会导致生成失败。图片会回落为本地副本，生成历史中会显示云备份失败标记。
 
 ## 本地数据
 
@@ -318,7 +323,7 @@ Docker Compose 会将宿主机 `./data` 绑定挂载到 `/app/data`，因此项�
 - 缺少模型访问权限：确认 `OPENAI_API_KEY` 所属的 OpenAI organization 和 project 可以访问当前配置的图像模型。如果兼容端点需要不同模型名，请设置 `OPENAI_IMAGE_MODEL`。
 - 高分辨率生成超时：默认上游请求超时为 20 分钟，可在 `.env` 中调大 `OPENAI_IMAGE_TIMEOUT_MS`。
 - 端口已被占用：为 API/Docker 运行时设置 `.env` 中的 `PORT`；如果 Web 的 `5173` 被占用，请先关闭占用进程，或显式运行 `pnpm web:dev -- --port 5174` 并打开打印出来的地址。
-- Docker 构建无法拉取 Node 基础镜像：在 macOS/Linux 可用 `NODE_IMAGE=node:23-bullseye-slim docker compose up --build` 使用本地缓存镜像；在 Windows PowerShell 可先运行 `$env:NODE_IMAGE = 'node:23-bullseye-slim'`，再运行 `docker compose up --build`；也可以恢复 Docker Hub 访问后重新运行 `docker compose up --build`。
+- Docker 构建无法拉取 Node 基础镜像：在 macOS/Linux 可用 `NODE_IMAGE=public.ecr.aws/docker/library/node:22-bookworm-slim docker compose up --build` 使用镜像源；在 Windows PowerShell 可先运行 `$env:NODE_IMAGE = 'public.ecr.aws/docker/library/node:22-bookworm-slim'`，再运行 `docker compose up --build`；也可以恢复 Docker Hub 访问后重新运行 `docker compose up --build`。
 - Docker config 默认会输出 `.env` 值。真实凭证存在时，请使用 `docker compose config --quiet --no-env-resolution` 做验证，不要分享展开后的 config 输出。
 - Docker 中出现 SQLite `SQLITE_IOERR_SHMOPEN`：保留 Compose 默认的 `SQLITE_JOURNAL_MODE=DELETE` 和 `SQLITE_LOCKING_MODE=EXCLUSIVE`，重新构建，并确认没有本地 API 进程同时占用同一个 `data/` 数据库。
 - SQLite `SQLITE_CORRUPT`：停止所有应用进程，备份 `data/`，再从备份恢复，或删除 SQLite 文件让应用创建新数据库。`data/assets/` 下的生成图片文件可以保留。

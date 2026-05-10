@@ -34,6 +34,9 @@ RUN pnpm build
 
 FROM base AS runner
 
+ARG APT_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/debian
+ARG APT_SECURITY_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/debian-security
+
 ENV NODE_ENV="production"
 ENV HOST="0.0.0.0"
 ENV PORT="8787"
@@ -43,7 +46,12 @@ ENV MYSQL_PORT="3306"
 ENV MYSQL_USER="gpt_image_canvas"
 ENV MYSQL_DATABASE="gpt_image_canvas"
 
-RUN mkdir -p /app/data
+RUN sed -i "s|http://deb.debian.org/debian-security|${APT_SECURITY_MIRROR}|g; s|http://deb.debian.org/debian|${APT_MIRROR}|g; s|https://deb.debian.org/debian-security|${APT_SECURITY_MIRROR}|g; s|https://deb.debian.org/debian|${APT_MIRROR}|g" /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends fontconfig fonts-noto-cjk \
+  && fc-cache -f \
+  && rm -rf /var/lib/apt/lists/* \
+  && mkdir -p /app/data
 
 COPY --from=build /app/package.json /app/pnpm-lock.yaml /app/pnpm-workspace.yaml ./
 COPY --from=build /app/node_modules ./node_modules

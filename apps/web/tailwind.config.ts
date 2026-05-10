@@ -6,7 +6,11 @@ export default {
     extend: {
       fontFamily: {
         sans: [
-          "Noto Sans SC",
+          "PingFang SC",
+          "Hiragino Sans GB",
+          "Microsoft YaHei",
+          "Noto Sans CJK SC",
+          "Source Han Sans SC",
           "ui-sans-serif",
           "system-ui",
           "-apple-system",

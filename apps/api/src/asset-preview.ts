@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import sharp from "sharp";
 import type { RequestTenant } from "./auth-context.js";
@@ -69,7 +69,7 @@ export async function readStoredAssetPreview(
 
   const previewPath = resolvePreviewPath(asset.file.id, width);
   const cached = await readCachedPreview(previewPath);
-  if (cached) {
+  if (cached && !asset.file.cloud) {
     return {
       bytes: cached,
       width
@@ -88,7 +88,13 @@ export async function readStoredAssetPreview(
     })
     .toBuffer();
 
-  await writeFile(previewPath, bytes);
+  if (asset.file.cloud) {
+    if (cached) {
+      void rm(previewPath, { force: true }).catch(() => undefined);
+    }
+  } else {
+    await writeFile(previewPath, bytes);
+  }
 
   return {
     bytes,

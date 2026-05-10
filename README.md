@@ -11,8 +11,8 @@ Local professional AI canvas built with tldraw, Hono, SQLite, and GPT Image 2. V
 ## Highlights
 
 - AI canvas powered by tldraw with prompt-to-image and reference-image generation.
-- Local-first storage for generated images and project snapshots.
-- Optional Alibaba Cloud OSS / Tencent Cloud COS backup for newly generated images.
+- Local-first storage for project snapshots, with optional cloud-backed generated images.
+- Optional Alibaba Cloud OSS / Tencent Cloud COS upload for newly generated images.
 - Generation history with locate, rerun, download, and cloud upload status.
 - OpenAI-compatible image endpoint support, including PackyCode / `gpt-image` style responses.
 
@@ -88,7 +88,7 @@ For UI changes, have Codex run `pnpm dev` and verify the Vite app in a browser a
 
 Use the right-side AI panel to enter a prompt, choose a scene size, and generate. When one image shape is selected on the canvas, the generate button switches to reference-image generation. The canvas autosaves to the local API after edits, and recent generation history provides locate, rerun, and download actions for stored outputs.
 
-The AI panel also includes a cloud storage button. Enable OSS or COS there when you want new generated images to be written locally and uploaded to cloud storage.
+Cloud storage is configured once in the admin backend. When enabled, all users share the same OSS or COS destination for newly generated images.
 
 Before completing changes, run:
 
@@ -142,26 +142,26 @@ MYSQL_DATABASE=gpt_image_canvas
 
 Do not use `127.0.0.1` or `localhost` from inside the container for host MySQL; those point to the app container itself. Compose maps `host.docker.internal` to the host gateway.
 
-The Compose build accepts the same network-related build arguments used by the reference `open-managed-flow` project: `NODE_IMAGE`, `NPM_CONFIG_REGISTRY`, `APT_MIRROR`, and `APT_SECURITY_MIRROR`. The default `NODE_IMAGE` in Compose is `node:23-bullseye-slim` because it satisfies the app's `>=22` runtime requirement and is commonly available as a local cache when Docker Hub is unreachable. To force the exact Node 22 base image, run:
+The Compose build accepts the same network-related build arguments used by the reference `open-managed-flow` project: `NODE_IMAGE`, `NPM_CONFIG_REGISTRY`, `APT_MIRROR`, and `APT_SECURITY_MIRROR`. The default `NODE_IMAGE` in Compose is `public.ecr.aws/docker/library/node:22-bookworm-slim`, matching the Dockerfile default and avoiding Docker Hub during server builds. To override it explicitly, run:
 
 Windows PowerShell:
 
 ```powershell
-$env:NODE_IMAGE = 'node:22-bookworm-slim'
+$env:NODE_IMAGE = 'public.ecr.aws/docker/library/node:22-bookworm-slim'
 docker compose up --build
 ```
 
 macOS/Linux:
 
 ```sh
-NODE_IMAGE=node:22-bookworm-slim docker compose up --build
+NODE_IMAGE=public.ecr.aws/docker/library/node:22-bookworm-slim docker compose up --build
 ```
 
 `OPENAI_API_KEY` may be left empty for local boot checks. The app still starts, and generation endpoints return a missing-key JSON error until credentials are configured.
 
 ## Cloud Storage Backup
 
-Generated images are always saved locally first. When OSS or COS is enabled from the in-app cloud storage dialog, new generated images are also uploaded to:
+Generated images are uploaded to cloud storage when OSS or COS is enabled from the admin backend, or when the matching cloud credentials are set in `.env`. On successful upload, the app does not keep a local original copy or preview cache:
 
 ```text
 <key-prefix>/YYYY/MM/<assetId>.<ext>
@@ -179,9 +179,9 @@ The default COS form values are read from `.env`:
 - `COS_DEFAULT_REGION`
 - `COS_DEFAULT_KEY_PREFIX`
 
-Saving OSS / COS settings performs a test upload and delete before persisting the configuration. AccessKey Secret / SecretKey values are stored in the local database because the app has no server-side account system yet, but GET responses only return a masked secret indicator.
+Saving OSS / COS settings in the admin backend performs a test upload and delete before persisting the global configuration. AccessKey Secret / SecretKey values are stored in system settings, but GET responses only return a masked secret indicator.
 
-Cloud upload failures do not fail image generation. The asset remains available locally, and the UI marks the history item with the cloud backup failure.
+Cloud upload failures do not fail image generation. The asset falls back to a local copy, and the UI marks the history item with the cloud backup failure.
 
 ## Local Data
 
@@ -207,7 +207,7 @@ The Docker Compose workflow bind-mounts host `./data` to `/app/data`, so project
 - Missing model access: confirm the OpenAI organization and project used by `OPENAI_API_KEY` can access the configured image model. Set `OPENAI_IMAGE_MODEL` if your compatible endpoint expects a different model name.
 - High-resolution generation timeouts: upstream image requests default to 20 minutes; increase `OPENAI_IMAGE_TIMEOUT_MS` in `.env` if needed.
 - Port already in use: set `PORT` in `.env` for the API/Docker runtime. If Web port `5173` is occupied, stop the process using it, or run `pnpm web:dev -- --port 5174` explicitly and open the printed URL.
-- Docker build cannot pull the Node base image: use a locally cached image with `NODE_IMAGE=node:23-bullseye-slim docker compose up --build` on macOS/Linux or `$env:NODE_IMAGE = 'node:23-bullseye-slim'` followed by `docker compose up --build` in Windows PowerShell, or restore Docker Hub access and rerun `docker compose up --build`.
+  - Docker build cannot pull the Node base image: use a cached mirror image with `NODE_IMAGE=public.ecr.aws/docker/library/node:22-bookworm-slim docker compose up --build` on macOS/Linux or `$env:NODE_IMAGE = 'public.ecr.aws/docker/library/node:22-bookworm-slim'` followed by `docker compose up --build` in Windows PowerShell, or restore Docker Hub access and rerun `docker compose up --build`.
 - Docker config output includes `.env` values by default. Use `docker compose config --quiet --no-env-resolution` for validation when real credentials are present, and do not share expanded config output.
 - SQLite `SQLITE_IOERR_SHMOPEN` in Docker: keep the Compose defaults `SQLITE_JOURNAL_MODE=DELETE` and `SQLITE_LOCKING_MODE=EXCLUSIVE`, rebuild, and make sure no local API process is using the same `data/` database at the same time.
 - SQLite `SQLITE_CORRUPT`: stop all app processes, back up `data/`, and restore from backup or remove the SQLite files to let the app create a clean database. Generated image files under `data/assets/` can be kept.

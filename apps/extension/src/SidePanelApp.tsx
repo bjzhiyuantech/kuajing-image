@@ -17,6 +17,7 @@ import {
   LogOut,
   Package,
   Phone,
+  Receipt,
   RefreshCw,
   Send,
   Settings,
@@ -28,9 +29,11 @@ import {
   Wand2,
   X
 } from "lucide-react";
-import type { ChangeEvent, FormEvent } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import type { ChangeEvent, FormEvent, PointerEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
+  ECOMMERCE_AUTO_CATEGORY_KIT_SCENE_IDS,
+  ECOMMERCE_DETAIL_CATEGORY_KIT_SCENE_IDS,
   ECOMMERCE_MARKETS,
   ECOMMERCE_PLATFORMS,
   ECOMMERCE_SCENE_TEMPLATES,
@@ -57,13 +60,18 @@ import type { AuthUser, BatchFormState, BatchTask, ExtensionAuthState, PageConte
 
 const ACTIVE_BATCH_JOB_STORAGE_KEY = "activeBatchJob";
 const AUTH_STORAGE_KEY = "auth";
-const DEFAULT_API_BASE_URL = import.meta.env.VITE_EXTENSION_API_BASE_URL || "https://imagen.neimou.com";
+const TASK_NOTIFICATION_STORAGE_KEY = "taskNotifications";
+const DEFAULT_API_BASE_URL = import.meta.env.VITE_EXTENSION_API_BASE_URL || "https://ai.neimou.com";
 const UPDATE_DIALOG_DISMISSED_STORAGE_KEY = "dismissedExtensionUpdateDialog";
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const GALLERY_PREVIEW_TAB_STORAGE_KEY = "galleryPreviewTabsByWindow";
+const GALLERY_PREVIEW_TAB_PARAM = "extensionPreviewTab";
 const TEXT_TRANSLATION_SCENE_ID = "text-translation" as const;
 const TEXT_TRANSLATION_CONCURRENCY = 4;
 const PHONE_VERIFICATION_REQUIRED_CODE = "phone_verification_required";
 const PHONE_VERIFICATION_REQUIRED_MESSAGE = "为了更好提供服务，请完善手机号。";
+const IMAGE_HOVER_PREVIEW_SIZE = 280;
+const IMAGE_HOVER_PREVIEW_GAP = 14;
 const MOCK_BILLING_PLANS: BillingPlan[] = [
   {
     id: "starter",
@@ -107,9 +115,19 @@ interface StoredBatchJob {
   token?: string;
 }
 
+type GalleryPreviewTabMap = Record<string, number>;
+
+type TaskNotificationMap = Record<string, string>;
+
 type ToolTab = "account" | "billing" | "history" | "stats" | "referral" | "about";
 type AuthMode = "login" | "register";
 type PendingAuthAction = "generate" | "billing" | "history" | "stats" | "referral" | "job";
+
+interface BrandPreviewOverlayPayload {
+  placement: BatchFormState["brandOverlay"]["placement"];
+  logoDataUrl: string;
+  text: string;
+}
 
 interface EcommerceJobSummary {
   id: string;
@@ -146,6 +164,56 @@ interface BillingOverview {
   packageTotal?: number;
   packageUsed?: number;
   packageRemaining?: number;
+}
+
+type InvoiceHeaderType = "company" | "personal";
+type InvoiceStatus = "pending" | "processing" | "issued" | "rejected";
+
+interface InvoiceRecord {
+  id: string;
+  headerType: InvoiceHeaderType;
+  title: string;
+  taxNumber?: string;
+  invoiceContent: string;
+  amountCents: number;
+  email?: string;
+  phone?: string;
+  companyAddress?: string;
+  bankName?: string;
+  bankAccount?: string;
+  remark?: string;
+  status: InvoiceStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface InvoiceApplicationsOverview {
+  summary: InvoiceSummary;
+  profile?: InvoiceRecord;
+  applications: InvoiceRecord[];
+}
+
+interface InvoiceSummary {
+  currency: string;
+  paidAmountCents: number;
+  issuedAmountCents: number;
+  reservedAmountCents: number;
+  availableAmountCents: number;
+  requestableAmountCents: number;
+}
+
+interface InvoiceFormState {
+  headerType: InvoiceHeaderType;
+  title: string;
+  taxNumber: string;
+  invoiceContent: string;
+  amount: string;
+  email: string;
+  phone: string;
+  companyAddress: string;
+  bankName: string;
+  bankAccount: string;
+  remark: string;
 }
 
 interface ReferralSummary {
@@ -226,26 +294,19 @@ interface UploadedReferenceImage {
   fileName: string;
 }
 
+interface ImageHoverPreview {
+  url: string;
+  label: string;
+  x: number;
+  y: number;
+}
+
 type CategoryKitVersion = BatchFormState["categoryKit"]["kitVersion"];
 type CategoryKitStyle = BatchFormState["categoryKit"]["targetStyle"];
 
-const allegroScarfComplianceScenes = ["allegro-scarf-main-flat", "allegro-scarf-main-styled"] as const;
-const allegroScarfConversionScenes = [
-  "allegro-scarf-main-flat",
-  "allegro-scarf-main-styled",
-  "allegro-scarf-drape-product",
-  "allegro-scarf-fabric-detail",
-  "allegro-scarf-edge-detail",
-  "allegro-scarf-size-guide",
-  "allegro-scarf-wear-grid",
-  "allegro-scarf-neck-model",
-  "allegro-scarf-bag-styling",
-  "allegro-scarf-lifestyle",
-  "allegro-scarf-sku-colors",
-  "allegro-scarf-care-gift"
-] as const;
-
-const allegroScarfAdsScenes = [...allegroScarfConversionScenes, "allegro-scarf-ads-social"] as const;
+const autoCategoryKitScenes = [...ECOMMERCE_AUTO_CATEGORY_KIT_SCENE_IDS] as EcommerceSceneTemplateId[];
+const detailCategoryKitScenes = [...ECOMMERCE_DETAIL_CATEGORY_KIT_SCENE_IDS] as EcommerceSceneTemplateId[];
+const standardCategoryKitScenes = detailCategoryKitScenes.slice(0, 10);
 const marketingMainScenes = [
   "marketing-main-hero",
   "marketing-main-people-scene",
@@ -254,15 +315,15 @@ const marketingMainScenes = [
 ] as const;
 
 const categoryKitScenesByVersion: Record<CategoryKitVersion, EcommerceSceneTemplateId[]> = {
-  compliance: [...allegroScarfComplianceScenes],
-  conversion: [...allegroScarfConversionScenes],
-  ads: [...allegroScarfAdsScenes]
+  compliance: [...autoCategoryKitScenes],
+  conversion: [...standardCategoryKitScenes],
+  ads: [...detailCategoryKitScenes]
 };
 
 const categoryKitVersionOptions: Array<{ id: CategoryKitVersion; label: string; hint: string }> = [
-  { id: "compliance", label: "Allegro 合规版", hint: "只输出可直接上架的白底主图候选。" },
-  { id: "conversion", label: "Allegro 转化版", hint: "主图 + 细节、尺寸、佩戴、场景和洗护图。" },
-  { id: "ads", label: "广告/社媒版", hint: "在转化版基础上增加广告和社媒扩展图。" }
+  { id: "compliance", label: "上架轻量 6 张", hint: "主图、点击候选、卖点、细节、说明和场景图。" },
+  { id: "conversion", label: "详情标准 10 张", hint: "增加整体展示、结构工艺、包装清单和用法步骤。" },
+  { id: "ads", label: "深度详情 12 张", hint: "完整覆盖整体、细节、卖点、规格、场景、人群和保障注意事项。" }
 ];
 
 const categoryKitStyleOptions: Array<{ id: CategoryKitStyle; label: string; prompt: string }> = [
@@ -301,8 +362,8 @@ const defaultForm: BatchFormState = {
   referenceImageUrls: [],
   extraDirection: "",
   categoryKit: {
-    categoryId: "accessory-scarf",
-    kitVersion: "conversion",
+    categoryId: "auto-category-kit",
+    kitVersion: "ads",
     scarfSize: "90 x 90 cm",
     skuCount: "1",
     hasPackaging: false,
@@ -335,16 +396,18 @@ const defaultForm: BatchFormState = {
 const defaultSceneIdsByMode: Record<EcommerceGenerationMode, EcommerceSceneTemplateId[]> = {
   enhance: ["marketplace-main", "logo-benefit", "feature-benefit"],
   creative: ["lifestyle", "model-wear", "accessory-match"],
-  "category-kit": [...allegroScarfConversionScenes],
+  "category-kit": [...detailCategoryKitScenes],
   "marketing-main": [...marketingMainScenes],
+  "single-poster": ["single-product-long-poster"],
   "text-translation": [TEXT_TRANSLATION_SCENE_ID]
 };
 
 const generationModes: Array<{ id: EcommerceGenerationMode; label: string; hint: string }> = [
   { id: "enhance", label: "原图增强", hint: "保留商品原貌，生成卖点文字和电商排版。" },
   { id: "creative", label: "场景创作", hint: "依据主图生成生活方式、模特穿戴和搭配场景。" },
-  { id: "category-kit", label: "品类套图", hint: "按平台和类目生成整套 Listing Image Kit。" },
-  { id: "marketing-main", label: "营销主图设计", hint: "按产品、人群、场景、卖点和信任元素设计点击主图。" }
+  { id: "category-kit", label: "品类套图", hint: "先识别商品，再由 AI 判断该生成哪些电商图。" },
+  { id: "marketing-main", label: "营销主图设计", hint: "按产品、人群、场景、卖点和信任元素设计点击主图。" },
+  { id: "single-poster", label: "单品完整海报", hint: "依据产品图自动归纳卖点，生成一张高比例电商详情长图。" }
 ];
 
 const textTranslationMode = {
@@ -391,6 +454,53 @@ const CHINESE_ECOMMERCE_PLATFORM_IDS = new Set<BatchFormState["platform"]>([
 
 const isApiAssetUrl = (url: string): boolean => url.startsWith("/api/assets/");
 
+function normalizeCandidateImagePath(pathname: string): string {
+  return pathname
+    .replace(/\/(?:resize|quality|format|fit|crop|thumbnail|imageView2|x-oss-process|imageslim)[^/]*(?=\/|$)/giu, "/")
+    .replace(/\/(?:w|h|width|height|q|quality|format|fit|crop|thumbnail)[,_=-]?\d{1,5}[a-z0-9]*(?=\/|$)/giu, "/")
+    .replace(/(?:[!@][^/]*?)(?=(?:\.[a-z0-9]+)?$)/giu, "")
+    .replace(/\.(?:\d{2,5})x\d{2,5}\.(jpg|jpeg|png|webp|gif|avif|bmp)$/iu, ".$1")
+    .replace(/\.(jpg|jpeg|png|webp|gif|avif|bmp)_(?:\d{2,5}x\d{2,5}|(?:sum|m|b|q)\d+|webp|jpg|jpeg|png|avif|gif)(?:\.[a-z0-9]+)?$/giu, ".$1")
+    .replace(/_(?:\d{2,5}x\d{2,5}|\d{2,5}[wh]|[wh]\d{2,5}|q\d{1,3}|m\d{1,3}|b\d{1,3}|webp|jpg|jpeg|png|avif|gif)(?=(?:\.[a-z0-9]+)?$)/giu, "")
+    .replace(/(?:!!|_)(?:\d{2,5}x\d{2,5}|(?:sum|m|b|q)\d+|webp|jpg|jpeg|png|avif|gif)+(?=(?:\.[a-z0-9]+)?$)/giu, "")
+    .replace(/\/{2,}/gu, "/");
+}
+
+function candidateImageUrlKey(url: string): string {
+  if (url.startsWith("data:")) {
+    return url.slice(0, 160);
+  }
+
+  try {
+    const parsed = new URL(url);
+    parsed.hash = "";
+    parsed.protocol = "https:";
+    parsed.pathname = normalizeCandidateImagePath(parsed.pathname);
+    parsed.search = "";
+    return `${parsed.hostname}${parsed.pathname}`.toLowerCase();
+  } catch {
+    return url.toLowerCase();
+  }
+}
+
+function dedupeCandidateImageUrls(urls: string[]): string[] {
+  const seen = new Set<string>();
+  const deduped: string[] = [];
+  for (const url of urls) {
+    const trimmedUrl = url.trim();
+    if (!trimmedUrl) {
+      continue;
+    }
+    const key = candidateImageUrlKey(trimmedUrl);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(trimmedUrl);
+  }
+  return deduped;
+}
+
 function createClientId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
@@ -407,6 +517,29 @@ function createClientId(): string {
   }
 
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function imageHoverPreviewPosition(clientX: number, clientY: number): Pick<ImageHoverPreview, "x" | "y"> {
+  if (typeof window === "undefined") {
+    return { x: clientX + IMAGE_HOVER_PREVIEW_GAP, y: clientY + IMAGE_HOVER_PREVIEW_GAP };
+  }
+
+  const previewSize = Math.max(
+    180,
+    Math.min(IMAGE_HOVER_PREVIEW_SIZE, window.innerWidth - 24, window.innerHeight - 24)
+  );
+  const minOffset = 8;
+  const maxX = Math.max(minOffset, window.innerWidth - previewSize - minOffset);
+  const maxY = Math.max(minOffset, window.innerHeight - previewSize - minOffset);
+  const preferredX = clientX + IMAGE_HOVER_PREVIEW_GAP;
+  const preferredY = clientY + IMAGE_HOVER_PREVIEW_GAP;
+  const fallbackX = clientX - previewSize - IMAGE_HOVER_PREVIEW_GAP;
+  const fallbackY = clientY - previewSize - IMAGE_HOVER_PREVIEW_GAP;
+
+  return {
+    x: Math.min(Math.max(preferredX > maxX && fallbackX >= minOffset ? fallbackX : preferredX, minOffset), maxX),
+    y: Math.min(Math.max(preferredY > maxY && fallbackY >= minOffset ? fallbackY : preferredY, minOffset), maxY)
+  };
 }
 
 async function referenceImageFromUrl(url: string): Promise<ReferenceImageInput> {
@@ -625,6 +758,12 @@ async function mergeReferenceImages(images: ReferenceImageInput[]): Promise<Refe
     ctx.fillStyle = "#f7faf8";
     ctx.fillRect(x, padding, cellSize, cellSize);
     drawContainedImage(ctx, image, x + 18, padding + 18, cellSize - 36, cellSize - 36);
+    ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
+    roundedRect(ctx, x + 18, padding + 18, index === 0 ? 210 : 150, 48, 16);
+    ctx.fill();
+    ctx.fillStyle = "#10251d";
+    ctx.font = "700 28px Inter, Arial, sans-serif";
+    ctx.fillText(index === 0 ? "MAIN PRODUCT" : `DETAIL ${index}`, x + 32, padding + 51);
   });
 
   return {
@@ -833,6 +972,115 @@ function mergeBillingOrders(overview: BillingOverview, payload: unknown): Billin
   return orders.length > 0 ? { ...overview, orders } : overview;
 }
 
+function createInvoiceApplicationsOverview(): InvoiceApplicationsOverview {
+  return {
+    summary: createInvoiceSummary(),
+    applications: []
+  };
+}
+
+function createInvoiceSummary(): InvoiceSummary {
+  return {
+    currency: "CNY",
+    paidAmountCents: 0,
+    issuedAmountCents: 0,
+    reservedAmountCents: 0,
+    availableAmountCents: 0,
+    requestableAmountCents: 0
+  };
+}
+
+function createInvoiceFormState(user?: AuthUser | null): InvoiceFormState {
+  return {
+    headerType: "company",
+    title: "",
+    taxNumber: "",
+    invoiceContent: "商品图生成服务",
+    amount: "",
+    email: user?.email || "",
+    phone: user?.phone || "",
+    companyAddress: "",
+    bankName: "",
+    bankAccount: "",
+    remark: ""
+  };
+}
+
+function invoiceRecordToForm(record: InvoiceRecord): InvoiceFormState {
+  return {
+    headerType: record.headerType,
+    title: record.title,
+    taxNumber: record.taxNumber || "",
+    invoiceContent: record.invoiceContent || "商品图生成服务",
+    amount: centsToMoneyInput(record.amountCents),
+    email: record.email || "",
+    phone: record.phone || "",
+    companyAddress: record.companyAddress || "",
+    bankName: record.bankName || "",
+    bankAccount: record.bankAccount || "",
+    remark: record.remark || ""
+  };
+}
+
+function normalizeInvoiceApplications(payload: unknown): InvoiceApplicationsOverview {
+  const root = asRecord(payload);
+  const applications = Array.isArray(root.applications) ? root.applications.map(normalizeInvoiceRecord).filter((item): item is InvoiceRecord => Boolean(item)) : [];
+  return {
+    summary: normalizeInvoiceSummary(root.summary),
+    profile: normalizeInvoiceRecord(root.profile) ?? applications[0],
+    applications
+  };
+}
+
+function normalizeInvoiceSummary(value: unknown): InvoiceSummary {
+  const source = asRecord(value);
+  return {
+    currency: firstString(source, ["currency"]) || "CNY",
+    paidAmountCents: firstNumber(source, ["paidAmountCents", "paid_amount_cents"]) ?? 0,
+    issuedAmountCents: firstNumber(source, ["issuedAmountCents", "issued_amount_cents"]) ?? 0,
+    reservedAmountCents: firstNumber(source, ["reservedAmountCents", "reserved_amount_cents"]) ?? 0,
+    availableAmountCents: firstNumber(source, ["availableAmountCents", "available_amount_cents"]) ?? 0,
+    requestableAmountCents: firstNumber(source, ["requestableAmountCents", "requestable_amount_cents"]) ?? 0
+  };
+}
+
+function normalizeInvoiceRecord(value: unknown): InvoiceRecord | null {
+  const source = asRecord(value);
+  const id = firstString(source, ["id"]);
+  const title = firstString(source, ["title"]);
+  if (!id || !title) {
+    return null;
+  }
+  return {
+    id,
+    headerType: source.headerType === "personal" ? "personal" : "company",
+    title,
+    taxNumber: firstString(source, ["taxNumber", "tax_number"]),
+    invoiceContent: firstString(source, ["invoiceContent", "invoice_content"]) ?? "商品图生成服务",
+    amountCents: firstNumber(source, ["amountCents", "amount_cents"]) ?? 0,
+    email: firstString(source, ["email"]),
+    phone: firstString(source, ["phone"]),
+    companyAddress: firstString(source, ["companyAddress", "company_address"]),
+    bankName: firstString(source, ["bankName", "bank_name"]),
+    bankAccount: firstString(source, ["bankAccount", "bank_account"]),
+    remark: firstString(source, ["remark", "note"]),
+    status: invoiceStatus(source.status),
+    createdAt: firstString(source, ["createdAt", "created_at"]) ?? "",
+    updatedAt: firstString(source, ["updatedAt", "updated_at"]) ?? ""
+  };
+}
+
+function invoiceStatus(value: unknown): InvoiceStatus {
+  return value === "processing" || value === "issued" || value === "rejected" ? value : "pending";
+}
+
+function invoiceStatusLabel(status: InvoiceStatus): string {
+  if (status === "processing") return "处理中";
+  if (status === "issued") return "已开具";
+  if (status === "rejected") return "已驳回";
+  return "待处理";
+}
+
 function normalizeBillingTransactions(value: unknown): BillingTransaction[] {
   const items = Array.isArray(value) ? value : [];
   return items.map((item, index) => {
@@ -922,6 +1170,13 @@ function formatMoney(cents: number, currency = "CNY"): string {
   }).format(cents / 100);
 }
 
+function centsToMoneyInput(cents: number): string {
+  if (!Number.isFinite(cents)) {
+    return "";
+  }
+  return String(Number((cents / 100).toFixed(2)));
+}
+
 function formatCount(value?: number): string {
   return typeof value === "number" && Number.isFinite(value) ? value.toLocaleString("zh-CN") : "0";
 }
@@ -956,12 +1211,26 @@ function extensionTarget(): "dev" | "prod" {
   return chrome.runtime.getManifest().name.toLowerCase().includes("dev") ? "dev" : "prod";
 }
 
-function extensionVersionManifestUrl(baseUrl: string): string {
-  return new URL(`/downloads/kuajing-image-extension-${extensionTarget()}-latest.json`, `${baseUrl.replace(/\/$/u, "")}/`).toString();
+function extensionReleaseConfigUrl(baseUrl: string): string {
+  return new URL("/api/extension-release", `${baseUrl.replace(/\/$/u, "")}/`).toString();
 }
 
 function absoluteAppUrl(pathOrUrl: string, baseUrl: string): string {
   return new URL(pathOrUrl, `${baseUrl.replace(/\/$/u, "")}/`).toString();
+}
+
+function isGalleryPreviewTabUrl(value: string | undefined, baseUrl: string): boolean {
+  if (!value) {
+    return false;
+  }
+
+  try {
+    const parsedUrl = new URL(value);
+    const parsedBaseUrl = new URL(baseUrl);
+    return parsedUrl.origin === parsedBaseUrl.origin && parsedUrl.pathname === "/gallery" && parsedUrl.searchParams.get(GALLERY_PREVIEW_TAB_PARAM) === "1";
+  } catch {
+    return false;
+  }
 }
 
 function planBenefits(plan: BillingPlan): string[] {
@@ -1095,10 +1364,101 @@ function formatSourceUrl(url: string): string {
   }
 }
 
+function HistoryPlaceholderVisual() {
+  const id = useId().replace(/:/g, "");
+  const backgroundId = `history-placeholder-bg-${id}`;
+  const haloId = `history-placeholder-halo-${id}`;
+  const beamId = `history-placeholder-beam-${id}`;
+  const screenId = `history-placeholder-screen-${id}`;
+  const glowId = `history-placeholder-glow-${id}`;
+  const clipId = `history-placeholder-clip-${id}`;
+
+  return (
+    <svg aria-hidden="true" className="history-placeholder-art" focusable="false" viewBox="0 0 240 240">
+      <defs>
+        <radialGradient id={haloId} cx="50%" cy="42%" r="64%">
+          <stop offset="0" stopColor="#d9fff1" stopOpacity="0.92" />
+          <stop offset="0.52" stopColor="#7ee6c6" stopOpacity="0.36" />
+          <stop offset="1" stopColor="#0d6f5e" stopOpacity="0" />
+        </radialGradient>
+        <linearGradient id={backgroundId} gradientUnits="userSpaceOnUse" x1="32" x2="208" y1="22" y2="218">
+          <stop offset="0" stopColor="#102c27" />
+          <stop offset="0.48" stopColor="#0b5146" />
+          <stop offset="1" stopColor="#13a174" />
+        </linearGradient>
+        <linearGradient id={screenId} gradientUnits="userSpaceOnUse" x1="54" x2="186" y1="52" y2="172">
+          <stop offset="0" stopColor="#f8fffd" />
+          <stop offset="0.5" stopColor="#dffbf0" />
+          <stop offset="1" stopColor="#a9f1db" />
+        </linearGradient>
+        <linearGradient id={beamId} gradientUnits="userSpaceOnUse" x1="0" x2="1" y1="0" y2="0">
+          <stop offset="0" stopColor="#ffffff" stopOpacity="0" />
+          <stop offset="0.44" stopColor="#ffffff" stopOpacity="0.95" />
+          <stop offset="0.57" stopColor="#7fffd9" stopOpacity="0.92" />
+          <stop offset="1" stopColor="#ffffff" stopOpacity="0" />
+        </linearGradient>
+        <filter id={glowId} colorInterpolationFilters="sRGB" height="180%" width="180%" x="-40%" y="-40%">
+          <feGaussianBlur in="SourceGraphic" result="blur" stdDeviation="4" />
+          <feMerge>
+            <feMergeNode in="blur" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+        <clipPath id={clipId}>
+          <rect height="134" rx="18" width="152" x="44" y="42" />
+        </clipPath>
+      </defs>
+      <rect fill={`url(#${backgroundId})`} height="240" rx="26" width="240" />
+      <circle cx="120" cy="102" fill={`url(#${haloId})`} r="108" />
+      <g className="history-placeholder-art__grid" opacity="0.28">
+        <path d="M28 78h184M28 118h184M28 158h184M76 28v184M120 28v184M164 28v184" stroke="#bdf8e4" strokeWidth="1" />
+      </g>
+      <g className="history-placeholder-art__panel">
+        <rect fill="#dcfff4" fillOpacity="0.16" height="176" rx="24" stroke="#a5f3d0" strokeOpacity="0.58" strokeWidth="1.5" width="176" x="32" y="26" />
+        <rect fill={`url(#${screenId})`} height="134" rx="18" stroke="#ffffff" strokeOpacity="0.9" strokeWidth="2" width="152" x="44" y="42" />
+      </g>
+      <g clipPath={`url(#${clipId})`}>
+        <path d="M45 138c24-30 45-28 66-10 18 15 35 15 56-9 12-14 21-19 29-19v77H45Z" fill="#24b985" fillOpacity="0.24" />
+        <path d="M52 132c28-34 54-25 76-1 17 19 36 15 64-22" fill="none" stroke="#0aa578" strokeLinecap="round" strokeWidth="5" />
+        <g className="history-placeholder-art__flow">
+          <rect fill={`url(#${beamId})`} height="184" opacity="0.92" rx="26" transform="rotate(18 84 100)" width="48" x="-48" y="8" />
+        </g>
+      </g>
+      <g className="history-placeholder-art__orbit history-placeholder-art__orbit--outer" filter={`url(#${glowId})`}>
+        <circle cx="120" cy="109" fill="none" r="50" stroke="#ffffff" strokeDasharray="132 182" strokeLinecap="round" strokeOpacity="0.82" strokeWidth="3.5" />
+      </g>
+      <g className="history-placeholder-art__orbit history-placeholder-art__orbit--inner">
+        <circle cx="120" cy="109" fill="none" r="34" stroke="#15c995" strokeDasharray="48 122" strokeLinecap="round" strokeWidth="4" />
+      </g>
+      <g className="history-placeholder-art__core">
+        <rect fill="#062f2a" height="42" rx="12" stroke="#9cf7d9" strokeOpacity="0.86" strokeWidth="1.5" width="54" x="93" y="88" />
+        <path d="M108 110h24m-12-12v24" stroke="#8fffe0" strokeLinecap="round" strokeWidth="5" />
+      </g>
+      <g className="history-placeholder-art__sparkles" fill="#ffffff" filter={`url(#${glowId})`}>
+        <path d="M70 68l4 8 8 4-8 4-4 8-4-8-8-4 8-4Z" />
+        <path d="M177 73l3 6 6 3-6 3-3 6-3-6-6-3 6-3Z" />
+        <path d="M164 151l4 8 8 4-8 4-4 8-4-8-8-4 8-4Z" />
+      </g>
+      <text
+        fill="#eafff8"
+        fontFamily="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+        fontSize="19"
+        fontWeight="800"
+        letterSpacing="0"
+        textAnchor="middle"
+        x="120"
+        y="196"
+      >
+        生成中
+      </text>
+    </svg>
+  );
+}
+
 export function SidePanelApp() {
   const [auth, setAuth] = useState<ExtensionAuthState>(defaultAuth);
   const [authMode, setAuthMode] = useState<AuthMode>("login");
-  const [authForm, setAuthForm] = useState({ email: "", phone: "", password: "", displayName: "", smsCode: "", inviteCode: "" });
+  const [authForm, setAuthForm] = useState({ account: "", phone: "", password: "", displayName: "", smsCode: "", inviteCode: "" });
   const [authLoading, setAuthLoading] = useState(false);
   const [authCodeLoading, setAuthCodeLoading] = useState(false);
   const [authError, setAuthError] = useState("");
@@ -1118,6 +1478,7 @@ export function SidePanelApp() {
     message: "选择场景后即可批量生成。",
     records: []
   });
+  const taskNotificationRef = useRef<TaskNotificationMap>({});
   const [activeTool, setActiveTool] = useState<ToolTab>("account");
   const [toolPanelOpen, setToolPanelOpen] = useState(false);
   const [historyState, setHistoryState] = useState<RemoteState<EcommerceJobSummary[]>>({
@@ -1153,6 +1514,14 @@ export function SidePanelApp() {
   const [rechargeAmount, setRechargeAmount] = useState("50");
   const [billingAction, setBillingAction] = useState("");
   const [billingActionLoading, setBillingActionLoading] = useState(false);
+  const [invoiceState, setInvoiceState] = useState<RemoteState<InvoiceApplicationsOverview>>({
+    data: createInvoiceApplicationsOverview(),
+    error: "",
+    loading: false
+  });
+  const [invoiceForm, setInvoiceForm] = useState<InvoiceFormState>(() => createInvoiceFormState(null));
+  const [invoiceAction, setInvoiceAction] = useState("");
+  const [invoiceActionLoading, setInvoiceActionLoading] = useState(false);
   const [referralState, setReferralState] = useState<RemoteState<ReferralSummary | null>>({
     data: null,
     error: "",
@@ -1161,11 +1530,13 @@ export function SidePanelApp() {
   const [referralAction, setReferralAction] = useState("");
   const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
   const [batchGenerationLocked, setBatchGenerationLocked] = useState(false);
+  const [createComparisonCollage, setCreateComparisonCollage] = useState(false);
   const [hiddenResultKeys, setHiddenResultKeys] = useState<Set<string>>(() => new Set());
   const [localResultRecords, setLocalResultRecords] = useState<GenerationRecord[]>([]);
   const [editDialog, setEditDialog] = useState<EditImageDialogState | null>(null);
   const [queuedJobDialog, setQueuedJobDialog] = useState<QueuedJobDialogState | null>(null);
   const [uploadedReferenceImages, setUploadedReferenceImages] = useState<UploadedReferenceImage[]>([]);
+  const [imageHoverPreview, setImageHoverPreview] = useState<ImageHoverPreview | null>(null);
   const [worksViewOpen, setWorksViewOpen] = useState(false);
   const [textTranslationViewOpen, setTextTranslationViewOpen] = useState(false);
   const [translationReturnMode, setTranslationReturnMode] = useState<EcommerceGenerationMode>("enhance");
@@ -1178,32 +1549,14 @@ export function SidePanelApp() {
     loading: false
   });
   const [extensionUpdateDialogOpen, setExtensionUpdateDialogOpen] = useState(false);
-  const historyPlaceholderImage = useMemo(() => {
-    const svg = `
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" role="img" aria-label="生成中">
-        <defs>
-          <linearGradient id="bg" x1="24" y1="22" x2="216" y2="218" gradientUnits="userSpaceOnUse">
-            <stop offset="0" stop-color="#eef4f1"/>
-            <stop offset="1" stop-color="#e1ece7"/>
-          </linearGradient>
-          <linearGradient id="panel" x1="54" y1="58" x2="186" y2="182" gradientUnits="userSpaceOnUse">
-            <stop offset="0" stop-color="#ffffff"/>
-            <stop offset="1" stop-color="#f6fbf8"/>
-          </linearGradient>
-        </defs>
-        <rect width="240" height="240" rx="24" fill="url(#bg)"/>
-        <rect x="28" y="28" width="184" height="184" rx="22" fill="url(#panel)" stroke="#cfe0d9" stroke-width="3"/>
-        <path d="M120 78v22m0 40v22m-32-56h22m40 0h22m-18.5-31.5 15.5 15.5m-15.5 94 15.5-15.5m-94 0 15.5 15.5m0-94L62.5 93.5" fill="none" stroke="#18a678" stroke-linecap="round" stroke-width="8"/>
-        <circle cx="120" cy="120" r="26" fill="#dff4ec"/>
-        <path d="M108 120h24m-12-12v24" stroke="#18a678" stroke-linecap="round" stroke-width="7"/>
-        <text x="120" y="176" text-anchor="middle" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="22" font-weight="800" fill="#5d6b62">生成中</text>
-      </svg>
-    `;
-    return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
-  }, []);
 
   const availableScenes = useMemo(
-    () => ECOMMERCE_SCENE_TEMPLATES.filter((template) => template.mode === form.generationMode),
+    () =>
+      ECOMMERCE_SCENE_TEMPLATES.filter((template) =>
+        form.generationMode === "category-kit"
+          ? detailCategoryKitScenes.includes(template.id)
+          : template.mode === form.generationMode
+      ),
     [form.generationMode]
   );
 
@@ -1213,10 +1566,10 @@ export function SidePanelApp() {
   );
   const effectiveSceneTemplateIds =
     form.generationMode === "category-kit" ? categoryKitScenesByVersion[form.categoryKit.kitVersion] : form.sceneTemplateIds;
-  const effectiveCountPerScene = form.generationMode === "category-kit" ? 1 : form.countPerScene;
+  const effectiveCountPerScene = form.generationMode === "category-kit" || form.generationMode === "single-poster" ? 1 : form.countPerScene;
   const effectiveSelectedScenes = availableScenes.filter((template) => effectiveSceneTemplateIds.includes(template.id));
 
-  const pageImageUrls = pageContext?.imageUrls ?? [];
+  const pageImageUrls = useMemo(() => dedupeCandidateImageUrls(pageContext?.imageUrls ?? []), [pageContext?.imageUrls]);
   const selectedReferenceImageUrl = form.referenceImageUrl.trim();
   const selectedReferenceImageUrls = form.referenceImageUrls.length > 0 ? form.referenceImageUrls : selectedReferenceImageUrl ? [selectedReferenceImageUrl] : [];
   const selectedReferenceImageUrlsKey = selectedReferenceImageUrls.join("|");
@@ -1244,6 +1597,7 @@ export function SidePanelApp() {
   }, [hiddenResultKeys, localResultRecords, task.records]);
 
   const brandOverlayReady = form.brandOverlay.enabled && Boolean(form.brandOverlay.logoDataUrl || form.brandOverlay.text.trim());
+  const isAdminAccount = auth.user?.role === "admin";
 
   useEffect(() => {
     if (form.sizeMode !== "source") {
@@ -1280,9 +1634,10 @@ export function SidePanelApp() {
   }, [requiresPhoneVerification]);
 
   useEffect(() => {
-    void chrome.storage.local.get([AUTH_STORAGE_KEY, ACTIVE_BATCH_JOB_STORAGE_KEY]).then((result) => {
+    void chrome.storage.local.get([AUTH_STORAGE_KEY, ACTIVE_BATCH_JOB_STORAGE_KEY, TASK_NOTIFICATION_STORAGE_KEY]).then((result) => {
       const storedAuth = result[AUTH_STORAGE_KEY] as Partial<ExtensionAuthState> | undefined;
       const activeJob = result[ACTIVE_BATCH_JOB_STORAGE_KEY] as StoredBatchJob | undefined;
+      taskNotificationRef.current = (result[TASK_NOTIFICATION_STORAGE_KEY] as TaskNotificationMap | undefined) ?? {};
       const nextAuth = {
         token: storedAuth?.token || activeJob?.token || "",
         user: storedAuth?.user ?? null
@@ -1381,6 +1736,9 @@ export function SidePanelApp() {
     if (activeTool === "billing" || activeTool === "stats") {
       void refreshBilling();
     }
+    if (activeTool === "billing" && auth.token.trim()) {
+      void refreshInvoiceApplications();
+    }
     if ((activeTool === "account" || activeTool === "referral") && auth.token.trim()) {
       void refreshReferral();
     }
@@ -1451,6 +1809,7 @@ export function SidePanelApp() {
   function galleryDetailUrl(asset: GeneratedAsset): string {
     const url = new URL("/gallery", `${apiBaseUrl()}/`);
     url.searchParams.set("assetId", asset.id);
+    url.searchParams.set(GALLERY_PREVIEW_TAB_PARAM, "1");
     if (auth.token.trim()) {
       url.searchParams.set("authToken", auth.token.trim());
     }
@@ -1505,14 +1864,151 @@ export function SidePanelApp() {
     );
   }
 
-  async function openGalleryPreview(asset: GeneratedAsset): Promise<void> {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab.id) {
-      await chrome.tabs.update(tab.id, { url: galleryDetailUrl(asset) });
+  async function setPreviewOverlayOnTab(tabId: number): Promise<void> {
+    if (!brandOverlayReady) {
       return;
     }
 
-    await chrome.tabs.create({ url: galleryDetailUrl(asset) });
+    const payload: BrandPreviewOverlayPayload = {
+      placement: form.brandOverlay.placement,
+      logoDataUrl: form.brandOverlay.logoDataUrl,
+      text: form.brandOverlay.text.trim()
+    };
+
+    await waitForGalleryPreviewTab(tabId);
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      try {
+        await chrome.tabs.sendMessage(tabId, {
+          type: "kuajing-image:set-preview-overlay",
+          overlay: payload
+        });
+        return;
+      } catch {
+        await delay(200);
+      }
+    }
+  }
+
+  async function openGalleryPreview(asset: GeneratedAsset): Promise<void> {
+    const tab = await openOrReuseGalleryPreviewTab(galleryDetailUrl(asset));
+    if (tab.id) {
+      await setPreviewOverlayOnTab(tab.id);
+    }
+  }
+
+  async function openOrReuseGalleryPreviewTab(url: string): Promise<chrome.tabs.Tab> {
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const currentWindowId = activeTab?.windowId;
+    const previewTabs = await readGalleryPreviewTabs();
+    const windowKey = typeof currentWindowId === "number" ? String(currentWindowId) : "";
+    const storedTabId = windowKey ? previewTabs[windowKey] : undefined;
+    const reusableStoredTab = await getReusableGalleryPreviewTab(storedTabId, currentWindowId);
+
+    if (reusableStoredTab?.id) {
+      const updatedTab = await updateGalleryPreviewTab(reusableStoredTab.id, url);
+      await rememberGalleryPreviewTab(updatedTab);
+      return updatedTab;
+    }
+
+    const currentWindowTabs = typeof currentWindowId === "number" ? await chrome.tabs.query({ windowId: currentWindowId }) : await chrome.tabs.query({ currentWindow: true });
+    const reusableWindowTab = currentWindowTabs.find((tab) => tab.id && isGalleryPreviewTabUrl(tab.url, apiBaseUrl()));
+    if (reusableWindowTab?.id) {
+      const updatedTab = await updateGalleryPreviewTab(reusableWindowTab.id, url);
+      await rememberGalleryPreviewTab(updatedTab);
+      return updatedTab;
+    }
+
+    const createProperties: chrome.tabs.CreateProperties = {
+      active: true,
+      pinned: true,
+      url
+    };
+    if (typeof currentWindowId === "number") {
+      createProperties.windowId = currentWindowId;
+    }
+    const createdTab = await chrome.tabs.create(createProperties);
+    await rememberGalleryPreviewTab(createdTab);
+    return createdTab;
+  }
+
+  async function updateGalleryPreviewTab(tabId: number, url: string): Promise<chrome.tabs.Tab> {
+    const updatedTab = await chrome.tabs.update(tabId, { active: true, pinned: true, url });
+    return updatedTab ?? chrome.tabs.get(tabId);
+  }
+
+  async function getReusableGalleryPreviewTab(tabId: number | undefined, windowId: number | undefined): Promise<chrome.tabs.Tab | null> {
+    if (!tabId || typeof windowId !== "number") {
+      return null;
+    }
+
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      if (tab.windowId === windowId && isGalleryPreviewTabUrl(tab.url, apiBaseUrl())) {
+        return tab;
+      }
+    } catch {
+      // The remembered tab may have been closed.
+    }
+    return null;
+  }
+
+  async function readGalleryPreviewTabs(): Promise<GalleryPreviewTabMap> {
+    const stored = await chrome.storage.local.get(GALLERY_PREVIEW_TAB_STORAGE_KEY);
+    const value = stored[GALLERY_PREVIEW_TAB_STORAGE_KEY];
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return {};
+    }
+
+    const tabs: GalleryPreviewTabMap = {};
+    for (const [windowId, tabId] of Object.entries(value as Record<string, unknown>)) {
+      if (/^\d+$/u.test(windowId) && typeof tabId === "number") {
+        tabs[windowId] = tabId;
+      }
+    }
+    return tabs;
+  }
+
+  async function rememberGalleryPreviewTab(tab: chrome.tabs.Tab): Promise<void> {
+    if (!tab.id || typeof tab.windowId !== "number") {
+      return;
+    }
+
+    const previewTabs = await readGalleryPreviewTabs();
+    previewTabs[String(tab.windowId)] = tab.id;
+    await chrome.storage.local.set({ [GALLERY_PREVIEW_TAB_STORAGE_KEY]: previewTabs });
+  }
+
+  function waitForGalleryPreviewTab(tabId: number): Promise<void> {
+    return new Promise((resolve) => {
+      let settled = false;
+      let timeoutId: number | undefined;
+
+      const cleanup = (): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (timeoutId) {
+          window.clearTimeout(timeoutId);
+        }
+        chrome.tabs.onUpdated.removeListener(handleUpdated);
+        resolve();
+      };
+
+      const handleUpdated = (updatedTabId: number, changeInfo: chrome.tabs.OnUpdatedInfo): void => {
+        if (updatedTabId === tabId && changeInfo.status === "complete") {
+          cleanup();
+        }
+      };
+
+      chrome.tabs.onUpdated.addListener(handleUpdated);
+      timeoutId = window.setTimeout(cleanup, 5000);
+      void chrome.tabs.get(tabId).then((tab) => {
+        if (tab.status === "complete") {
+          cleanup();
+        }
+      }).catch(cleanup);
+    });
   }
 
   async function saveAuth(nextAuth: ExtensionAuthState): Promise<void> {
@@ -1595,7 +2091,7 @@ export function SidePanelApp() {
   }
 
   function normalizeExtensionUpdateInfo(payload: unknown): ExtensionUpdateInfo {
-    const root = asRecord(payload);
+    const root = asRecord(asRecord(payload)[extensionTarget()] ?? payload);
     const version = firstString(root, ["version", "latestVersion"]);
     const downloadUrl = firstString(root, ["downloadUrl", "download_url"]);
     if (!version || !downloadUrl) {
@@ -1623,7 +2119,7 @@ export function SidePanelApp() {
       loading: mode === "manual"
     }));
     try {
-      const response = await fetch(extensionVersionManifestUrl(apiBaseUrl()), { cache: "no-store" });
+      const response = await fetch(extensionReleaseConfigUrl(apiBaseUrl()), { cache: "no-store" });
       if (!response.ok) {
         throw new Error("版本清单读取失败。");
       }
@@ -1705,7 +2201,7 @@ export function SidePanelApp() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          email: authMode === "login" ? authForm.email.trim() : undefined,
+          account: authMode === "login" ? authForm.account.trim() : undefined,
           phone: authMode === "register" ? authForm.phone.trim() : undefined,
           password: authForm.password,
           displayName: authMode === "register" ? authForm.displayName.trim() || undefined : undefined,
@@ -1955,6 +2451,36 @@ export function SidePanelApp() {
     }
   }
 
+  async function refreshInvoiceApplications(authAlreadyChecked = false, token = auth.token): Promise<void> {
+    if (!token.trim() && !authAlreadyChecked && !requireAuth("billing")) {
+      return;
+    }
+    setInvoiceState((current) => ({ ...current, error: "", loading: true }));
+    try {
+      const response = await fetch(`${apiBaseUrl()}/api/billing/invoice/applications`, {
+        headers: apiHeaders(false, token)
+      });
+      const body = await parseResponseOrThrow(response);
+      const parsed = normalizeInvoiceApplications(body);
+      setInvoiceState({ data: parsed, error: "", loading: false });
+      if (parsed.profile) {
+        setInvoiceForm(invoiceRecordToForm(parsed.profile));
+      } else {
+        setInvoiceForm((current) => ({
+          ...current,
+          email: current.email || auth.user?.email || "",
+          phone: current.phone || auth.user?.phone || ""
+        }));
+      }
+    } catch (error) {
+      setInvoiceState({
+        data: createInvoiceApplicationsOverview(),
+        error: error instanceof Error ? error.message : "开票信息读取失败。",
+        loading: false
+      });
+    }
+  }
+
   async function refreshReferral(authAlreadyChecked = false, token = auth.token): Promise<void> {
     if (!token.trim() && !authAlreadyChecked && !requireAuth("billing")) {
       return;
@@ -2086,6 +2612,66 @@ export function SidePanelApp() {
       setBillingAction(error instanceof Error ? error.message : "套餐购买失败。");
     } finally {
       setBillingActionLoading(false);
+    }
+  }
+
+  async function submitInvoiceApplication(): Promise<void> {
+    if (!auth.token.trim() && !requireAuth("billing")) {
+      return;
+    }
+    const amountCents = Math.round(Number(invoiceForm.amount) * 100);
+    if (!invoiceForm.title.trim()) {
+      setInvoiceAction("请填写发票抬头。");
+      return;
+    }
+    if (invoiceForm.headerType === "company" && !invoiceForm.taxNumber.trim()) {
+      setInvoiceAction("企业抬头需要填写纳税人识别号。");
+      return;
+    }
+    if (!Number.isFinite(amountCents) || amountCents <= 0) {
+      setInvoiceAction("请填写有效开票金额。");
+      return;
+    }
+    if (amountCents > invoiceState.data.summary.requestableAmountCents) {
+      setInvoiceAction(`开票金额不能超过可申请金额 ${formatMoney(invoiceState.data.summary.requestableAmountCents, invoiceState.data.summary.currency)}。`);
+      return;
+    }
+    if (!invoiceForm.email.trim()) {
+      setInvoiceAction("请填写接收邮箱。");
+      return;
+    }
+    setInvoiceActionLoading(true);
+    setInvoiceAction("");
+    setInvoiceState((current) => ({ ...current, error: "" }));
+    try {
+      const response = await fetch(`${apiBaseUrl()}/api/billing/invoice/applications`, {
+        method: "POST",
+        headers: apiHeaders(true),
+        body: JSON.stringify({
+          headerType: invoiceForm.headerType,
+          title: invoiceForm.title.trim(),
+          taxNumber: invoiceForm.taxNumber.trim() || undefined,
+          invoiceContent: invoiceForm.invoiceContent.trim() || "商品图生成服务",
+          amountCents,
+          email: invoiceForm.email.trim(),
+          phone: invoiceForm.phone.trim() || undefined,
+          companyAddress: invoiceForm.companyAddress.trim() || undefined,
+          bankName: invoiceForm.bankName.trim() || undefined,
+          bankAccount: invoiceForm.bankAccount.trim() || undefined,
+          remark: invoiceForm.remark.trim() || undefined
+        })
+      });
+      const body = await parseResponseOrThrow(response);
+      const parsed = normalizeInvoiceApplications(body);
+      setInvoiceState({ data: parsed, error: "", loading: false });
+      if (parsed.profile) {
+        setInvoiceForm(invoiceRecordToForm(parsed.profile));
+      }
+      setInvoiceAction("开票申请已提交，信息已保存备用。");
+    } catch (error) {
+      setInvoiceAction(error instanceof Error ? error.message : "开票申请提交失败。");
+    } finally {
+      setInvoiceActionLoading(false);
     }
   }
 
@@ -2313,7 +2899,7 @@ export function SidePanelApp() {
     }
 
     return (
-      <div className="edit-modal" role="dialog" aria-modal="true" aria-labelledby="queued-job-title">
+      <div className="edit-modal queued-job-modal" role="dialog" aria-modal="true" aria-labelledby="queued-job-title">
         <div className="edit-modal-card queued-job-dialog-card">
           <div className="edit-modal-header">
             <div>
@@ -2407,9 +2993,10 @@ export function SidePanelApp() {
   }
 
   function applyBatchJob(body: EcommerceBatchGenerateResponse, token = auth.token): void {
+    const previousTask = task;
     setHiddenResultKeys(new Set());
     setLocalResultRecords([]);
-    setTask({
+    const nextTask: BatchTask = {
       id: body.jobId,
       status: body.status,
       message:
@@ -2419,7 +3006,9 @@ export function SidePanelApp() {
       records: body.records,
       totalScenes: body.totalScenes,
       completedScenes: body.completedScenes
-    });
+    };
+    setTask(nextTask);
+    notifyBatchJobProgress(previousTask, nextTask);
 
     if (body.status === "pending" || body.status === "running") {
       void chrome.storage.local.set({
@@ -2436,6 +3025,58 @@ export function SidePanelApp() {
         void refreshStats();
       }
     }
+  }
+
+  function notifyBatchJobProgress(previousTask: BatchTask, nextTask: BatchTask): void {
+    if (nextTask.id === "idle" || nextTask.id === "validation" || previousTask.id !== nextTask.id) {
+      return;
+    }
+
+    const totalScenes = nextTask.totalScenes ?? previousTask.totalScenes ?? nextTask.records.length;
+    const completedScenes = nextTask.completedScenes ?? previousTask.completedScenes ?? 0;
+    const isFinal = nextTask.status === "succeeded" || nextTask.status === "partial" || nextTask.status === "failed";
+    const previousWasActive = previousTask.status === "pending" || previousTask.status === "running";
+    const progressIncreased =
+      (nextTask.status === "pending" || nextTask.status === "running") &&
+      completedScenes > (previousTask.completedScenes ?? 0);
+
+    if (!isFinal && !progressIncreased) {
+      return;
+    }
+
+    const notificationKey = isFinal ? `${nextTask.id}:final:${nextTask.status}` : `${nextTask.id}:progress:${completedScenes}/${totalScenes}`;
+    if (taskNotificationRef.current[nextTask.id] === notificationKey) {
+      return;
+    }
+
+    if (isFinal && !previousWasActive && previousTask.status === nextTask.status) {
+      return;
+    }
+
+    taskNotificationRef.current = {
+      ...taskNotificationRef.current,
+      [nextTask.id]: notificationKey
+    };
+    void chrome.storage.local.set({ [TASK_NOTIFICATION_STORAGE_KEY]: taskNotificationRef.current });
+
+    const title =
+      nextTask.status === "succeeded"
+        ? "批量任务已完成"
+        : nextTask.status === "partial"
+          ? "批量任务部分完成"
+          : nextTask.status === "failed"
+            ? "批量任务失败"
+            : "批量任务有新进展";
+    const message = isFinal
+      ? `${nextTask.message || "任务状态已更新。"} ${completedScenes}/${totalScenes || completedScenes} 场景`
+      : `已完成 ${completedScenes}/${totalScenes || completedScenes} 个场景，任务仍在继续。`;
+
+    void chrome.notifications.create(`kuajing-image-task-${nextTask.id}-${Date.now()}`, {
+      type: "basic",
+      iconUrl: chrome.runtime.getURL("icons/icon-128.png"),
+      title,
+      message
+    });
   }
 
   function handleQueuedBatchJob(body: EcommerceBatchGenerateResponse, token = auth.token): void {
@@ -2508,6 +3149,21 @@ export function SidePanelApp() {
     }));
   }
 
+  function showImageHoverPreview(event: PointerEvent<HTMLButtonElement>, item: { url: string; label: string }): void {
+    const position = imageHoverPreviewPosition(event.clientX, event.clientY);
+    setImageHoverPreview({ url: item.url, label: item.label, ...position });
+  }
+
+  function showImageFocusPreview(element: HTMLButtonElement, item: { url: string; label: string }): void {
+    const rect = element.getBoundingClientRect();
+    const position = imageHoverPreviewPosition(rect.right, rect.top);
+    setImageHoverPreview({ url: item.url, label: item.label, ...position });
+  }
+
+  function hideImageHoverPreview(): void {
+    setImageHoverPreview(null);
+  }
+
   async function applySourceAspectSize(urls = selectedReferenceImageUrls, options: { force?: boolean } = {}): Promise<void> {
     const sourceUrl = urls[0]?.trim();
     if (!sourceUrl) {
@@ -2572,30 +3228,19 @@ export function SidePanelApp() {
     }));
   }
 
-  function categoryKitDirection(kit: BatchFormState["categoryKit"]): string {
-    const stylePrompt = categoryKitStyleOptions.find((item) => item.id === kit.targetStyle)?.prompt ?? "";
-    const copyRule = kit.polishCopy
-      ? "Use Polish copy only on non-main images where the template allows text. Main images must have no text."
-      : "Do not add Polish copy or marketing text unless the scene is a required size or care guide.";
-    const modelRule = kit.allowModelImages
-      ? "Model images are allowed only after the main images; avoid identifiable faces and prefer neck-down or detail crops."
-      : "Do not create model-worn images; replace model scenes with faceless product-only usage details.";
-    const packageRule = kit.hasPackaging
-      ? "Packaging is available; show gift packaging only when useful and keep it realistic."
-      : "No real packaging is provided; do not invent gift boxes, branded bags, tags, or packaging.";
+  function categoryKitDirection(): string {
+    const outputRoles = effectiveSelectedScenes.map((scene) => scene.label.replace(/^\d+\s*/, "")).join(" / ");
 
     return [
-      "Category kit: Allegro Poland scarf / silk scarf listing image kit.",
-      "Allegro compliance: first image candidates must use white or very light gray background, no text, no icons, no borders, no shop logo, no watermark, one sellable scarf only, square marketplace thumbnail composition.",
-      "Recommended output target: square 2000 x 2000 or 2560 x 2560 look, within Allegro's image upload constraints.",
-      "If a person appears in later images, avoid identifiable faces because images with recognized faces may be excluded from Allegro Product Catalog.",
-      `Scarf size: ${kit.scarfSize.trim() || "not provided"}.`,
-      `Material: ${form.product.material?.trim() || "use product material if visible from reference"}.`,
-      `Color / SKU count: ${kit.skuCount.trim() || "1"}.`,
-      `Target style: ${stylePrompt}.`,
-      copyRule,
-      modelRule,
-      packageRule
+      "Category kit: automatic lightweight marketplace listing image kit.",
+      "Input: use 1 to 3 reference images plus the product brief. Treat the first image as the main product identity; use additional images only as detail, packaging, angle, scale, texture, variant, or usage evidence.",
+      "Planning rule: internally identify the product category, platform norms, target market, and the smallest useful image set before generating each selected role. Do not render the plan or prompt text in the image.",
+      `Selected output roles: ${outputRoles || "main image / benefits / details / guide / lifestyle"}.`,
+      "Detail-page rule: for deep kits, cover the buyer's real decision path for this category: overall understanding, close-up evidence, benefits, specifications, usage, scenarios, package/variants when true, and purchase reassurance.",
+      "Category adaptation: do not assume scarf, fashion, food, electronics, or any fixed category. If a selected role is not relevant to this product, replace it with the next most commercially useful listing image for the category.",
+      "Consistency rule: keep product identity, color, material, labels, package, shape, and proportions consistent across the kit. Do not invent unavailable packaging, variants, certifications, badges, platform marks, or objective performance claims.",
+      "Main image rule: the first listing image should stay platform-safe and text-free unless the selected platform/category clearly requires a different compliant expression.",
+      "Concurrent generation rule: each role must be self-contained, because the batch runs scenes in parallel."
     ].join("\n");
   }
 
@@ -2844,7 +3489,7 @@ export function SidePanelApp() {
             ...current,
             generationMode: translationReturnMode,
             sceneTemplateIds: defaultSceneIdsByMode[translationReturnMode],
-            textLanguage: translationReturnMode === "category-kit" ? "pl" : "none"
+            textLanguage: "none"
           }
         : current
     );
@@ -2995,16 +3640,33 @@ export function SidePanelApp() {
 
     if (logoUrl) {
       logoImage = await imageFromUrl(logoUrl);
-      const maxLogoWidth = Math.round(width * 0.2);
-      const maxLogoHeight = Math.round(height * 0.1);
+      const maxLogoWidth = Math.round(width * 0.18);
+      const maxLogoHeight = Math.round(height * 0.085);
       const scale = Math.min(maxLogoWidth / logoImage.naturalWidth, maxLogoHeight / logoImage.naturalHeight, 1);
       overlayWidth = Math.round(logoImage.naturalWidth * scale);
       overlayHeight = Math.round(logoImage.naturalHeight * scale);
     } else {
-      const fontSize = Math.round(Math.max(24, Math.min(width, height) * 0.045));
-      ctx.font = `800 ${fontSize}px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
-      overlayWidth = Math.ceil(ctx.measureText(brandText).width);
-      overlayHeight = Math.ceil(fontSize * 1.2);
+      const maxTextWidth = Math.round(width * 0.24);
+      const maxFontSize = Math.round(Math.max(20, Math.min(width, height) * 0.04));
+      const minFontSize = Math.max(12, Math.round(maxFontSize * 0.55));
+      let fontSize = maxFontSize;
+
+      while (fontSize > minFontSize) {
+        ctx.font = `800 ${fontSize}px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+        const textWidth = Math.ceil(ctx.measureText(brandText).width);
+        if (textWidth <= maxTextWidth) {
+          overlayWidth = textWidth;
+          overlayHeight = Math.ceil(fontSize * 1.18);
+          break;
+        }
+        fontSize -= 2;
+      }
+
+      if (!overlayWidth) {
+        ctx.font = `800 ${minFontSize}px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+        overlayWidth = Math.ceil(ctx.measureText(brandText).width);
+        overlayHeight = Math.ceil(minFontSize * 1.18);
+      }
     }
 
     const chipWidth = overlayWidth + paddingX * 2;
@@ -3057,17 +3719,29 @@ export function SidePanelApp() {
       ...current,
       generationMode,
       sceneTemplateIds: defaultSceneIdsByMode[generationMode],
-      platform: generationMode === "category-kit" ? "allegro" : current.platform,
-      market: generationMode === "category-kit" ? "pl" : generationMode === "marketing-main" ? "cn" : current.market,
-      sizeMode: generationMode === "category-kit" ? "preset" : current.sizeMode,
-      size: generationMode === "category-kit" ? { width: 2048, height: 2048 } : generationMode === "marketing-main" ? { width: 1024, height: 1024 } : current.size,
-      countPerScene: generationMode === "category-kit" ? 1 : current.countPerScene,
-      stylePresetId: generationMode === "enhance" || generationMode === "category-kit" || generationMode === "marketing-main" || generationMode === "text-translation" ? "product" : "photoreal",
+      platform: current.platform,
+      market: generationMode === "marketing-main" ? "cn" : current.market,
+      sizeMode: generationMode === "category-kit" || generationMode === "single-poster" ? "preset" : current.sizeMode,
+      size:
+        generationMode === "category-kit"
+          ? { width: 1024, height: 1024 }
+          : generationMode === "marketing-main"
+            ? { width: 1024, height: 1024 }
+            : generationMode === "single-poster"
+              ? { width: 1024, height: 3072 }
+              : current.size,
+      countPerScene: generationMode === "category-kit" || generationMode === "single-poster" ? 1 : current.countPerScene,
+      stylePresetId:
+        generationMode === "enhance" || generationMode === "category-kit" || generationMode === "marketing-main" || generationMode === "text-translation"
+          ? "product"
+          : generationMode === "single-poster"
+            ? "poster"
+            : "photoreal",
       textLanguage:
         generationMode === "enhance"
           ? "none"
           : generationMode === "category-kit"
-            ? "pl"
+            ? "none"
             : generationMode === "marketing-main"
               ? "zh-hans"
               : generationMode === "text-translation"
@@ -3084,12 +3758,14 @@ export function SidePanelApp() {
         generationMode === "enhance"
           ? "原图增强会优先保留商品原貌。"
           : generationMode === "category-kit"
-            ? "品类套图会按 Allegro 丝巾类目生成整套上架图片。"
+            ? "品类套图会先由文本模型识别商品并规划要生成哪些图，再并发提交到生图接口。"
             : generationMode === "marketing-main"
               ? "营销主图会按产品表达、人群、场景、卖点和信任元素生成点击主图。"
-            : generationMode === "text-translation"
-              ? "文字翻译会逐张输出，每张图都会单独翻译并返回。"
-            : "场景创作会依据主图重建营销场景。"
+              : generationMode === "single-poster"
+                ? "单品完整海报会依据商品图归纳卖点，并生成一张高比例详情长图。"
+                : generationMode === "text-translation"
+                  ? "文字翻译会逐张输出，每张图都会单独翻译并返回。"
+                  : "场景创作会依据主图重建营销场景。"
     }));
   }
 
@@ -3101,11 +3777,23 @@ export function SidePanelApp() {
       return;
     }
     const title = form.product.title.trim();
-    if (!title) {
+    const description = form.product.description?.trim() ?? "";
+    const titleOptionalMode = form.generationMode === "category-kit" || form.generationMode === "single-poster";
+    const effectiveProduct = {
+      ...form.product,
+      title: title || (form.generationMode === "category-kit" ? "AI 自拆品类套图" : "单品完整电商海报")
+    };
+    if (!title && !titleOptionalMode) {
       setTask({ id: "validation", status: "failed", message: "请先填写商品标题。", records: [] });
       return;
     }
-    if ((form.generationMode === "enhance" || form.generationMode === "category-kit" || form.generationMode === "marketing-main") && selectedReferenceImageUrls.length === 0) {
+    if (
+      (form.generationMode === "enhance" ||
+        form.generationMode === "category-kit" ||
+        form.generationMode === "marketing-main" ||
+        form.generationMode === "single-poster") &&
+      selectedReferenceImageUrls.length === 0
+    ) {
       setTask({ id: "validation", status: "failed", message: "当前模式需要参考图 URL，请先读取商品页、选择候选图，或手动上传商品主图。", records: [] });
       return;
     }
@@ -3113,7 +3801,6 @@ export function SidePanelApp() {
     const taskId = createClientId();
     const effectiveExtraDirection = [
       form.extraDirection.trim(),
-      form.generationMode === "category-kit" ? categoryKitDirection(form.categoryKit) : "",
       form.generationMode === "marketing-main" ? marketingMainDirection(form.marketingMain) : ""
     ]
       .filter(Boolean)
@@ -3127,18 +3814,21 @@ export function SidePanelApp() {
       message: selectedReferenceImageUrls.length > 0 ? "正在读取参考图并提交批量生成任务。" : "正在提交批量生成任务。",
       records: []
     });
+    const effectivePlatform = form.generationMode === "text-translation" ? "other" : form.platform;
+    const effectiveMarket = form.generationMode === "text-translation" ? "global" : form.market;
 
     const fallbackRecords = effectiveSelectedScenes.map((scene): GenerationRecord => ({
       id: `${taskId}-${scene.id}`,
       mode: selectedReferenceImageUrls.length > 0 ? "edit" : "generate",
       prompt: composeEcommercePrompt({
-        product: form.product,
-        platform: form.platform,
-        market: form.market,
+        product: effectiveProduct,
+        platform: effectivePlatform,
+        market: effectiveMarket,
         textLanguage: form.textLanguage,
         allowTextRecreation: form.allowTextRecreation,
         removeWatermarkAndLogo: form.removeWatermarkAndLogo,
         sceneTemplateId: scene.id,
+        brandOverlayPlacement: form.brandOverlay.enabled ? form.brandOverlay.placement : undefined,
         extraDirection: effectiveExtraDirection
       }),
       effectivePrompt: scene.prompt,
@@ -3152,18 +3842,60 @@ export function SidePanelApp() {
       outputs: []
     }));
 
+    if (form.generationMode === "category-kit") {
+      try {
+        const referenceImage = await referenceImageFromSources(selectedReferenceImageUrls);
+        const response = await fetch(`${apiBaseUrl()}/api/ecommerce/images/category-kit-generate`, {
+          method: "POST",
+          headers: apiHeaders(true, token),
+          body: JSON.stringify({
+            product: effectiveProduct,
+            platform: effectivePlatform,
+            market: effectiveMarket,
+            textLanguage: form.textLanguage,
+            allowTextRecreation: form.allowTextRecreation,
+            removeWatermarkAndLogo: form.removeWatermarkAndLogo,
+            brandOverlayPlacement: form.brandOverlay.enabled ? form.brandOverlay.placement : undefined,
+            sceneTemplateIds: effectiveSceneTemplateIds,
+            sourcePageUrl: pageContext?.url,
+            size: form.size,
+            stylePresetId: form.stylePresetId,
+            quality: form.quality,
+            outputFormat: form.outputFormat,
+            countPerScene: effectiveCountPerScene,
+            referenceImage,
+            createComparisonCollage: isAdminAccount && createComparisonCollage && Boolean(referenceImage),
+            extraDirection: effectiveExtraDirection
+          })
+        });
+
+        const body = (await parseResponseOrThrow(response)) as EcommerceBatchGenerateResponse;
+        handleQueuedBatchJob(body, token);
+      } catch (error) {
+        setTask({
+          id: taskId,
+          status: "failed",
+          message: error instanceof Error ? `${error.message} 已在本地生成场景 prompt 草稿。` : "后端品类套图接口暂不可用，已在本地生成场景 prompt 草稿。",
+          records: fallbackRecords
+        });
+        setBatchGenerationLocked(false);
+      }
+      return;
+    }
+
     try {
       const referenceImage = await referenceImageFromSources(selectedReferenceImageUrls);
       const response = await fetch(`${apiBaseUrl()}/api/ecommerce/images/batch-generate`, {
         method: "POST",
         headers: apiHeaders(true, token),
         body: JSON.stringify({
-          product: form.product,
-          platform: form.platform,
-          market: form.market,
+          product: effectiveProduct,
+          platform: effectivePlatform,
+          market: effectiveMarket,
           textLanguage: form.textLanguage,
           allowTextRecreation: form.allowTextRecreation,
           removeWatermarkAndLogo: form.removeWatermarkAndLogo,
+          brandOverlayPlacement: form.brandOverlay.enabled ? form.brandOverlay.placement : undefined,
           sceneTemplateIds: effectiveSceneTemplateIds,
           sourcePageUrl: pageContext?.url,
           size: form.size,
@@ -3172,6 +3904,7 @@ export function SidePanelApp() {
           outputFormat: form.outputFormat,
           countPerScene: effectiveCountPerScene,
           referenceImage,
+          createComparisonCollage: isAdminAccount && createComparisonCollage && Boolean(referenceImage),
           extraDirection: effectiveExtraDirection
         })
       });
@@ -3203,6 +3936,8 @@ export function SidePanelApp() {
 
     const taskId = createClientId();
     const targetLanguage = form.textLanguage === "none" ? "ko" : form.textLanguage;
+    const translationPlatform = "other";
+    const translationMarket = "global";
     const translatedRecordsByIndex: GenerationRecord[][] = selectedTranslationImageUrls.map(() => []);
     let completedCount = 0;
     let failedImageCount = 0;
@@ -3230,16 +3965,17 @@ export function SidePanelApp() {
             ...form.product,
             title: form.product.title.trim() || `文字翻译 ${index + 1}`
           };
-          const response = await fetch(`${apiBaseUrl()}/api/ecommerce/images/batch-generate`, {
-            method: "POST",
-            headers: apiHeaders(true, token),
-            body: JSON.stringify({
-              product: requestProduct,
-              platform: form.platform,
-              market: form.market,
-              textLanguage: targetLanguage,
-              allowTextRecreation: form.allowTextRecreation,
+	          const response = await fetch(`${apiBaseUrl()}/api/ecommerce/images/batch-generate`, {
+	            method: "POST",
+	            headers: apiHeaders(true, token),
+	            body: JSON.stringify({
+	              product: requestProduct,
+	              platform: translationPlatform,
+	              market: translationMarket,
+	              textLanguage: targetLanguage,
+	              allowTextRecreation: form.allowTextRecreation,
               removeWatermarkAndLogo: form.removeWatermarkAndLogo,
+              brandOverlayPlacement: form.brandOverlay.enabled ? form.brandOverlay.placement : undefined,
               sceneTemplateIds: [TEXT_TRANSLATION_SCENE_ID],
               size,
               stylePresetId: "product",
@@ -3260,19 +3996,20 @@ export function SidePanelApp() {
           failedImageCount += 1;
           translatedRecordsByIndex[index] = [
             {
-              id: `${taskId}-${index + 1}-failed`,
-              mode: "edit",
-              prompt: composeEcommercePrompt({
-                product: {
-                  ...form.product,
-                  title: form.product.title.trim() || `文字翻译 ${index + 1}`
-                },
-                platform: form.platform,
-                market: form.market,
-                textLanguage: targetLanguage,
-                allowTextRecreation: form.allowTextRecreation,
+	              id: `${taskId}-${index + 1}-failed`,
+	              mode: "edit",
+	              prompt: composeEcommercePrompt({
+	                product: {
+	                  ...form.product,
+	                  title: form.product.title.trim() || `文字翻译 ${index + 1}`
+	                },
+	                platform: translationPlatform,
+	                market: translationMarket,
+	                textLanguage: targetLanguage,
+	                allowTextRecreation: form.allowTextRecreation,
                 removeWatermarkAndLogo: form.removeWatermarkAndLogo,
                 sceneTemplateId: TEXT_TRANSLATION_SCENE_ID,
+                brandOverlayPlacement: form.brandOverlay.enabled ? form.brandOverlay.placement : undefined,
                 extraDirection: form.extraDirection
               }),
               effectivePrompt: "",
@@ -3458,7 +4195,12 @@ export function SidePanelApp() {
                     key={item.key}
                     title={item.label}
                     type="button"
+                    onBlur={hideImageHoverPreview}
                     onClick={() => toggleTranslationImage(item.url)}
+                    onFocus={(event) => showImageFocusPreview(event.currentTarget, item)}
+                    onPointerEnter={(event) => showImageHoverPreview(event, item)}
+                    onPointerLeave={hideImageHoverPreview}
+                    onPointerMove={(event) => showImageHoverPreview(event, item)}
                   >
                     <img alt={item.uploaded ? item.label : `候选商品图 ${index + 1}`} loading="lazy" src={item.url} />
                     {selectedTranslationImageUrls.includes(item.url) ? <CheckCircle2 size={16} /> : null}
@@ -3505,6 +4247,15 @@ export function SidePanelApp() {
           ) : null}
         </section>
 
+        {imageHoverPreview ? (
+          <div
+            className="reference-image-hover-preview"
+            style={{ left: `${imageHoverPreview.x}px`, top: `${imageHoverPreview.y}px` }}
+          >
+            <img alt={imageHoverPreview.label} src={imageHoverPreview.url} />
+            <span>{imageHoverPreview.label}</span>
+          </div>
+        ) : null}
         {renderEditDialog()}
       </main>
     );
@@ -3549,7 +4300,7 @@ export function SidePanelApp() {
       <section className="panel reference-panel" id="reference-panel">
         <div className="reference-image-field reference-image-field-standalone">
           <label>
-            <span>{form.generationMode === "creative" ? "商品主图 URL" : "商品主图 URL（必填）"}</span>
+	            <span>{form.generationMode === "single-poster" || form.generationMode === "category-kit" ? "商品参考图 URL（1-3 张）" : form.generationMode === "creative" ? "商品主图 URL" : "商品主图 URL（必填）"}</span>
             <input value={form.referenceImageUrl} onChange={(event) => updateReferenceImageUrl(event.target.value)} />
           </label>
           <div className="reference-upload-row">
@@ -3558,13 +4309,13 @@ export function SidePanelApp() {
               上传图片
               <input accept="image/*" multiple type="file" onChange={(event) => void uploadReferenceImages(event)} />
             </label>
-            <span>可选 1-3 张，作为不同角度的出图参考。</span>
+	            <span>可选 1-3 张，适合主图、细节、包装或使用角度。</span>
           </div>
           {referenceImageOptions.length > 0 ? (
             <div className="reference-image-picker" aria-label="商品主图候选">
               <div className="reference-image-picker-header">
                 <strong>从当前页图片选择参考图</strong>
-                <span>已选 {selectedReferenceImageUrls.length}/{maxReferenceImageCount} 张，超出会替换最早选择</span>
+	                <span>已选 {selectedReferenceImageUrls.length}/{maxReferenceImageCount} 张，第一张作为主体，后续作为细节依据</span>
               </div>
               <div className="reference-image-grid">
                 {referenceImageOptions.map((item, index) => (
@@ -3573,7 +4324,12 @@ export function SidePanelApp() {
                     key={item.key}
                     title={item.label}
                     type="button"
+                    onBlur={hideImageHoverPreview}
                     onClick={() => toggleReferenceImage(item.url)}
+                    onFocus={(event) => showImageFocusPreview(event.currentTarget, item)}
+                    onPointerEnter={(event) => showImageHoverPreview(event, item)}
+                    onPointerLeave={hideImageHoverPreview}
+                    onPointerMove={(event) => showImageHoverPreview(event, item)}
                   >
                     <img alt={item.uploaded ? item.label : `候选商品图 ${index + 1}`} loading="lazy" src={item.url} />
                     {selectedReferenceImageUrls.includes(item.url) ? <CheckCircle2 size={16} /> : null}
@@ -3590,15 +4346,24 @@ export function SidePanelApp() {
         </div>
       </section>
 
-      <section className="panel" id="product-panel">
-        <h2>商品信息</h2>
-        <label>
-          <span>商品标题</span>
-          <input value={form.product.title} onChange={(event) => updateProduct({ title: event.target.value })} />
-        </label>
+	      <section className="panel" id="product-panel">
+	        <h2>商品信息</h2>
+	        <label>
+	          <span>{form.generationMode === "single-poster" || form.generationMode === "category-kit" ? "商品标题（可选）" : "商品标题"}</span>
+	          <input
+	            placeholder={form.generationMode === "single-poster" || form.generationMode === "category-kit" ? "可留空，由模型依据产品图和描述归纳" : ""}
+	            value={form.product.title}
+	            onChange={(event) => updateProduct({ title: event.target.value })}
+	          />
+	        </label>
         <label>
           <span>商品描述</span>
-          <textarea rows={4} value={form.product.description ?? ""} onChange={(event) => updateProduct({ description: event.target.value })} />
+          <textarea
+            placeholder={form.generationMode === "category-kit" ? "可选：补充卖点、尺寸、包装、使用场景或平台要求；不填也会先看图判断" : ""}
+            rows={4}
+            value={form.product.description ?? ""}
+            onChange={(event) => updateProduct({ description: event.target.value })}
+          />
         </label>
         <div className="two-col">
           <label>
@@ -3622,27 +4387,29 @@ export function SidePanelApp() {
         </div>
       </section>
 
-      <section className="panel" id="market-panel">
-        <h2>平台与市场</h2>
-        <div className="two-col">
-          <label>
-            <span>平台</span>
-            <select value={form.platform} onChange={(event) => updatePlatform(event.target.value as BatchFormState["platform"])}>
-              {ECOMMERCE_PLATFORMS.map((item) => (
-                <option key={item.id} value={item.id}>{item.label}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span>市场</span>
-            <select value={form.market} onChange={(event) => setForm({ ...form, market: event.target.value as BatchFormState["market"] })}>
-              {ECOMMERCE_MARKETS.map((item) => (
-                <option key={item.id} value={item.id}>{item.label}</option>
-              ))}
-            </select>
-          </label>
-        </div>
-      </section>
+      {form.generationMode !== "text-translation" ? (
+        <section className="panel" id="market-panel">
+          <h2>平台与市场</h2>
+          <div className="two-col">
+            <label>
+              <span>平台</span>
+              <select value={form.platform} onChange={(event) => updatePlatform(event.target.value as BatchFormState["platform"])}>
+                {ECOMMERCE_PLATFORMS.map((item) => (
+                  <option key={item.id} value={item.id}>{item.label}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>市场</span>
+              <select value={form.market} onChange={(event) => setForm({ ...form, market: event.target.value as BatchFormState["market"] })}>
+                {ECOMMERCE_MARKETS.map((item) => (
+                  <option key={item.id} value={item.id}>{item.label}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </section>
+      ) : null}
 
       <section className="panel" id="generation-mode-panel">
         <h2>生成方式</h2>
@@ -3672,62 +4439,13 @@ export function SidePanelApp() {
         <section className="panel category-kit-panel" id="scene-panel">
           <div className="kit-heading">
             <div>
-              <h2>配饰-丝巾类目套图</h2>
-              <p>Allegro Poland Listing Image Kit：第一张严格合规，后续图片负责点击率和转化。</p>
+              <h2>AI 品类套图策划</h2>
+              <p>后台共享文本模型会先看图识别商品，再动态拆解出图方案并并发生成。</p>
             </div>
-            <span>{effectiveSelectedScenes.length} 张</span>
+            <span>后台统一规划</span>
           </div>
-          <label>
-            <span>套图版本</span>
-            <select value={form.categoryKit.kitVersion} onChange={(event) => updateCategoryKit({ kitVersion: event.target.value as CategoryKitVersion })}>
-              {categoryKitVersionOptions.map((item) => (
-                <option key={item.id} value={item.id}>{item.label}</option>
-              ))}
-            </select>
-          </label>
-          <p className="kit-version-hint">
-            {categoryKitVersionOptions.find((item) => item.id === form.categoryKit.kitVersion)?.hint}
-          </p>
-          <div className="two-col">
-            <label>
-              <span>丝巾尺寸</span>
-              <input value={form.categoryKit.scarfSize} onChange={(event) => updateCategoryKit({ scarfSize: event.target.value })} />
-            </label>
-            <label>
-              <span>颜色/SKU 数量</span>
-              <input inputMode="numeric" value={form.categoryKit.skuCount} onChange={(event) => updateCategoryKit({ skuCount: event.target.value })} />
-            </label>
-          </div>
-          <label>
-            <span>目标风格</span>
-            <select value={form.categoryKit.targetStyle} onChange={(event) => updateCategoryKit({ targetStyle: event.target.value as CategoryKitStyle })}>
-              {categoryKitStyleOptions.map((item) => (
-                <option key={item.id} value={item.id}>{item.label}</option>
-              ))}
-            </select>
-          </label>
-          <div className="kit-toggle-list">
-            <label className="checkbox-row">
-              <input checked={form.categoryKit.hasPackaging} type="checkbox" onChange={(event) => updateCategoryKit({ hasPackaging: event.target.checked })} />
-              <span>有真实包装，可生成包装/礼品图</span>
-            </label>
-            <label className="checkbox-row">
-              <input checked={form.categoryKit.allowModelImages} type="checkbox" onChange={(event) => updateCategoryKit({ allowModelImages: event.target.checked })} />
-              <span>允许模特图（默认无明显正脸）</span>
-            </label>
-            <label className="checkbox-row">
-              <input checked={form.categoryKit.polishCopy} type="checkbox" onChange={(event) => updateCategoryKit({ polishCopy: event.target.checked })} />
-              <span>需要波兰语文案（不用于第 1 图）</span>
-            </label>
-          </div>
-          <div className="scene-grid kit-scene-grid">
-            {effectiveSelectedScenes.map((scene) => (
-              <div className="scene-button active kit-scene-item" key={scene.id}>
-                <Wand2 size={15} />
-                {scene.label}
-              </div>
-            ))}
-          </div>
+          <p className="kit-version-hint">这里不再手选固定模板，也不再填写模型或 API Key；只要给参考图和商品信息，后台会直接规划适合这个商品的详情页图片清单。</p>
+          <p className="kit-version-hint">图片数量和类型由后台模型动态判断，通常会输出 4 到 12 张，之后再按队列并发提交到现有生图接口。</p>
         </section>
       ) : form.generationMode === "marketing-main" ? (
         <section className="panel marketing-main-panel" id="scene-panel">
@@ -3946,16 +4664,20 @@ export function SidePanelApp() {
               ))}
             </select>
           </label>
-          {form.generationMode === "category-kit" ? null : (
-            <label>
-              <span>每场景数量</span>
-              <select value={form.countPerScene} onChange={(event) => setForm({ ...form, countPerScene: Number(event.target.value) as 1 | 2 | 4 })}>
-                <option value={1}>1</option>
-                <option value={2}>2</option>
-                <option value={4}>4</option>
-              </select>
-            </label>
-          )}
+	          {form.generationMode === "category-kit" ? null : (
+	            <label>
+	              <span>{form.generationMode === "single-poster" ? "输出张数" : "每场景数量"}</span>
+	              <select
+	                disabled={form.generationMode === "single-poster"}
+	                value={form.generationMode === "single-poster" ? 1 : form.countPerScene}
+	                onChange={(event) => setForm({ ...form, countPerScene: Number(event.target.value) as 1 | 2 | 4 })}
+	              >
+	                <option value={1}>1</option>
+	                {form.generationMode === "single-poster" ? null : <option value={2}>2</option>}
+	                {form.generationMode === "single-poster" ? null : <option value={4}>4</option>}
+	              </select>
+	            </label>
+	          )}
           <label>
             <span>风格</span>
             <select value={form.stylePresetId} onChange={(event) => setForm({ ...form, stylePresetId: event.target.value as StylePresetId })}>
@@ -3985,6 +4707,16 @@ export function SidePanelApp() {
           <span>补充方向</span>
           <textarea rows={3} value={form.extraDirection} onChange={(event) => setForm({ ...form, extraDirection: event.target.value })} />
         </label>
+        {isAdminAccount ? (
+          <label className="ops-collage-toggle" title="服务端会额外生成并上传一张原图与生成图拼接的运营素材">
+            <input
+              checked={createComparisonCollage}
+              type="checkbox"
+              onChange={(event) => setCreateComparisonCollage(event.target.checked)}
+            />
+            <span>生成运营对比图</span>
+          </label>
+        ) : null}
       </section>
 
       <section className="sticky-actions">
@@ -3994,7 +4726,7 @@ export function SidePanelApp() {
             {task.status === "pending" || task.status === "running"
               ? `${task.completedScenes ?? 0}/${task.totalScenes ?? effectiveSelectedScenes.length} 场景`
               : "张图像"}
-          </span>
+            </span>
         </div>
         <button className="primary-button" disabled={batchGenerationLocked} type="button" onClick={() => void submitBatch()}>
           {batchGenerationLocked ? <Loader2 className="spin" size={17} /> : <Send size={17} />}
@@ -4074,7 +4806,7 @@ export function SidePanelApp() {
                   <div className="account-card">
                     <div className="account-heading">
                       <div>
-                        <strong>{auth.user?.displayName || auth.user?.email || auth.user?.phone || "已登录"}</strong>
+                        <strong>{auth.user?.displayName || auth.user?.phone || auth.user?.email || "已登录"}</strong>
                         <span>{auth.user?.phone || auth.user?.email || "正在同步账户信息"}</span>
                       </div>
                       <button
@@ -4136,8 +4868,8 @@ export function SidePanelApp() {
                       </label>
                     ) : (
                       <label>
-                        <span>邮箱</span>
-                        <input autoComplete="email" type="email" value={authForm.email} onChange={(event) => setAuthForm({ ...authForm, email: event.target.value })} required />
+                        <span>手机号/邮箱</span>
+                        <input autoComplete="username" value={authForm.account} onChange={(event) => setAuthForm({ ...authForm, account: event.target.value })} required />
                       </label>
                     )}
                     {authMode === "register" ? (
@@ -4188,7 +4920,6 @@ export function SidePanelApp() {
                     </button>
                   </form>
                 )}
-                {!auth.token ? <p className="settings-note">登录后会把个人 JWT 保存在本地，并自动附加到后端请求。</p> : null}
               </div>
             ) : null}
 
@@ -4276,6 +5007,99 @@ export function SidePanelApp() {
                       ))}
                     </div>
                   )}
+                </div>
+                <div className="billing-usage-card invoice-card">
+                  <div className="tool-actions compact">
+                    <span>开票申请</span>
+                    <button className="mini-button" disabled={invoiceState.loading} type="button" onClick={() => void refreshInvoiceApplications()}>
+                      {invoiceState.loading ? <Loader2 className="spin" size={13} /> : <RefreshCw size={13} />}
+                      刷新
+                    </button>
+                  </div>
+                  {invoiceState.error ? <p className="tool-error">{invoiceState.error}</p> : null}
+                  <div className="invoice-summary-grid">
+                    <div><span>实际支付</span><strong>{formatMoney(invoiceState.data.summary.paidAmountCents, invoiceState.data.summary.currency)}</strong></div>
+                    <div><span>已开票</span><strong>{formatMoney(invoiceState.data.summary.issuedAmountCents, invoiceState.data.summary.currency)}</strong></div>
+                    <div><span>可申请</span><strong>{formatMoney(invoiceState.data.summary.requestableAmountCents, invoiceState.data.summary.currency)}</strong></div>
+                  </div>
+                  {invoiceState.data.profile ? (
+                    <div className="invoice-latest">
+                      <div>
+                        <strong>{invoiceState.data.profile.title}</strong>
+                        <span>{invoiceState.data.profile.headerType === "personal" ? "个人/其他" : "企业抬头"} · {formatDateTime(invoiceState.data.profile.createdAt)}</span>
+                      </div>
+                      <em>{formatMoney(invoiceState.data.profile.amountCents, billingState.data.currency)}</em>
+                    </div>
+                  ) : null}
+                  <div className="invoice-form">
+                    <label>
+                      <span>抬头类型</span>
+                      <select value={invoiceForm.headerType} onChange={(event) => setInvoiceForm((current) => ({ ...current, headerType: event.target.value as InvoiceHeaderType }))}>
+                        <option value="company">企业抬头</option>
+                        <option value="personal">个人/其他</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span>发票抬头</span>
+                      <input value={invoiceForm.title} onChange={(event) => setInvoiceForm((current) => ({ ...current, title: event.target.value }))} />
+                    </label>
+                    <label>
+                      <span>纳税人识别号</span>
+                      <input disabled={invoiceForm.headerType === "personal"} value={invoiceForm.taxNumber} onChange={(event) => setInvoiceForm((current) => ({ ...current, taxNumber: event.target.value }))} />
+                    </label>
+                    <label>
+                      <span>开票内容</span>
+                      <input value={invoiceForm.invoiceContent} onChange={(event) => setInvoiceForm((current) => ({ ...current, invoiceContent: event.target.value }))} />
+                    </label>
+                    <label>
+                      <span>金额（元）</span>
+                      <input inputMode="decimal" value={invoiceForm.amount} onChange={(event) => setInvoiceForm((current) => ({ ...current, amount: event.target.value }))} />
+                    </label>
+                    <label>
+                      <span>接收邮箱</span>
+                      <input value={invoiceForm.email} onChange={(event) => setInvoiceForm((current) => ({ ...current, email: event.target.value }))} />
+                    </label>
+                    <label>
+                      <span>联系电话</span>
+                      <input value={invoiceForm.phone} onChange={(event) => setInvoiceForm((current) => ({ ...current, phone: event.target.value }))} />
+                    </label>
+                    <label>
+                      <span>公司地址</span>
+                      <input value={invoiceForm.companyAddress} onChange={(event) => setInvoiceForm((current) => ({ ...current, companyAddress: event.target.value }))} />
+                    </label>
+                    <label>
+                      <span>开户行</span>
+                      <input value={invoiceForm.bankName} onChange={(event) => setInvoiceForm((current) => ({ ...current, bankName: event.target.value }))} />
+                    </label>
+                    <label>
+                      <span>银行账号</span>
+                      <input value={invoiceForm.bankAccount} onChange={(event) => setInvoiceForm((current) => ({ ...current, bankAccount: event.target.value }))} />
+                    </label>
+                    <label className="invoice-form-wide">
+                      <span>备注</span>
+                      <textarea value={invoiceForm.remark} onChange={(event) => setInvoiceForm((current) => ({ ...current, remark: event.target.value }))} />
+                    </label>
+                    <button className="primary-button invoice-submit" disabled={invoiceActionLoading || invoiceState.data.summary.requestableAmountCents <= 0} type="button" onClick={() => void submitInvoiceApplication()}>
+                      {invoiceActionLoading ? <Loader2 className="spin" size={15} /> : <Receipt size={15} />}
+                      保存并申请
+                    </button>
+                  </div>
+                  {invoiceState.data.applications.length > 0 ? (
+                    <div className="billing-ledger-list invoice-history">
+                      {invoiceState.data.applications.slice(0, 4).map((item) => (
+                        <article className="billing-ledger-item" key={item.id}>
+                          <div>
+                            <strong>{item.title}</strong>
+                            <span>{invoiceStatusLabel(item.status)} · {formatDateTime(item.createdAt)}</span>
+                          </div>
+                          <div>
+                            <strong>{formatMoney(item.amountCents, billingState.data.currency)}</strong>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  ) : null}
+                  {invoiceAction ? <p className="settings-note">{invoiceAction}</p> : null}
                 </div>
                 {billingAction ? <p className="settings-note">{billingAction}</p> : null}
               </div>
@@ -4371,7 +5195,7 @@ export function SidePanelApp() {
                       ) : showPlaceholder ? (
                         <div className="asset-list">
                           <div className="asset-thumb asset-thumb--placeholder" aria-hidden="true">
-                            <img alt="" src={historyPlaceholderImage} />
+                            <HistoryPlaceholderVisual />
                           </div>
                         </div>
                       ) : (
@@ -4506,7 +5330,7 @@ export function SidePanelApp() {
                 <div className="about-contact-grid">
                   <div>
                     <span>官网</span>
-                    <strong>imagen.neimou.com</strong>
+            <strong>ai.neimou.com</strong>
                   </div>
                   <div>
                     <span>客服微信</span>
@@ -4572,6 +5396,9 @@ export function SidePanelApp() {
       {requiresPhoneVerification && phoneDialogOpen ? (
         <div className="phone-dialog-backdrop" role="presentation">
           <section aria-labelledby="extension-phone-dialog-title" aria-modal="true" className="phone-dialog" role="dialog">
+            <button aria-label="关闭完善手机号弹窗" className="phone-dialog__close" type="button" onClick={() => setPhoneDialogOpen(false)}>
+              <X size={16} />
+            </button>
             <div className="phone-dialog-icon">
               <Phone size={20} />
             </div>
@@ -4672,6 +5499,15 @@ export function SidePanelApp() {
       ) : null}
       {renderExtensionUpdateDialog()}
       {renderQueuedJobDialog()}
+      {imageHoverPreview ? (
+        <div
+          className="reference-image-hover-preview"
+          style={{ left: `${imageHoverPreview.x}px`, top: `${imageHoverPreview.y}px` }}
+        >
+          <img alt={imageHoverPreview.label} src={imageHoverPreview.url} />
+          <span>{imageHoverPreview.label}</span>
+        </div>
+      ) : null}
     </main>
   );
 }

@@ -73,6 +73,22 @@ wait_for_service() {
   exit 1
 }
 
+reload_nginx() {
+  tries=30
+  while [ "$tries" -gt 0 ]; do
+    container_id="$(docker compose -f "$COMPOSE_FILE" ps -q nginx)"
+    if [ "$container_id" != "" ] && [ "$(docker inspect -f '{{.State.Running}}' "$container_id")" = "true" ]; then
+      docker compose -f "$COMPOSE_FILE" kill -s HUP nginx >/dev/null 2>&1 || true
+      return 0
+    fi
+    tries=$((tries - 1))
+    sleep 1
+  done
+
+  echo "nginx did not become ready for reload." >&2
+  exit 1
+}
+
 docker compose -f "$COMPOSE_FILE" up -d --build "$service"
 wait_for_service "$service"
 
@@ -93,8 +109,8 @@ upstream dev_app {
 }
 EOF
 
-docker compose -f "$COMPOSE_FILE" up -d nginx
-docker compose -f "$COMPOSE_FILE" exec -T nginx nginx -s reload
+docker compose -f "$COMPOSE_FILE" up -d --remove-orphans nginx
+reload_nginx
 
 printf '%s\n' "$target" > "$ACTIVE_FILE"
 

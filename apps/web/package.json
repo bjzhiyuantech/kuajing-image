@@ -13,10 +13,14 @@
   "dependencies": {
     "@gpt-image-canvas/shared": "workspace:^",
     "@tldraw/tlschema": "4.5.10",
+    "@toast-ui/editor": "^3.2.2",
     "lucide-react": "^1.11.0",
     "qrcode": "^1.5.4",
     "react": "18.3.1",
     "react-dom": "18.3.1",
+    "react-markdown": "^10.1.0",
+    "rehype-raw": "^7.0.0",
+    "remark-gfm": "^4.0.1",
     "tldraw": "^4.5.10"
   },
   "devDependencies": {

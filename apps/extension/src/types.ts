@@ -80,7 +80,7 @@ export interface BatchFormState {
   referenceImageUrls: string[];
   extraDirection: string;
   categoryKit: {
-    categoryId: "accessory-scarf";
+    categoryId: "auto-category-kit" | "accessory-scarf";
     kitVersion: "compliance" | "conversion" | "ads";
     scarfSize: string;
     skuCount: string;

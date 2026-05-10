@@ -5,7 +5,8 @@ const { LANGUAGES, MARKETS, PLATFORMS, SCENES } = require("../../utils/constants
 const MODES = [
   { id: "enhance", title: "原图增强", desc: "保留商品原貌，生成卖点文字和电商排版。", icon: "✨" },
   { id: "creative", title: "场景创作", desc: "依据主图生成生活方式、模特穿戴和搭配场景。", icon: "🎬" },
-  { id: "category-kit", title: "品类套图", desc: "按平台和类目生成整套 Listing Image Kit。", icon: "📦" },
+  { id: "category-kit", title: "品类套图", desc: "上传参考图和描述，自动拆解整套 Listing Image Kit。", icon: "📦" },
+  { id: "single-poster", title: "单品完整海报", desc: "依据产品图自动提炼卖点，生成一张高比例详情长海报。", icon: "长" },
   { id: "text-translation", title: "文字翻译", desc: "逐张翻译图片文字，可选择目标语言和是否二创。", icon: "译" }
 ];
 
@@ -13,17 +14,20 @@ const MODE_SCENES = {
   enhance: ["marketplace-main", "logo-benefit", "feature-benefit", "promo-poster"],
   creative: ["lifestyle", "model-wear", "accessory-match", "seasonal-campaign", "social-ad"],
   "category-kit": [
-    "allegro-scarf-main-flat",
-    "allegro-scarf-main-styled",
-    "allegro-scarf-drape-product",
-    "allegro-scarf-fabric-detail",
-    "allegro-scarf-edge-detail",
-    "allegro-scarf-size-guide",
-    "allegro-scarf-wear-grid",
-    "allegro-scarf-neck-model",
-    "allegro-scarf-bag-styling",
-    "allegro-scarf-lifestyle"
+    "category-kit-auto-main",
+    "category-kit-auto-hero",
+    "category-kit-auto-overview",
+    "category-kit-auto-benefits",
+    "category-kit-auto-detail",
+    "category-kit-auto-structure",
+    "category-kit-auto-guide",
+    "category-kit-auto-package",
+    "category-kit-auto-usage",
+    "category-kit-auto-lifestyle",
+    "category-kit-auto-audience",
+    "category-kit-auto-trust"
   ],
+  "single-poster": ["single-product-long-poster"],
   "text-translation": ["text-translation"]
 };
 
@@ -40,7 +44,8 @@ const SIZE_OPTIONS = [
   { id: "square-1k", label: "方图 1:1", width: 1024, height: 1024 },
   { id: "poster-landscape", label: "横版 3:2", width: 1536, height: 1024 },
   { id: "poster-portrait", label: "竖版 2:3", width: 1024, height: 1536 },
-  { id: "story-9-16", label: "短视频 9:16", width: 1088, height: 1920 }
+  { id: "story-9-16", label: "短视频 9:16", width: 1088, height: 1920 },
+  { id: "ecommerce-long-poster", label: "电商长海报", width: 1024, height: 3072 }
 ];
 
 const TEMPLATE_KEY = "productInfoTemplate";
@@ -52,9 +57,9 @@ const CHINESE_PLATFORM_IDS = new Set(["1688", "taobao", "tmall", "jd", "douyin",
 
 const CATEGORY_KITS = [
   {
-    id: "accessory-scarf",
-    title: "配饰-围巾",
-    desc: "围巾、丝巾、方巾 Listing Image Kit",
+    id: "auto-category-kit",
+    title: "AI 自动品类套图",
+    desc: "按参考图、描述、平台和市场自动拆解 Listing Image Kit",
     status: "已支持",
     sceneIds: MODE_SCENES["category-kit"]
   }
@@ -133,15 +138,24 @@ Page({
     const modeMeta = MODES.find((item) => item.id === mode) || MODES[0];
     const languageIndex = mode === "text-translation" ? Math.max(1, this.data.languageIndex) : this.data.languageIndex;
     const scenes = mode === "category-kit" ? categoryScenes(this.data.selectedCategoryId) : initialScenes(mode);
-    this.setData({
+    const patch = {
       activeSceneCount: scenes.filter((item) => item.active && item.visible).length,
       languageIndex,
       mode,
       modeDesc: modeMeta.desc,
       modes: MODES.map((item) => ({ ...item, active: item.id === mode })),
       scenes
-    });
-  },
+	    };
+	    if (mode === "single-poster" || mode === "category-kit") {
+	      const longPosterSizeIndex = SIZE_OPTIONS.findIndex((item) => item.id === "ecommerce-long-poster");
+	      patch.countIndex = 0;
+	      patch.countPerScene = 1;
+	      if (mode === "single-poster" && longPosterSizeIndex >= 0) {
+	        patch.sizeIndex = longPosterSizeIndex;
+	      }
+	    }
+	    this.setData(patch);
+	  },
 
   selectCategory(event) {
     this.applyCategory(event.currentTarget.dataset.id, true);
@@ -275,8 +289,13 @@ Page({
 
     const title = this.data.title.trim();
     const sceneTemplateIds = this.data.scenes.filter((item) => item.active && item.visible).map((item) => item.id);
-    if (!title) {
+    const titleOptionalMode = this.data.mode === "single-poster" || this.data.mode === "category-kit";
+    if (!title && !titleOptionalMode) {
       wx.showToast({ title: "请输入商品标题", icon: "none" });
+      return;
+    }
+    if (this.data.mode === "category-kit" && !title && !this.data.description.trim()) {
+      wx.showToast({ title: "请填写商品描述", icon: "none" });
       return;
     }
     if (!this.data.images.length) {
@@ -289,8 +308,14 @@ Page({
     }
 
     const size = SIZE_OPTIONS[this.data.sizeIndex];
+    const isTextTranslationMode = this.data.mode === "text-translation";
+    const isSinglePosterMode = this.data.mode === "single-poster";
+    const isCategoryKitMode = this.data.mode === "category-kit";
+    const countPerScene = isSinglePosterMode || isCategoryKitMode ? 1 : this.data.countPerScene;
+    const stylePresetId = this.data.mode === "creative" ? "photoreal" : isSinglePosterMode ? "poster" : "product";
     const extraDirection = [
       this.data.extraDirection.trim(),
+      isCategoryKitMode ? "自动识别商品品类、平台和市场，按当前商品拆解详情页级套图，覆盖整体、细节、卖点、规格、包装、用法、场景、人群和保障注意事项；不要套用固定围巾或丝巾模板。" : "",
       this.data.brandOverlayEnabled ? "需要预留品牌 Logo 或品牌文字叠加空间，不要生成虚假品牌标识。" : ""
     ].filter(Boolean).join("\n");
 
@@ -302,25 +327,25 @@ Page({
         const dataUrl = await fileToDataUrl(image.path);
         const payload = {
           product: {
-            title,
+            title: title || (isCategoryKitMode ? "AI 自拆品类套图" : "单品完整电商海报"),
             description: this.data.description.trim(),
             targetCustomer: this.data.targetCustomer.trim(),
             usageScene: this.data.usageScene.trim(),
             material: this.data.material.trim(),
             color: [this.data.color.trim(), this.data.sku.trim()].filter(Boolean).join(" / ")
           },
-          platform: PLATFORMS[this.data.platformIndex].id,
-          market: MARKETS[this.data.marketIndex].id,
-          textLanguage: this.data.mode === "text-translation" ? LANGUAGES[this.data.languageIndex].id : "none",
-          allowTextRecreation: this.data.mode !== "text-translation",
+          platform: isTextTranslationMode ? "other" : PLATFORMS[this.data.platformIndex].id,
+          market: isTextTranslationMode ? "global" : MARKETS[this.data.marketIndex].id,
+          textLanguage: isTextTranslationMode ? LANGUAGES[this.data.languageIndex].id : "none",
+          allowTextRecreation: !isTextTranslationMode,
           removeWatermarkAndLogo: this.data.removeWatermarkAndLogo,
           sceneTemplateIds,
           size: { width: size.width, height: size.height },
           sizePresetId: size.id,
-          stylePresetId: this.data.mode === "creative" ? "photoreal" : "product",
+          stylePresetId,
           quality: "auto",
           outputFormat: "png",
-          countPerScene: this.data.countPerScene,
+          countPerScene,
           referenceImage: {
             dataUrl,
             fileName: `reference-${index + 1}.png`
@@ -333,7 +358,7 @@ Page({
         RECENT_CREATED_JOBS_KEY,
         jobs.map((job) => ({
           jobId: job.jobId,
-          productTitle: title,
+          productTitle: title || "单品完整电商海报",
           createdAt: job.createdAt || new Date().toISOString(),
           status: job.status || "pending",
           totalScenes: job.totalScenes || sceneTemplateIds.length,

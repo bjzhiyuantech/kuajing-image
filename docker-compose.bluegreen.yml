@@ -1,6 +1,6 @@
 services:
   mysql:
-    image: mysql:8.4
+    image: ${MYSQL_IMAGE:-public.ecr.aws/docker/library/mysql:8.4}
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-gpt_image_canvas}
@@ -21,7 +21,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        NODE_IMAGE: ${NODE_IMAGE:-node:23-bullseye-slim}
+        NODE_IMAGE: ${NODE_IMAGE:-public.ecr.aws/docker/library/node:22-bookworm-slim}
         NPM_CONFIG_REGISTRY: ${NPM_CONFIG_REGISTRY:-https://registry.npmmirror.com}
         APT_MIRROR: ${APT_MIRROR:-http://mirrors.tuna.tsinghua.edu.cn/debian}
         APT_SECURITY_MIRROR: ${APT_SECURITY_MIRROR:-http://mirrors.tuna.tsinghua.edu.cn/debian-security}
@@ -62,7 +62,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        NODE_IMAGE: ${NODE_IMAGE:-node:23-bullseye-slim}
+        NODE_IMAGE: ${NODE_IMAGE:-public.ecr.aws/docker/library/node:22-bookworm-slim}
         NPM_CONFIG_REGISTRY: ${NPM_CONFIG_REGISTRY:-https://registry.npmmirror.com}
         APT_MIRROR: ${APT_MIRROR:-http://mirrors.tuna.tsinghua.edu.cn/debian}
         APT_SECURITY_MIRROR: ${APT_SECURITY_MIRROR:-http://mirrors.tuna.tsinghua.edu.cn/debian-security}
@@ -99,7 +99,7 @@ services:
       start_period: 20s
 
   nginx:
-    image: nginx:1.27-alpine
+    image: ${NGINX_IMAGE:-public.ecr.aws/docker/library/nginx:1.27-alpine}
     ports:
       - "${PUBLIC_PORT:-8787}:80"
       - "${DEV_PUBLIC_PORT:-8790}:81"
@@ -115,3 +115,11 @@ services:
 
 volumes:
   mysql-data:
+
+networks:
+  default:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.168.241.0/24
+          gateway: 192.168.241.1

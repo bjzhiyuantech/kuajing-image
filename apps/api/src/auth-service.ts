@@ -50,7 +50,8 @@ export interface RegisterInput {
 }
 
 export interface LoginInput {
-  email: string;
+  email?: string;
+  phone?: string;
   password: string;
 }
 
@@ -108,6 +109,9 @@ export async function registerUser(input: RegisterInput): Promise<AuthResponse> 
         quotaUsed: 0,
         balanceCents: 0,
         referralBalanceCents: 0,
+        invoicePaidCents: 0,
+        invoiceReservedCents: 0,
+        invoiceIssuedCents: 0,
         inviteCode: inviteCodeFromUserId(userId),
         inviterUserId: inviter?.id,
         storageQuotaBytes: defaultPlan.storageQuotaBytes,
@@ -156,6 +160,9 @@ export async function registerUser(input: RegisterInput): Promise<AuthResponse> 
       quotaUsed: 0,
       balanceCents: 0,
       referralBalanceCents: 0,
+      invoicePaidCents: 0,
+      invoiceReservedCents: 0,
+      invoiceIssuedCents: 0,
       inviteCode: inviteCodeFromUserId(userId),
       inviterUserId: inviter?.id ?? null,
       storageQuotaBytes: defaultPlan.storageQuotaBytes,
@@ -174,13 +181,14 @@ export async function registerUser(input: RegisterInput): Promise<AuthResponse> 
 
 export async function loginUser(input: LoginInput): Promise<AuthResponse> {
   requireJwtSecret();
-  const email = normalizeEmail(input.email);
-  const user = await findUserByEmail(email);
+  const email = input.email?.trim() ? normalizeEmail(input.email) : undefined;
+  const phone = input.phone?.trim() ? normalizePhone(input.phone) : undefined;
+  const user = email ? await findUserByEmail(email) : phone ? await findUserByPhone(phone) : undefined;
   if (!user || !verifyPassword(input.password, user.passwordHash)) {
-    throw new AuthError("invalid_credentials", "邮箱或密码不正确。", 401);
+    throw new AuthError("invalid_credentials", "账号或密码不正确。", 401);
   }
   await ensureUserPlanCurrent(user.id);
-  const currentUser = (await findUserByEmail(email)) ?? user;
+  const currentUser = (email ? await findUserByEmail(email) : phone ? await findUserByPhone(phone) : undefined) ?? user;
 
   const workspace = await findDefaultWorkspace(currentUser.id);
   if (!workspace) {
@@ -350,6 +358,9 @@ export async function registerWechatMiniAppUser(input: WechatMiniAppRegisterRequ
       quotaUsed: 0,
       balanceCents: 0,
       referralBalanceCents: 0,
+      invoicePaidCents: 0,
+      invoiceReservedCents: 0,
+      invoiceIssuedCents: 0,
       inviteCode: inviteCodeFromUserId(userId),
       inviterUserId: inviter?.id ?? null,
       storageQuotaBytes: defaultPlan.storageQuotaBytes,
@@ -403,6 +414,9 @@ export async function registerWechatMiniAppUser(input: WechatMiniAppRegisterRequ
       quotaUsed: 0,
       balanceCents: 0,
       referralBalanceCents: 0,
+      invoicePaidCents: 0,
+      invoiceReservedCents: 0,
+      invoiceIssuedCents: 0,
       inviteCode: inviteCodeFromUserId(userId),
       inviterUserId: inviter?.id ?? null,
       storageQuotaBytes: defaultPlan.storageQuotaBytes,

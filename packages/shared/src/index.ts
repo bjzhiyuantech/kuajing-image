@@ -29,7 +29,14 @@ export type EcommercePlatform =
   | "dewu"
   | "other";
 export type EcommerceMarket = "cn" | "us" | "uk" | "pl" | "eu" | "ca" | "au" | "jp" | "kr" | "sg" | "mx" | "br" | "global";
-export type EcommerceGenerationMode = "enhance" | "creative" | "category-kit" | "marketing-main" | "text-translation";
+export type EcommerceGenerationMode =
+  | "enhance"
+  | "creative"
+  | "category-kit"
+  | "marketing-main"
+  | "single-poster"
+  | "text-translation";
+export type BrandOverlayPlacement = "top-left" | "top-right" | "bottom-left" | "bottom-right";
 export type EcommerceTextLanguage =
   | "none"
   | "zh-hans"
@@ -56,15 +63,16 @@ export interface SizePreset {
 }
 
 export const SIZE_PRESETS: SizePreset[] = [
-  { id: "square-1k", label: "Square 1K", width: 1024, height: 1024, description: "Avatar and social image" },
-  { id: "poster-portrait", label: "Portrait poster", width: 1024, height: 1536, description: "Poster, cover, and mobile vertical image" },
-  { id: "poster-landscape", label: "Landscape poster", width: 1536, height: 1024, description: "Wide cover and desktop image" },
-  { id: "story-9-16", label: "Story 9:16", width: 1088, height: 1920, description: "Short video cover and story image" },
-  { id: "video-16-9", label: "Video 16:9", width: 1920, height: 1088, description: "Video cover and presentation image" },
-  { id: "wide-2k", label: "Wide 2K", width: 2560, height: 1440, description: "Display page and wide composition" },
-  { id: "portrait-2k", label: "Portrait 2K", width: 1440, height: 2560, description: "High-resolution portrait image" },
-  { id: "square-2k", label: "Square 2K", width: 2048, height: 2048, description: "High-resolution square image" },
-  { id: "wide-4k", label: "Wide 4K", width: 3840, height: 2160, description: "Large display image" }
+  { id: "square-1k", label: "方图 1K", width: 1024, height: 1024, description: "头像和社交图片" },
+  { id: "poster-portrait", label: "竖版海报", width: 1024, height: 1536, description: "海报、封面和移动端竖图" },
+  { id: "poster-landscape", label: "横版海报", width: 1536, height: 1024, description: "横版封面和桌面图片" },
+  { id: "story-9-16", label: "故事图 9:16", width: 1088, height: 1920, description: "短视频封面和故事图片" },
+  { id: "ecommerce-long-poster", label: "电商长海报", width: 1024, height: 3072, description: "单品详情页和完整长海报" },
+  { id: "video-16-9", label: "视频封面 16:9", width: 1920, height: 1088, description: "视频封面和演示图片" },
+  { id: "wide-2k", label: "宽幅 2K", width: 2560, height: 1440, description: "展示页和宽幅构图" },
+  { id: "portrait-2k", label: "竖图 2K", width: 1440, height: 2560, description: "高分辨率竖版图片" },
+  { id: "square-2k", label: "方图 2K", width: 2048, height: 2048, description: "高分辨率方图" },
+  { id: "wide-4k", label: "宽幅 4K", width: 3840, height: 2160, description: "大屏展示图片" }
 ];
 
 export const STYLE_PRESETS = [
@@ -163,6 +171,85 @@ export const ECOMMERCE_TEXT_LANGUAGES = [
   { id: "ar", label: "阿拉伯文", promptLabel: "Arabic" }
 ] as const satisfies ReadonlyArray<{ id: EcommerceTextLanguage; label: string; promptLabel: string }>;
 
+export const ECOMMERCE_AUTO_CATEGORY_KIT_SCENE_IDS = [
+  "category-kit-auto-main",
+  "category-kit-auto-hero",
+  "category-kit-auto-benefits",
+  "category-kit-auto-detail",
+  "category-kit-auto-guide",
+  "category-kit-auto-lifestyle"
+] as const;
+
+export const ECOMMERCE_DETAIL_CATEGORY_KIT_SCENE_IDS = [
+  "category-kit-auto-main",
+  "category-kit-auto-hero",
+  "category-kit-auto-overview",
+  "category-kit-auto-benefits",
+  "category-kit-auto-detail",
+  "category-kit-auto-structure",
+  "category-kit-auto-guide",
+  "category-kit-auto-package",
+  "category-kit-auto-usage",
+  "category-kit-auto-lifestyle",
+  "category-kit-auto-audience",
+  "category-kit-auto-trust"
+] as const;
+
+const MARKET_TEXT_LOCALIZATION = {
+  cn: {
+    promptLabel: "Simplified Chinese",
+    instruction: "Use concise Simplified Chinese copy suitable for mainland Chinese e-commerce."
+  },
+  us: {
+    promptLabel: "English",
+    instruction: "Use concise natural English copy suitable for the United States market."
+  },
+  uk: {
+    promptLabel: "English",
+    instruction: "Use concise natural English copy suitable for the United Kingdom market."
+  },
+  pl: {
+    promptLabel: "Polish",
+    instruction: "Use concise natural Polish copy suitable for the Poland market."
+  },
+  eu: {
+    promptLabel: "English",
+    instruction: "Use concise natural English copy for EU-wide listings unless the product brief explicitly names a different EU country or language."
+  },
+  ca: {
+    promptLabel: "English",
+    instruction: "Use concise natural English copy suitable for Canada; use French only when the product brief explicitly targets Quebec or a French-language audience."
+  },
+  au: {
+    promptLabel: "English",
+    instruction: "Use concise natural English copy suitable for Australia."
+  },
+  jp: {
+    promptLabel: "Japanese",
+    instruction: "Use concise natural Japanese copy suitable for the Japan market."
+  },
+  kr: {
+    promptLabel: "Korean",
+    instruction: "Use concise natural Korean copy suitable for the South Korea market."
+  },
+  sg: {
+    promptLabel: "English",
+    instruction: "Use concise natural English copy suitable for Singapore."
+  },
+  mx: {
+    promptLabel: "Spanish",
+    instruction: "Use concise natural Spanish copy suitable for Mexico."
+  },
+  br: {
+    promptLabel: "Portuguese",
+    instruction: "Use concise natural Brazilian Portuguese copy suitable for Brazil."
+  },
+  global: {
+    promptLabel: "English",
+    instruction: "Use concise natural English copy for global marketplace use unless the user explicitly asks for another language."
+  }
+} as const satisfies Record<EcommerceMarket, { promptLabel: string; instruction: string }>;
+
 const CHINESE_ECOMMERCE_PLATFORM_IDS = new Set<EcommercePlatform>([
   "1688",
   "taobao",
@@ -215,7 +302,7 @@ export const ECOMMERCE_SCENE_TEMPLATES = [
     label: "点击主图",
     defaultSizePresetId: "square-1k",
     prompt:
-      "Create a high-click domestic Chinese e-commerce marketing main image from 1 to 3 product reference images. Preserve the real product identity, color, material, shape, and key details. Build a search-result thumbnail composition with the product as the clearest hero, one strong reason to click, concise Simplified Chinese copy, and a clean commercial layout. Choose whether the product should be shown alone, worn, in use, brewed, plated, held, opened, or placed in a scene according to category and target customer. Avoid unsupported claims, fake certificates, fake official badges, fake platform badges, and unreadable text."
+      "Create a high-click e-commerce marketing main image for the selected target market from 1 to 3 product reference images. Preserve the real product identity, color, material, shape, and key details. Build a search-result thumbnail composition with the product as the clearest hero, one strong reason to click, concise target-market copy, and a clean commercial layout. Choose whether the product should be shown alone, worn, in use, brewed, plated, held, opened, or placed in a scene according to category and target customer. Avoid unsupported claims, fake certificates, fake official badges, fake platform badges, and unreadable text."
   },
   {
     id: "marketing-main-people-scene",
@@ -223,7 +310,7 @@ export const ECOMMERCE_SCENE_TEMPLATES = [
     label: "人群场景主图",
     defaultSizePresetId: "square-1k",
     prompt:
-      "Create a domestic Chinese marketplace main image that combines the product with a credible target-customer and usage-scene expression when it improves click appeal. Apparel and shoes should usually be worn on a suitable model or body detail; tea, drinks, and food should usually show the prepared or consumed state plus the product package; gifts should show a clear gifting moment or recipient context. Keep the product truthful and visually dominant. Use short readable Simplified Chinese selling copy only when supported by the brief."
+      "Create a target-market marketplace main image that combines the product with a credible target-customer and usage-scene expression when it improves click appeal. Apparel and shoes should usually be worn on a suitable model or body detail; tea, drinks, and food should usually show the prepared or consumed state plus the product package; gifts should show a clear gifting moment or recipient context. Keep the product truthful and visually dominant. Use short readable localized selling copy only when supported by the brief."
   },
   {
     id: "marketing-main-benefit-hook",
@@ -231,7 +318,7 @@ export const ECOMMERCE_SCENE_TEMPLATES = [
     label: "卖点钩子主图",
     defaultSizePresetId: "square-1k",
     prompt:
-      "Create a high-converting Chinese e-commerce main image centered on the strongest purchase reason. Use one main hook, 2 to 3 short supporting points, and visual evidence such as material texture, before/after context, size comparison, usage result, comfort, freshness, gift value, convenience, or service promise only when supported by the product brief or visible reference. Keep copy concise, large, and readable in a small thumbnail."
+      "Create a high-converting e-commerce main image for the selected target market centered on the strongest purchase reason. Use one main hook, 2 to 3 short supporting points, and visual evidence such as material texture, before/after context, size comparison, usage result, comfort, freshness, gift value, convenience, or service promise only when supported by the product brief or visible reference. Keep copy concise, large, localized, and readable in a small thumbnail."
   },
   {
     id: "marketing-main-trust-promo",
@@ -239,7 +326,7 @@ export const ECOMMERCE_SCENE_TEMPLATES = [
     label: "信任促销主图",
     defaultSizePresetId: "square-1k",
     prompt:
-      "Create a domestic Chinese e-commerce marketing main image that adds credible trust and conversion elements around the product: service badges such as 包邮, 7天无理由, 现货速发, 正品保障, or 官方/旗舰店 only if the user explicitly provides them. Use one small corner badge or benefit chip when useful, never fake platform certification or official status. Product remains the hero, layout is clean, no clutter, no watermark."
+      "Create a target-market e-commerce marketing main image that adds credible trust and conversion elements around the product: service badges, delivery promises, return policy notes, authenticity notes, or official-store wording only if the user explicitly provides them. Use one small corner badge or benefit chip when useful, never fake platform certification or official status. Product remains the hero, layout is clean, no clutter, no watermark."
   },
   {
     id: "text-translation",
@@ -248,6 +335,110 @@ export const ECOMMERCE_SCENE_TEMPLATES = [
     defaultSizePresetId: "square-1k",
     prompt:
       "Translate the readable product or marketing text in the source image into the requested target language. Preserve the original image composition, crop, product, background, spacing, visual hierarchy, and text placement as closely as possible. Do not create a new scene, do not add new claims, and do not redesign the product. Keep brand names, model numbers, legal marks, and non-translation marks unchanged unless they are clearly generic marketing copy."
+  },
+  {
+    id: "single-product-long-poster",
+    mode: "single-poster",
+    label: "单品完整长海报",
+    defaultSizePresetId: "ecommerce-long-poster",
+    prompt:
+      "Create one complete tall e-commerce product poster from 1 to 3 source product reference images. If multiple references are provided, treat the first as the main product identity and use the others only as detail, texture, packaging, angle, scale, or usage evidence. First internally analyze the visible product and the provided product brief, then summarize the strongest credible selling points before composing the image. Do not show the analysis, raw prompt, or planning text. Build a polished vertical poster with a strong hero product area, concise headline, 3 to 5 readable benefit sections, feature/detail callouts, usage or lifestyle context when credible, and a clean closing purchase-value area. Keep all claims supported by the reference images or user-provided brief. Preserve the real product identity, shape, color, material, proportions, packaging, and labels. Use a high vertical e-commerce detail-page layout, clear typography hierarchy, generous spacing, and mobile-readable copy. No fake certifications, fake platform badges, fake brand logos, unsupported promises, watermark, clutter, or unreadable text."
+  },
+  {
+    id: "category-kit-auto-main",
+    mode: "category-kit",
+    label: "1 平台合规主图",
+    defaultSizePresetId: "square-1k",
+    prompt:
+      "Create the first marketplace listing image for the product after internally identifying the product category, sellable SKU, platform, and market from the reference images and brief. Preserve the real product identity, color, material, shape, labels, package, and proportions. Choose a platform-safe main image expression for this category: usually one clean product on white or very light neutral background, centered, complete, sharp, with no text, no logo, no watermark, no props, no collage, and no unsupported extra items. Do not assume the product is a scarf or accessory."
+  },
+  {
+    id: "category-kit-auto-hero",
+    mode: "category-kit",
+    label: "2 点击主图候选",
+    defaultSizePresetId: "square-1k",
+    prompt:
+      "Create a click-oriented secondary main-image candidate for the same product. First infer the category and decide the best truthful product expression: worn, held, opened, prepared, installed, in use, styled, scale-focused, or product-only. Keep the product as the clear hero and preserve its real appearance. Add only concise localized copy when the selected platform and image role allow text; otherwise keep it clean. Do not use fixed scarf, apparel, food, or electronics assumptions unless the product is actually that category."
+  },
+  {
+    id: "category-kit-auto-overview",
+    mode: "category-kit",
+    label: "3 整体展示图",
+    defaultSizePresetId: "square-1k",
+    prompt:
+      "Create a complete product overview image for the detail page. Internally identify what the buyer needs to understand first for this category: full product body, front and back, opened and closed states, package plus product, set components, assembled state, worn state, prepared state, or installed state. Show the overall product clearly without clutter. If several angles or states are necessary, use a tidy 2 to 4 panel composition; otherwise use one strong overview composition. Preserve all real product details and do not invent variants or included items."
+  },
+  {
+    id: "category-kit-auto-benefits",
+    mode: "category-kit",
+    label: "4 核心卖点图",
+    defaultSizePresetId: "square-1k",
+    prompt:
+      "Create a category-specific selling-point image for the detail page. Select 3 to 5 credible benefits from the reference images and product brief, such as material, size, capacity, compatibility, comfort, craftsmanship, package contents, portability, freshness, use scenario, gift value, design, storage, durability, convenience, or service points. Prioritize the points that matter most for this exact category and target customer. Use short localized copy with clear hierarchy and enough empty space around the product. Do not invent certifications, rankings, medical effects, performance numbers, official badges, or unsupported claims."
+  },
+  {
+    id: "category-kit-auto-detail",
+    mode: "category-kit",
+    label: "5 细节/材质图",
+    defaultSizePresetId: "square-1k",
+    prompt:
+      "Create a detail image that best supports conversion for this product category. Choose the most relevant detail from the references and brief: texture, fabric, stitching, edge, connector, button, ingredient, finish, package label, structure, accessory, craftsmanship, surface, or before-use detail. The detail should remain truthful to the product and visually close enough to inspect. Use minimal callouts only when helpful and supported."
+  },
+  {
+    id: "category-kit-auto-structure",
+    mode: "category-kit",
+    label: "6 结构/工艺图",
+    defaultSizePresetId: "square-1k",
+    prompt:
+      "Create a structure, craftsmanship, or component explanation image that adapts to the product category. For apparel or shoes, show construction, lining, sole, closure, fabric layers, or fit-related details. For electronics or tools, show controls, ports, parts, assembly, or functional structure. For food, cosmetics, or household goods, show ingredients, texture, container, applicator, seal, or usage mechanism. For sets, show included components. Use callouts only for visible or user-provided facts. If structure is not relevant, replace this with the next most useful category-specific detail image."
+  },
+  {
+    id: "category-kit-auto-guide",
+    mode: "category-kit",
+    label: "7 规格/尺寸图",
+    defaultSizePresetId: "square-1k",
+    prompt:
+      "Create the most relevant specification, size, capacity, scale, fit, compatibility, or parameter image for this category. Use exact measurements, quantity, variants, model compatibility, capacity, care limits, or specs only when provided in the product brief or clearly visible. If exact numbers are absent, use qualitative scale, comparison, or labeled areas without guessing. For apparel and shoes, prioritize size/fit guidance; for devices, prioritize parameters and compatibility; for home goods, prioritize dimensions and capacity; for food or beauty, prioritize net content, texture, or package size. Keep labels concise, localized, and readable."
+  },
+  {
+    id: "category-kit-auto-package",
+    mode: "category-kit",
+    label: "8 包装/清单/SKU图",
+    defaultSizePresetId: "square-1k",
+    prompt:
+      "Create a package, contents, set, color/SKU, or bundle explanation image only using information from the references and brief. Show what the buyer receives clearly: product, accessories, packaging, variants, quantity, gift box, refills, or included parts when provided. If real packaging is not visible or described, do not invent branded boxes, tags, bags, certifications, or extra accessories. If package contents are not relevant, adapt this role to a variant, color, or set overview that is truthful for the product."
+  },
+  {
+    id: "category-kit-auto-usage",
+    mode: "category-kit",
+    label: "9 用法/步骤图",
+    defaultSizePresetId: "square-1k",
+    prompt:
+      "Create a usage, installation, wearing, preparation, cleaning, care, or operation image for this product category. Choose the workflow that buyers most need to understand: how to wear, how to use, how to install, how to open, how to prepare, how to apply, how to clean, or how to store. Use 2 to 4 simple steps only when the product naturally has steps; otherwise show one clear in-use state. Do not invent difficult instructions, safety claims, or unsupported effects."
+  },
+  {
+    id: "category-kit-auto-lifestyle",
+    mode: "category-kit",
+    label: "10 场景转化图",
+    defaultSizePresetId: "square-1k",
+    prompt:
+      "Create a realistic conversion-oriented lifestyle or usage image for the product. Infer the strongest target customer and use scenario from the brief, platform, market, and product category. Add only credible scene props or people when they make sense for the category, and keep the product recognizable, accurate, and visually dominant. No fake brands, fake logos, fake platform marks, unsupported claims, clutter, watermark, or distorted anatomy."
+  },
+  {
+    id: "category-kit-auto-audience",
+    mode: "category-kit",
+    label: "11 人群/场景图",
+    defaultSizePresetId: "square-1k",
+    prompt:
+      "Create a target-customer or scenario-specific detail-page image that explains who this product is for and when it is used. Adapt the expression by category: model/body detail for wearable goods, family/home context for household products, desk/work/travel context for gadgets, gift recipient context for gifts, cooking/serving context for food, routine/application context for beauty, or installation context for tools. Keep people and props credible, avoid identifiable faces unless requested, and make the product the clear proof point."
+  },
+  {
+    id: "category-kit-auto-trust",
+    mode: "category-kit",
+    label: "12 保障/注意事项图",
+    defaultSizePresetId: "square-1k",
+    prompt:
+      "Create a closing detail-page image for trust, care, after-sales, precautions, service, maintenance, or purchase reassurance. Use only claims explicitly provided by the user, such as warranty, returns, shipping, authenticity, care method, storage notes, materials, package note, or customer service. If no trust or service facts are provided, create a neutral care, maintenance, usage note, or purchase reminder image that does not invent promises. Never add fake platform badges, official certifications, awards, guarantees, medical claims, or legal marks."
   },
   {
     id: "lifestyle",
@@ -421,6 +612,7 @@ export interface EcommercePromptContext {
   textLanguage?: EcommerceTextLanguage;
   allowTextRecreation?: boolean;
   removeWatermarkAndLogo?: boolean;
+  brandOverlayPlacement?: BrandOverlayPlacement;
   sceneTemplateId: EcommerceSceneTemplateId;
   extraDirection?: string;
 }
@@ -536,6 +728,9 @@ export function validateSceneImageSize(input: {
 export interface ReferenceImageInput {
   dataUrl: string;
   fileName?: string;
+  maskDataUrl?: string;
+  maskedDataUrl?: string;
+  annotatedDataUrl?: string;
 }
 
 export interface GenerateImageRequest {
@@ -597,6 +792,7 @@ export interface GenerationRecord {
   modelProvider?: string;
   modelDisplayName?: string;
   referenceAssetId?: string;
+  referenceMaskDataUrl?: string;
   createdAt: string;
   outputs: GenerationOutput[];
 }
@@ -612,6 +808,9 @@ export interface GalleryImageItem {
   userEmail?: string;
   userDisplayName?: string;
   workspaceId?: string;
+  publicGalleryEnabled?: boolean;
+  publicGallerySortOrder?: number;
+  publicGalleryUpdatedAt?: string;
   mode: ImageMode;
   prompt: string;
   effectivePrompt: string;
@@ -631,6 +830,34 @@ export interface GalleryResponse {
   items: GalleryImageItem[];
 }
 
+export interface DemoCanvasExample {
+  id: string;
+  title: string;
+  category: string;
+  beforeLabel: string;
+  afterLabel: string;
+  brief: string;
+  prompt: string;
+  presetId: StylePresetId;
+  size: ImageSize;
+  quality: ImageQuality;
+  outputFormat: OutputFormat;
+  createdAt: string;
+  beforeUrl: string;
+  afterUrl: string;
+  enabled?: boolean;
+  sortOrder?: number;
+}
+
+export interface DemoCanvasConfigResponse {
+  examples: DemoCanvasExample[];
+  updatedAt?: string;
+}
+
+export interface SaveDemoCanvasConfigRequest {
+  examples: DemoCanvasExample[];
+}
+
 export interface ProjectState {
   id: string;
   name: string;
@@ -647,6 +874,112 @@ export interface AppConfig {
   qualities: ImageQuality[];
   outputFormats: OutputFormat[];
   counts: readonly GenerationCount[];
+}
+
+export interface ExtensionReleaseTargetConfig {
+  apiBaseUrl: string;
+  version: string;
+  downloadUrl: string;
+  latestDownloadUrl: string;
+  installHelpUrl: string;
+  fileName: string;
+  sizeBytes?: number;
+  sha256?: string;
+  publishedAt?: string;
+  releaseNotes: string[];
+}
+
+export interface ExtensionReleaseConfig {
+  dev: ExtensionReleaseTargetConfig;
+  prod: ExtensionReleaseTargetConfig;
+  updatedAt?: string;
+}
+
+export type HelpArticleStatus = "draft" | "published";
+export type HelpContentBlockType = "heading" | "paragraph" | "list" | "steps" | "image" | "video" | "callout";
+
+export interface HelpContentBlock {
+  type: HelpContentBlockType;
+  title?: string;
+  text?: string;
+  items?: string[];
+  url?: string;
+  alt?: string;
+  tone?: "info" | "warning" | "success";
+}
+
+export interface HelpCategory {
+  id: string;
+  slug: string;
+  name: string;
+  description?: string;
+  audience?: string;
+  sortOrder: number;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface HelpArticle {
+  id: string;
+  categoryId: string;
+  categorySlug?: string;
+  slug: string;
+  title: string;
+  summary?: string;
+  contentMarkdown: string;
+  coverImageUrl?: string;
+  videoUrl?: string;
+  status: HelpArticleStatus;
+  featured: boolean;
+  sortOrder: number;
+  tags: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface HelpCenterResponse {
+  categories: Array<HelpCategory & { articles: HelpArticle[] }>;
+  featuredArticles: HelpArticle[];
+}
+
+export interface AdminHelpCenterResponse extends HelpCenterResponse {
+  drafts: HelpArticle[];
+}
+
+export interface HelpAssetUploadResponse {
+  provider: CloudStorageProvider;
+  bucket: string;
+  region: string;
+  objectKey: string;
+  url: string;
+  etag?: string;
+  requestId?: string;
+}
+
+export interface DemoCanvasAssetUploadResponse extends HelpAssetUploadResponse {}
+
+export interface SaveHelpCategoryRequest {
+  slug?: string;
+  name: string;
+  description?: string;
+  audience?: string;
+  sortOrder?: number;
+  enabled?: boolean;
+}
+
+export interface SaveHelpArticleRequest {
+  categoryId: string;
+  slug?: string;
+  title: string;
+  summary?: string;
+  contentMarkdown: string;
+  coverImageUrl?: string;
+  videoUrl?: string;
+  status?: HelpArticleStatus;
+  featured?: boolean;
+  sortOrder?: number;
+  tags?: string[];
 }
 
 export type UserRole = "user" | "admin";
@@ -1104,6 +1437,7 @@ export interface EcommerceBatchGenerateRequest {
   textLanguage?: EcommerceTextLanguage;
   allowTextRecreation?: boolean;
   removeWatermarkAndLogo?: boolean;
+  brandOverlayPlacement?: BrandOverlayPlacement;
   sceneTemplateIds: EcommerceSceneTemplateId[];
   sourcePageUrl?: string;
   sizePresetId?: ImageSizePresetId;
@@ -1113,7 +1447,77 @@ export interface EcommerceBatchGenerateRequest {
   outputFormat?: OutputFormat;
   countPerScene?: GenerationCount;
   referenceImage?: ReferenceImageInput;
+  createComparisonCollage?: boolean;
   extraDirection?: string;
+}
+
+export interface EcommerceCategoryKitPlanItem {
+  title: string;
+  purpose: string;
+  prompt: string;
+  notes?: string;
+}
+
+export interface EcommerceCategoryKitPlanRequest {
+  product: EcommerceProductBrief;
+  platform: EcommercePlatform;
+  market: EcommerceMarket;
+  textLanguage?: EcommerceTextLanguage;
+  referenceImage: ReferenceImageInput;
+  extraDirection?: string;
+}
+
+export interface EcommerceCategoryKitPlanResponse {
+  productSummary: string;
+  imagePlan: EcommerceCategoryKitPlanItem[];
+  model?: string;
+}
+
+export type CategoryKitPlannerModelRole = "primary" | "fallback";
+
+export interface CategoryKitPlannerConfigEntry {
+  id: string;
+  name: string;
+  enabled: boolean;
+  role: CategoryKitPlannerModelRole;
+  priority: number;
+  baseUrl?: string;
+  model: string;
+  timeoutMs: number;
+  apiKeySaved: boolean;
+}
+
+export interface CategoryKitPlannerConfigResponse {
+  models: CategoryKitPlannerConfigEntry[];
+  source: "saved" | "default";
+}
+
+export interface SaveCategoryKitPlannerConfigEntry {
+  id?: string;
+  name: string;
+  enabled: boolean;
+  role: CategoryKitPlannerModelRole;
+  priority?: number;
+  apiKey?: string;
+  preserveApiKey?: boolean;
+  baseUrl?: string;
+  model: string;
+  timeoutMs?: number;
+}
+
+export interface SaveCategoryKitPlannerConfigRequest {
+  models: SaveCategoryKitPlannerConfigEntry[];
+}
+
+export interface EcommerceGenerationConcurrencyConfigResponse {
+  globalConcurrency: number;
+  jobConcurrency: number;
+  source: "saved" | "default";
+}
+
+export interface SaveEcommerceGenerationConcurrencyConfigRequest {
+  globalConcurrency: number;
+  jobConcurrency: number;
 }
 
 export type EcommerceBatchJobStatus = "pending" | "running" | "succeeded" | "partial" | "failed";
@@ -1180,9 +1584,30 @@ export function composePrompt(prompt: string, presetId: string): string {
 
 export function composeEcommercePrompt(context: EcommercePromptContext): string {
   const template = ECOMMERCE_SCENE_TEMPLATES.find((item) => item.id === context.sceneTemplateId);
+  const isTextTranslationMode = template?.mode === "text-translation";
   const platform = ECOMMERCE_PLATFORMS.find((item) => item.id === context.platform)?.label ?? context.platform;
   const market = ECOMMERCE_MARKETS.find((item) => item.id === context.market)?.label ?? context.market;
   const textLanguage = ECOMMERCE_TEXT_LANGUAGES.find((item) => item.id === context.textLanguage);
+  const marketTextLocalization = MARKET_TEXT_LOCALIZATION[context.market];
+  const explicitTextLanguage = textLanguage && textLanguage.id !== "none" ? textLanguage : undefined;
+  const shouldUseExplicitTextLanguage = isTextTranslationMode && explicitTextLanguage;
+  const imageTextPromptLabel = shouldUseExplicitTextLanguage
+    ? explicitTextLanguage.promptLabel
+    : marketTextLocalization.promptLabel;
+  const brandOverlayGuard = context.brandOverlayPlacement
+    ? [
+        "Brand overlay placement:",
+        context.brandOverlayPlacement === "top-left"
+          ? "top-left"
+          : context.brandOverlayPlacement === "top-right"
+            ? "top-right"
+            : context.brandOverlayPlacement === "bottom-left"
+              ? "bottom-left"
+              : "bottom-right",
+        "Leave that corner clean, uncluttered, and clearly reserved for a later logo or brand wordmark.",
+        "Keep the main subject, face, product label, and other important details away from that corner."
+      ].join(" ")
+    : "";
   const isChineseEcommerceTarget = CHINESE_ECOMMERCE_PLATFORM_IDS.has(context.platform) || context.market === "cn";
   const product = context.product;
   const extraDirection = context.extraDirection?.trim();
@@ -1209,13 +1634,23 @@ export function composeEcommercePrompt(context: EcommercePromptContext): string 
       ? "Reference image rule: treat the source image as the single source of truth. Preserve the product, background, crop, composition, and layout. Only translate eligible visible marketing or product text into the target language; do not add new visual elements, callouts, logos, claims, props, people, or decorative text."
       : template?.mode === "enhance"
         ? "Reference image rule: treat the source product image as the single source of truth. Preserve the original product exactly. Only improve lighting, background, layout, selling-point text, callouts, and marketplace composition. Do not generate logos or fake brand marks; brand marks are added later as a separate overlay. Do not redesign the product."
+        : template?.mode === "single-poster"
+          ? "Reference image rule: treat the source product image as the single source of truth for product appearance and visible evidence. You may infer only safe, visually supported selling points from the image and product brief; when uncertain, use generic visual benefits such as material, design, use scenario, color, portability, texture, package contents, or styling without making objective performance claims."
+          : template?.mode === "category-kit"
+            ? "Reference image rule: treat the first source image as the main product identity and use any additional source images only as detail, texture, packaging, angle, scale, variant, or usage evidence. Internally identify the product category before composing this specific listing image role. Preserve the real product across the kit and do not reuse fixed assumptions from another category."
         : "Reference image rule: use the source product image to preserve the product's key identity, shape, color, material, and recognizable details while creating a new commercial scene.";
 
   const textLanguageGuard =
-    textLanguage && textLanguage.id !== "none"
-      ? `Image text localization: replace only the remaining marketing text with natural ${textLanguage.promptLabel}. Keep brand names, model numbers, and required trademarks unchanged. Do not mix languages except for preserved brand/model text. Text must be short, readable, native-sounding, and placed cleanly without covering the product. Do not translate or recreate watermark text, logo text, source marks, corner captions, or any overlay that has already been identified as cleanup content.`
-      : "";
-  const chineseMarketplaceGuard = isChineseEcommerceTarget
+    shouldUseExplicitTextLanguage
+      ? `Image text translation target: ${explicitTextLanguage.promptLabel}. This selected target language overrides the selected platform and market for every translated text element. Replace only the remaining marketing text with natural ${explicitTextLanguage.promptLabel}. Keep brand names, model numbers, and required trademarks unchanged. Do not mix languages except for preserved brand/model text. Text must be short, readable, native-sounding, and placed cleanly without covering the product. Do not translate or recreate watermark text, logo text, source marks, corner captions, or any overlay that has already been identified as cleanup content.`
+      : [
+          "Image text localization:",
+          marketTextLocalization.instruction,
+          `If this image includes selling-point text, feature callouts, promo copy, scene labels, explanatory captions, or other newly generated readable text, write it in natural ${imageTextPromptLabel}.`,
+          "Do not use Chinese copy for a non-China market unless the user explicitly asks for Chinese or the text is a preserved brand/model/legal mark.",
+          "Keep brand names, model numbers, and required trademarks unchanged. Do not mix languages except for preserved brand/model text. Text must be short, readable, native-sounding, and placed cleanly without covering the product. Do not translate or recreate watermark text, logo text, source marks, corner captions, or any overlay that has already been identified as cleanup content."
+        ].join(" ");
+  const chineseMarketplaceGuard = isChineseEcommerceTarget && !isTextTranslationMode
     ? [
         "Chinese marketplace copy rule:",
         "When the image template uses selling-point text, feature callouts, promo copy, scene labels, or explanatory captions, create concise Simplified Chinese copy by default.",
@@ -1229,8 +1664,8 @@ export function composeEcommercePrompt(context: EcommercePromptContext): string 
       ? [
           "Strict source-preservation mode:",
           "Keep the original composition, crop, camera angle, product position, background, spacing, typography hierarchy, text block positions, line breaks, alignment, and approximate font weight/style as close to the source image as possible.",
-          textLanguage && textLanguage.id !== "none"
-            ? `Translate each original text phrase literally and faithfully into ${textLanguage.promptLabel}; preserve the original meaning and claims without rewriting, summarizing, expanding, replacing, or inventing new copy.`
+          shouldUseExplicitTextLanguage
+            ? `Translate each original text phrase literally and faithfully into ${explicitTextLanguage.promptLabel}; preserve the original meaning and claims without rewriting, summarizing, expanding, replacing, or inventing new copy.`
             : "Do not translate, rewrite, summarize, expand, replace, or invent selling-point copy.",
           "Do not add new slogans, brand words, frames, decorative text, selling points, paragraphs, or layout elements. Do not move text into new positions.",
           context.removeWatermarkAndLogo !== false
@@ -1246,10 +1681,13 @@ export function composeEcommercePrompt(context: EcommercePromptContext): string 
   return [
     template?.prompt ?? "Create a professional cross-border e-commerce product image.",
     priorityDirectionGuard,
-    `Optimize for ${platform} in the ${market} market.`,
+    isTextTranslationMode
+      ? "Translation-only task: ignore platform and market language preferences. The selected target language is the only language rule for translated image text."
+      : `Optimize for ${platform} in the ${market} market.`,
     ...details,
     modeGuard,
     cleanupGuard,
+    brandOverlayGuard,
     chineseMarketplaceGuard,
     textLanguageGuard,
     sourcePreservationGuard,

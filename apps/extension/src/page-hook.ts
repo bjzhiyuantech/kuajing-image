@@ -1,4 +1,6 @@
 const IMAGE_URL_PATTERN = /(?:https?:)?\/\/[^"'()<>\s\\]+?\.(?:jpg|jpeg|png|webp|gif|bmp|avif)(?:[._!-][^"'()<>\s\\?]*)?(?:\?[^"'()<>\s\\]*)?/giu;
+const IMAGE_REQUEST_URL_PATTERN =
+  /\.(?:jpg|jpeg|png|webp|gif|bmp|avif)(?:[._!-][^"'()<>\s\\?]*)?(?:[?#]|$)|\/img\/|[?&](?:image|img|pic|picture|photo|src)=/iu;
 const PROPERTY_LABELS = new Set([
   "类型",
   "品牌",
@@ -83,8 +85,7 @@ function extract(text: string): string[] {
   const normalized = normalize(text);
   IMAGE_URL_PATTERN.lastIndex = 0;
   return Array.from(normalized.matchAll(IMAGE_URL_PATTERN))
-    .map((match) => match[0])
-    .filter((url) => /alicdn|ibank|O1CN|cbu01/i.test(url));
+    .map((match) => match[0]);
 }
 
 function emit(urls: string[], attributes: ProductAttribute[] = []): void {
@@ -100,7 +101,12 @@ function emit(urls: string[], attributes: ProductAttribute[] = []): void {
 }
 
 function textLooksInteresting(text: string): boolean {
-  return /alicdn|ibank|O1CN|cbu01|offer_details|img\/ibank|商品属性|面料成分|面料名称|颜色|尺码|款式|风格|袖长|主面料|货号|属性参数|sku/i.test(text);
+  const normalized = normalize(text);
+  IMAGE_URL_PATTERN.lastIndex = 0;
+  return (
+    IMAGE_URL_PATTERN.test(normalized) ||
+    /alicdn|ibank|O1CN|cbu01|offer_details|img\/ibank|商品属性|面料成分|面料名称|颜色|尺码|款式|风格|袖长|主面料|货号|属性参数|sku/i.test(normalized)
+  );
 }
 
 function addAttribute(target: ProductAttribute[], label: string, value: unknown): void {
@@ -234,16 +240,65 @@ function inspectText(text: string): void {
   emit(extract(text), extractAttributesFromText(text));
 }
 
+function requestUrlFromFetchInput(input: RequestInfo | URL): string {
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.toString();
+  }
+  if (typeof Request !== "undefined" && input instanceof Request) {
+    return input.url;
+  }
+  return "";
+}
+
+function stringFromRequestUrl(value: string | URL | undefined): string {
+  if (!value) {
+    return "";
+  }
+  return typeof value === "string" ? value : value.toString();
+}
+
+function isPotentialImageRequestUrl(value: string): boolean {
+  const normalized = normalize(value);
+  return Boolean(normalized) && IMAGE_REQUEST_URL_PATTERN.test(normalized);
+}
+
+function emitUniqueUrls(urls: string[]): void {
+  const seen = new Set<string>();
+  const uniqueUrls = urls.filter((url) => {
+    const normalized = normalize(url);
+    if (!normalized || seen.has(normalized)) {
+      return false;
+    }
+    seen.add(normalized);
+    return true;
+  });
+  emit(uniqueUrls);
+}
+
+function emitImageResponseUrls(contentType: string, urls: string[]): void {
+  const normalizedContentType = contentType.toLowerCase();
+  const shouldEmitAll = /^image\//iu.test(normalizedContentType);
+  const imageUrls = urls.filter((url) => shouldEmitAll || isPotentialImageRequestUrl(url));
+  if (imageUrls.length > 0) {
+    emitUniqueUrls(imageUrls);
+  }
+}
+
 if (!(window as Window & { __kuajingImagePageHookInstalled?: boolean }).__kuajingImagePageHookInstalled) {
   (window as Window & { __kuajingImagePageHookInstalled?: boolean }).__kuajingImagePageHookInstalled = true;
 
   const originalFetch = window.fetch;
   if (typeof originalFetch === "function") {
     window.fetch = async (...args) => {
+      const requestUrl = requestUrlFromFetchInput(args[0]);
       const response = await originalFetch(...args);
       try {
         const clone = response.clone();
         const contentType = clone.headers.get("content-type") || "";
+        emitImageResponseUrls(contentType, [requestUrl, response.url]);
         if (/json|javascript|text|html/i.test(contentType)) {
           clone.text().then(inspectText).catch(() => {});
         }
@@ -266,10 +321,13 @@ if (!(window as Window & { __kuajingImagePageHookInstalled?: boolean }).__kuajin
     return originalOpen.call(this, method, url, async ?? true, username, password);
   };
   XMLHttpRequest.prototype.send = function (this: HookedXMLHttpRequest, body?: Document | XMLHttpRequestBodyInit | null) {
+    const requestUrl = stringFromRequestUrl(this.__kuajingImageRequestUrl);
+    emitImageResponseUrls("", [requestUrl]);
     this.addEventListener("load", function () {
       try {
         const responseType = this.responseType || "";
         const contentType = this.getResponseHeader("content-type") || "";
+        emitImageResponseUrls(contentType, [requestUrl, this.responseURL || ""]);
         if ((!responseType || responseType === "text") && /json|javascript|text|html/i.test(contentType)) {
           inspectText(this.responseText || "");
         }

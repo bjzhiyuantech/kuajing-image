@@ -1,136 +1,176 @@
 .login-page {
-  padding: 0 36rpx 40rpx;
-  background: linear-gradient(180deg, #f4f8ff 0%, #f8fafc 40%, #f9fafb 100%);
-}
-
-.hero-shell {
-  margin-top: 24rpx;
-  padding: 36rpx 32rpx 30rpx;
-  border-radius: 32rpx;
-  background: #ffffff;
-  box-shadow: 0 20rpx 60rpx rgba(15, 23, 42, 0.08);
-}
-
-.brand-row {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  min-height: 100vh;
+  padding: 0 0 40rpx;
+  background: #f5f7ff;
 }
 
-.brand-mark {
-  width: 84rpx;
-  height: 84rpx;
-  border-radius: 22rpx;
+.brand-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 188rpx 32rpx 104rpx;
+}
+
+.brand-logo {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #ffffff;
-  background: linear-gradient(135deg, #155eef 0%, #6d5efc 100%);
-  font-size: 24rpx;
-  font-weight: 800;
+  width: 146rpx;
+  height: 146rpx;
+  border-radius: 32rpx;
+  background: #1252d3;
+  box-shadow: 0 26rpx 48rpx rgba(18, 82, 211, 0.2);
 }
 
-.brand-copy {
-  margin-left: 20rpx;
+.robot-antenna {
+  position: absolute;
+  top: 38rpx;
+  width: 22rpx;
+  height: 16rpx;
+  border-radius: 10rpx 10rpx 0 0;
+  background: #ffffff;
+}
+
+.robot-head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 22rpx;
+  width: 58rpx;
+  height: 46rpx;
+  border: 10rpx solid #ffffff;
+  border-radius: 10rpx;
+}
+
+.robot-eye {
+  width: 10rpx;
+  height: 10rpx;
+  border-radius: 50%;
+  background: #ffffff;
+}
+
+.robot-mouth {
+  position: absolute;
+  left: 14rpx;
+  right: 14rpx;
+  bottom: 8rpx;
+  height: 8rpx;
+  border-radius: 6rpx;
+  background: #ffffff;
+}
+
+.robot-ear {
+  position: absolute;
+  top: 62rpx;
+  width: 18rpx;
+  height: 28rpx;
+  border-radius: 14rpx;
+  background: #ffffff;
+}
+
+.robot-ear.left {
+  left: 32rpx;
+}
+
+.robot-ear.right {
+  right: 32rpx;
 }
 
 .brand-title {
-  color: #0f172a;
-  font-size: 40rpx;
+  margin-top: 34rpx;
+  color: #0f55d8;
+  font-size: 48rpx;
+  line-height: 1.2;
   font-weight: 900;
 }
 
 .brand-subtitle {
-  color: #475467;
-  font-size: 24rpx;
-  margin-top: 4rpx;
-}
-
-.hero-copy {
-  margin-top: 24rpx;
+  margin-top: 18rpx;
   color: #667085;
   font-size: 28rpx;
-  line-height: 1.6;
+  line-height: 1.3;
 }
 
-.hero-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12rpx;
-  margin-top: 24rpx;
-}
-
-.hero-tags text {
-  padding: 10rpx 16rpx;
-  border-radius: 999rpx;
-  background: #eef4ff;
-  color: #155eef;
-  font-size: 22rpx;
-  font-weight: 700;
+.auth-shell {
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .mode-switch {
   display: flex;
-  gap: 16rpx;
-  margin-top: 28rpx;
+  align-items: center;
+  gap: 0;
+  width: 100%;
+  min-height: 94rpx;
+  padding: 10rpx;
+  box-sizing: border-box;
+  border-radius: 22rpx;
+  background: #dce8fb;
 }
 
 .mode-item {
   flex: 1;
   text-align: center;
-  padding: 20rpx 0;
+  min-width: 0;
+  padding: 24rpx 8rpx;
   border-radius: 18rpx;
-  background: #ffffff;
-  color: #475467;
-  font-size: 26rpx;
-  font-weight: 700;
-  box-shadow: 0 10rpx 30rpx rgba(15, 23, 42, 0.05);
+  color: #344054;
+  font-size: 28rpx;
+  line-height: 1.2;
+  font-weight: 800;
 }
 
 .mode-item.active {
-  color: #155eef;
-  background: #eaf1ff;
+  color: #0f55d8;
+  background: #ffffff;
+  box-shadow: 0 8rpx 18rpx rgba(15, 23, 42, 0.08);
 }
 
 .login-panel {
-  margin-top: 24rpx;
-  padding: 32rpx;
-  border-radius: 30rpx;
+  margin-top: 44rpx;
+  padding: 62rpx 62rpx 56rpx;
+  border: 1rpx solid #e5e9f2;
+  border-radius: 22rpx;
   background: #ffffff;
-  box-shadow: 0 20rpx 60rpx rgba(15, 23, 42, 0.08);
+  box-shadow: 0 18rpx 58rpx rgba(15, 23, 42, 0.06);
 }
 
 .panel-title {
-  font-size: 36rpx;
+  font-size: 42rpx;
   line-height: 1.2;
-  font-weight: 800;
+  font-weight: 900;
   color: #0f172a;
 }
 
 .panel-copy, .bind-copy {
-  margin-top: 8rpx;
-  color: #667085;
-  font-size: 24rpx;
+  margin-top: 24rpx;
+  color: #1f2937;
+  font-size: 28rpx;
   line-height: 1.5;
 }
 
 .field {
-  margin-top: 22rpx;
+  margin-top: 28rpx;
 }
 
 .field-label {
   display: block;
-  margin-bottom: 10rpx;
+  margin-bottom: 12rpx;
   color: #344054;
-  font-size: 22rpx;
-  font-weight: 700;
+  font-size: 24rpx;
+  font-weight: 800;
 }
 
 .login-input {
-  height: 92rpx;
+  height: 96rpx;
   border-radius: 18rpx;
   background: #f8fafc;
   border: 1rpx solid #d9e2ec;
-  padding: 0 24rpx;
+  padding: 0 26rpx;
   box-sizing: border-box;
   font-size: 28rpx;
 }
@@ -138,16 +178,51 @@
 .login-button,
 .secondary-button,
 .primary-outline-button {
-  height: 92rpx;
-  margin-top: 28rpx;
+  height: 104rpx;
+  margin-top: 58rpx;
   border-radius: 18rpx;
   font-size: 30rpx;
   font-weight: 800;
 }
 
 .login-button {
-  background: linear-gradient(135deg, #155eef 0%, #0f4dd8 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 20rpx;
+  background: linear-gradient(90deg, #2f6cf5 0%, #1f5ee8 100%);
   color: #ffffff;
+  line-height: 1.2;
+}
+
+.login-button::after,
+.secondary-button::after,
+.primary-outline-button::after {
+  border: 0;
+}
+
+.button-chat-icon {
+  width: 42rpx;
+  height: 38rpx;
+  padding: 6rpx 5rpx;
+  box-sizing: border-box;
+  border: 4rpx solid #dce8ff;
+  border-radius: 4rpx;
+}
+
+.button-chat-line {
+  height: 3rpx;
+  margin-top: 4rpx;
+  border-radius: 3rpx;
+  background: #dce8ff;
+}
+
+.button-chat-line:first-child {
+  margin-top: 0;
+}
+
+.button-chat-line.short {
+  width: 16rpx;
 }
 
 .secondary-button {
@@ -162,8 +237,8 @@
 }
 
 .bind-panel {
-  margin-top: 28rpx;
-  padding-top: 24rpx;
+  margin-top: 38rpx;
+  padding-top: 30rpx;
   border-top: 1rpx solid #e5e7eb;
 }
 
@@ -184,8 +259,8 @@
 }
 
 .bind-card {
-  margin-top: 22rpx;
-  padding: 24rpx;
+  margin-top: 26rpx;
+  padding: 28rpx;
   border-radius: 22rpx;
   background: #f8fafc;
 }
@@ -196,4 +271,44 @@
   color: #155eef;
   font-size: 26rpx;
   font-weight: 700;
+}
+
+.agreement-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8rpx;
+  margin-top: 58rpx;
+  color: #344054;
+  font-size: 26rpx;
+  line-height: 1.6;
+}
+
+.agreement-check {
+  display: flex;
+  align-items: center;
+  gap: 10rpx;
+}
+
+.agreement-check checkbox {
+  transform: scale(0.86);
+}
+
+.agreement-link {
+  color: #155eef;
+  font-weight: 700;
+}
+
+.agreement-text {
+  color: #667085;
+}
+
+.login-footer {
+  margin-top: auto;
+  padding-top: 96rpx;
+  text-align: center;
+  color: #98a2b3;
+  font-size: 24rpx;
+  line-height: 1.4;
 }

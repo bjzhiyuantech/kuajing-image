@@ -1,6 +1,15 @@
+function resolveDefaultApiBaseUrl() {
+  try {
+    const envVersion = wx.getAccountInfoSync().miniProgram.envVersion;
+    return envVersion === "release" ? "https://ai.neimou.com" : "https://dev.neimou.com";
+  } catch (error) {
+    return "https://dev.neimou.com";
+  }
+}
+
 App({
   globalData: {
-    apiBaseUrl: "https://imagen.neimou.com",
+    apiBaseUrl: resolveDefaultApiBaseUrl(),
     token: "",
     user: null
   },

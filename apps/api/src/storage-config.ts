@@ -1,5 +1,4 @@
-import { createHash } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type { RequestTenant } from "./auth-context.js";
 import type { SaveStorageConfigRequest, StorageConfigResponse, StorageTestResult } from "./contracts.js";
 import { db } from "./database.js";
@@ -11,9 +10,9 @@ import {
   type OssStorageAdapterConfig,
   storageErrorMessage
 } from "./asset-storage.js";
-import { storageConfigs } from "./schema.js";
+import { systemSettings } from "./schema.js";
 
-const ACTIVE_STORAGE_CONFIG_ID = "active";
+const STORAGE_SETTINGS_KEY = "storage.config";
 const DEFAULT_COS_BUCKET = process.env.COS_DEFAULT_BUCKET?.trim() || "source-1253253332";
 const DEFAULT_COS_REGION = process.env.COS_DEFAULT_REGION?.trim() || "ap-nanjing";
 const DEFAULT_COS_KEY_PREFIX = process.env.COS_DEFAULT_KEY_PREFIX?.trim() || "gpt-image-canvas/assets";
@@ -21,15 +20,23 @@ const DEFAULT_OSS_BUCKET = process.env.OSS_DEFAULT_BUCKET?.trim() || "";
 const DEFAULT_OSS_REGION = process.env.OSS_DEFAULT_REGION?.trim() || "oss-cn-hangzhou";
 const DEFAULT_OSS_KEY_PREFIX = process.env.OSS_DEFAULT_KEY_PREFIX?.trim() || "gpt-image-canvas/assets";
 
-type StorageConfigRow = typeof storageConfigs.$inferSelect;
-
-export async function getStorageConfig(tenant: RequestTenant): Promise<StorageConfigResponse> {
-  return toStorageConfigResponse(await getStorageConfigRow(tenant));
+interface StoredStorageConfig {
+  provider: "cos" | "oss";
+  enabled: boolean;
+  secretId?: string | null;
+  secretKey?: string | null;
+  bucket?: string | null;
+  region?: string | null;
+  keyPrefix?: string | null;
 }
 
-export async function getActiveCosStorageConfig(tenant: RequestTenant): Promise<CosStorageAdapterConfig | undefined> {
-  const row = await getStorageConfigRow(tenant);
-  if (!row || row.enabled !== 1 || row.provider !== "cos" || !row.secretId || !row.secretKey || !row.bucket || !row.region) {
+export async function getStorageConfig(_tenant?: RequestTenant): Promise<StorageConfigResponse> {
+  return toStorageConfigResponse(await getStorageConfigRow());
+}
+
+export async function getActiveCosStorageConfig(_tenant?: RequestTenant): Promise<CosStorageAdapterConfig | undefined> {
+  const row = await getStorageConfigRow();
+  if (!row || !row.enabled || row.provider !== "cos" || !row.secretId || !row.secretKey || !row.bucket || !row.region) {
     return undefined;
   }
 
@@ -43,14 +50,18 @@ export async function getActiveCosStorageConfig(tenant: RequestTenant): Promise<
 }
 
 export async function getActiveStorageConfig(
-  tenant: RequestTenant
+  _tenant?: RequestTenant
 ): Promise<
   | { provider: "cos"; config: CosStorageAdapterConfig }
   | { provider: "oss"; config: OssStorageAdapterConfig }
   | undefined
 > {
-  const row = await getStorageConfigRow(tenant);
-  if (!row || row.enabled !== 1 || !row.secretId || !row.secretKey || !row.bucket || !row.region) {
+  const row = await getStorageConfigRow();
+  if (!row) {
+    return getRuntimeStorageConfigFromEnv();
+  }
+
+  if (!row.enabled || !row.secretId || !row.secretKey || !row.bucket || !row.region) {
     return undefined;
   }
 
@@ -83,26 +94,21 @@ export async function getActiveStorageConfig(
   return undefined;
 }
 
-export async function saveStorageConfig(tenant: RequestTenant, input: SaveStorageConfigRequest): Promise<StorageConfigResponse> {
-  const now = new Date().toISOString();
-  const existing = await getStorageConfigRow(tenant);
+export async function saveStorageConfig(_tenant: RequestTenant | undefined, input: SaveStorageConfigRequest): Promise<StorageConfigResponse> {
+  const existing = await getStorageConfigRow();
 
   if (!input.enabled) {
     const provider = input.provider === "oss" ? "oss" : "cos";
-    await upsertStorageConfig({
-      id: activeStorageConfigId(tenant),
-      workspaceId: tenant.workspaceId,
+    await saveStorageConfigRow({
       provider,
-      enabled: 0,
+      enabled: false,
       secretId: existing?.provider === provider ? existing.secretId : null,
       secretKey: existing?.provider === provider ? existing.secretKey : null,
       bucket: existing?.provider === provider ? existing.bucket : defaultBucket(provider),
       region: existing?.provider === provider ? existing.region : defaultRegion(provider),
-      keyPrefix: normalizeKeyPrefix(existing?.provider === provider ? existing.keyPrefix ?? defaultKeyPrefix(provider) : defaultKeyPrefix(provider)),
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now
+      keyPrefix: normalizeKeyPrefix(existing?.provider === provider ? existing.keyPrefix ?? defaultKeyPrefix(provider) : defaultKeyPrefix(provider))
     });
-    return getStorageConfig(tenant);
+    return getStorageConfig();
   }
 
   const parsed = resolveConfigForSave(input, existing);
@@ -112,26 +118,22 @@ export async function saveStorageConfig(tenant: RequestTenant, input: SaveStorag
     await new OssAssetStorageAdapter(parsed.config).testConfig();
   }
 
-  await upsertStorageConfig({
-    id: activeStorageConfigId(tenant),
-    workspaceId: tenant.workspaceId,
+  await saveStorageConfigRow({
     provider: parsed.provider,
-    enabled: 1,
+    enabled: true,
     secretId: parsed.provider === "cos" ? parsed.config.secretId : parsed.config.accessKeyId,
     secretKey: parsed.provider === "cos" ? parsed.config.secretKey : parsed.config.accessKeySecret,
     bucket: parsed.config.bucket,
     region: parsed.config.region,
-    keyPrefix: parsed.config.keyPrefix,
-    createdAt: existing?.createdAt ?? now,
-    updatedAt: now
+    keyPrefix: parsed.config.keyPrefix
   });
 
-  return getStorageConfig(tenant);
+  return getStorageConfig();
 }
 
-export async function testStorageConfig(tenant: RequestTenant, input: SaveStorageConfigRequest): Promise<StorageTestResult> {
+export async function testStorageConfig(_tenant: RequestTenant | undefined, input: SaveStorageConfigRequest): Promise<StorageTestResult> {
   try {
-    const parsed = resolveConfigForSave(input, await getStorageConfigRow(tenant));
+    const parsed = resolveConfigForSave(input, await getStorageConfigRow());
     if (parsed.provider === "cos") {
       await new CosAssetStorageAdapter(parsed.config).testConfig();
     } else {
@@ -149,39 +151,38 @@ export async function testStorageConfig(tenant: RequestTenant, input: SaveStorag
   }
 }
 
-async function getStorageConfigRow(tenant: RequestTenant): Promise<StorageConfigRow | undefined> {
-  const [row] = await db
-    .select()
-    .from(storageConfigs)
-    .where(and(eq(storageConfigs.id, activeStorageConfigId(tenant)), eq(storageConfigs.workspaceId, tenant.workspaceId)))
-    .limit(1);
-  return row;
+async function getStorageConfigRow(): Promise<StoredStorageConfig | undefined> {
+  const [row] = await db.select().from(systemSettings).where(eq(systemSettings.key, STORAGE_SETTINGS_KEY)).limit(1);
+  if (!row) {
+    return undefined;
+  }
+  try {
+    return normalizeStoredStorageConfig(JSON.parse(row.valueJson));
+  } catch {
+    return undefined;
+  }
 }
 
-function activeStorageConfigId(tenant: RequestTenant): string {
-  return createHash("sha256").update(`${tenant.workspaceId}:${ACTIVE_STORAGE_CONFIG_ID}`).digest("hex");
-}
-
-async function upsertStorageConfig(row: StorageConfigRow): Promise<void> {
-  await db.insert(storageConfigs)
-    .values(row)
+async function saveStorageConfigRow(row: StoredStorageConfig): Promise<void> {
+  const now = new Date().toISOString();
+  await db.insert(systemSettings)
+    .values({
+      key: STORAGE_SETTINGS_KEY,
+      valueJson: JSON.stringify(row),
+      createdAt: now,
+      updatedAt: now
+    })
     .onDuplicateKeyUpdate({
       set: {
-        provider: row.provider,
-        enabled: row.enabled,
-        secretId: row.secretId,
-        secretKey: row.secretKey,
-        bucket: row.bucket,
-        region: row.region,
-        keyPrefix: row.keyPrefix,
-        updatedAt: row.updatedAt
+        valueJson: JSON.stringify(row),
+        updatedAt: now
       }
     });
 }
 
 function resolveConfigForSave(
   input: SaveStorageConfigRequest,
-  existing: StorageConfigRow | undefined
+  existing: StoredStorageConfig | undefined
 ): { provider: "cos"; config: CosStorageAdapterConfig } | { provider: "oss"; config: OssStorageAdapterConfig } {
   if (input.provider === "oss") {
     return {
@@ -196,7 +197,7 @@ function resolveConfigForSave(
   };
 }
 
-function resolveCosConfigForSave(input: SaveStorageConfigRequest, existing: StorageConfigRow | undefined): CosStorageAdapterConfig {
+function resolveCosConfigForSave(input: SaveStorageConfigRequest, existing: StoredStorageConfig | undefined): CosStorageAdapterConfig {
   const cos = input.cos;
   if (!cos) {
     throw new Error("COS configuration is required.");
@@ -204,8 +205,8 @@ function resolveCosConfigForSave(input: SaveStorageConfigRequest, existing: Stor
 
   const secretId = requiredString(cos.secretId, "COS SecretId");
   const secretKey = cos.preserveSecret && existing?.provider === "cos" ? existing.secretKey : cos.secretKey;
-  const bucket = requiredString(cos.bucket, "COS bucket");
-  const region = requiredString(cos.region, "COS region");
+  const bucket = requiredString(normalizeAsciiDashes(cos.bucket), "COS bucket");
+  const region = requiredString(normalizeAsciiDashes(cos.region), "COS region");
 
   if (!secretKey?.trim()) {
     throw new Error("COS SecretKey is required.");
@@ -220,7 +221,7 @@ function resolveCosConfigForSave(input: SaveStorageConfigRequest, existing: Stor
   };
 }
 
-function resolveOssConfigForSave(input: SaveStorageConfigRequest, existing: StorageConfigRow | undefined): OssStorageAdapterConfig {
+function resolveOssConfigForSave(input: SaveStorageConfigRequest, existing: StoredStorageConfig | undefined): OssStorageAdapterConfig {
   const oss = input.oss;
   if (!oss) {
     throw new Error("OSS configuration is required.");
@@ -228,12 +229,13 @@ function resolveOssConfigForSave(input: SaveStorageConfigRequest, existing: Stor
 
   const accessKeyId = requiredString(oss.accessKeyId, "OSS AccessKey ID");
   const accessKeySecret = oss.preserveSecret && existing?.provider === "oss" ? existing.secretKey : oss.accessKeySecret;
-  const bucket = requiredString(oss.bucket, "OSS bucket");
-  const region = requiredString(oss.region, "OSS region");
+  const bucket = requiredString(normalizeAsciiDashes(oss.bucket), "OSS bucket");
+  const region = requiredString(normalizeAsciiDashes(oss.region), "OSS region");
 
   if (!accessKeySecret?.trim()) {
     throw new Error("OSS AccessKey Secret is required.");
   }
+  validateOssBucketName(bucket);
 
   return {
     accessKeyId,
@@ -253,12 +255,22 @@ function requiredString(value: string | undefined, label: string): string {
   return trimmed;
 }
 
-function toStorageConfigResponse(row: StorageConfigRow | undefined): StorageConfigResponse {
+function normalizeAsciiDashes(value: string | undefined): string | undefined {
+  return value?.replace(/[‐‑‒–—―−]/gu, "-");
+}
+
+function validateOssBucketName(bucket: string): void {
+  if (!/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/u.test(bucket)) {
+    throw new Error("OSS bucket 名称只能包含小写字母、数字和半角短横线 -，且必须与控制台里的存储空间名称完全一致。");
+  }
+}
+
+function toStorageConfigResponse(row: StoredStorageConfig | undefined): StorageConfigResponse {
   const isCos = row?.provider === "cos";
   const isOss = !row || row.provider === "oss";
 
   return {
-    enabled: row?.enabled === 1,
+    enabled: row?.enabled === true,
     provider: isOss ? "oss" : "cos",
     cos: {
       secretId: isCos ? row?.secretId ?? "" : "",
@@ -297,6 +309,68 @@ function defaultKeyPrefix(provider: "cos" | "oss"): string {
 
 function storageProviderLabel(provider: "cos" | "oss"): string {
   return provider === "cos" ? "COS" : "OSS";
+}
+
+function normalizeStoredStorageConfig(value: unknown): StoredStorageConfig | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const provider = value.provider === "cos" ? "cos" : "oss";
+  return {
+    provider,
+    enabled: value.enabled === true,
+    secretId: typeof value.secretId === "string" ? value.secretId : null,
+    secretKey: typeof value.secretKey === "string" ? value.secretKey : null,
+    bucket: typeof value.bucket === "string" ? value.bucket : null,
+    region: typeof value.region === "string" ? value.region : null,
+    keyPrefix: typeof value.keyPrefix === "string" ? value.keyPrefix : null
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function getRuntimeStorageConfigFromEnv():
+  | { provider: "cos"; config: CosStorageAdapterConfig }
+  | { provider: "oss"; config: OssStorageAdapterConfig }
+  | undefined {
+  const ossAccessKeyId = process.env.OSS_ACCESS_KEY_ID?.trim();
+  const ossAccessKeySecret = process.env.OSS_ACCESS_KEY_SECRET?.trim();
+  const ossBucket = process.env.OSS_DEFAULT_BUCKET?.trim();
+  const ossRegion = process.env.OSS_DEFAULT_REGION?.trim();
+  if (ossAccessKeyId && ossAccessKeySecret && ossBucket && ossRegion) {
+    return {
+      provider: "oss",
+      config: {
+        accessKeyId: ossAccessKeyId,
+        accessKeySecret: ossAccessKeySecret,
+        bucket: ossBucket,
+        region: ossRegion,
+        keyPrefix: normalizeKeyPrefix(process.env.OSS_DEFAULT_KEY_PREFIX)
+      }
+    };
+  }
+
+  const cosSecretId = process.env.COS_SECRET_ID?.trim();
+  const cosSecretKey = process.env.COS_SECRET_KEY?.trim();
+  const cosBucket = process.env.COS_DEFAULT_BUCKET?.trim();
+  const cosRegion = process.env.COS_DEFAULT_REGION?.trim();
+  if (cosSecretId && cosSecretKey && cosBucket && cosRegion) {
+    return {
+      provider: "cos",
+      config: {
+        secretId: cosSecretId,
+        secretKey: cosSecretKey,
+        bucket: cosBucket,
+        region: cosRegion,
+        keyPrefix: normalizeKeyPrefix(process.env.COS_DEFAULT_KEY_PREFIX)
+      }
+    };
+  }
+
+  return undefined;
 }
 
 function maskSecret(value: string): string {

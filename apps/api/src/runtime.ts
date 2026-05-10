@@ -87,6 +87,19 @@ export const wechatMiniAppRuntimeConfig = {
   enabled: process.env.WECHAT_MINIAPP_ENABLED === "true"
 };
 
+export const extensionReleaseRuntimeConfig = {
+  devApiBaseUrl: emptyToUndefined(process.env.EXTENSION_DEV_API_BASE_URL) ?? "https://dev.neimou.com",
+  prodApiBaseUrl: emptyToUndefined(process.env.EXTENSION_PROD_API_BASE_URL) ?? "https://ai.neimou.com",
+  devVersion: emptyToUndefined(process.env.EXTENSION_DEV_VERSION) ?? "",
+  prodVersion: emptyToUndefined(process.env.EXTENSION_PROD_VERSION) ?? "",
+  devDownloadUrl: emptyToUndefined(process.env.EXTENSION_DEV_DOWNLOAD_URL),
+  prodDownloadUrl: emptyToUndefined(process.env.EXTENSION_PROD_DOWNLOAD_URL),
+  devLatestDownloadUrl: emptyToUndefined(process.env.EXTENSION_DEV_LATEST_DOWNLOAD_URL),
+  prodLatestDownloadUrl: emptyToUndefined(process.env.EXTENSION_PROD_LATEST_DOWNLOAD_URL),
+  devInstallHelpUrl: emptyToUndefined(process.env.EXTENSION_DEV_INSTALL_HELP_URL) ?? "/install-help.html",
+  prodInstallHelpUrl: emptyToUndefined(process.env.EXTENSION_PROD_INSTALL_HELP_URL) ?? "/install-help.html"
+};
+
 export function ensureRuntimeStorage(): void {
   mkdirSync(runtimePaths.dataDir, { recursive: true });
   mkdirSync(runtimePaths.assetsDir, { recursive: true });

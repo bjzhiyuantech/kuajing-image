@@ -1,0 +1,20 @@
+.legal-page {
+  padding-bottom: 48rpx;
+}
+
+.legal-section {
+  box-shadow: none;
+}
+
+.legal-title {
+  color: #101828;
+  font-size: 30rpx;
+  font-weight: 800;
+}
+
+.legal-copy {
+  margin-top: 14rpx;
+  color: #475467;
+  font-size: 26rpx;
+  line-height: 1.8;
+}

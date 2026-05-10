@@ -41,6 +41,7 @@ a {
 
 .install-hero,
 .install-download-card,
+.install-video-card,
 .install-step-card,
 .install-note-card {
   border: 1px solid #dbe4f0;
@@ -73,6 +74,7 @@ a {
 
 .install-hero p,
 .install-download-card p,
+.install-video-card p,
 .install-step-card p,
 .install-note-card p,
 .install-step-card li {
@@ -82,7 +84,8 @@ a {
   line-height: 1.7;
 }
 
-.install-download-card {
+.install-download-card,
+.install-video-card {
   padding: 18px;
 }
 
@@ -97,6 +100,13 @@ a {
   margin: 0 0 4px;
   color: #102033;
   font-size: 18px;
+}
+
+.install-video-header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
 }
 
 .install-download-button,
@@ -177,6 +187,15 @@ a {
 .install-browser-switcher {
   display: flex;
   gap: 10px;
+}
+
+.install-video {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 1px solid #dbe4f0;
+  border-radius: 12px;
+  background: #102033;
 }
 
 .install-browser-pill.active {

@@ -1,18 +1,24 @@
 import {
   AlertTriangle,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Clock3,
   Copy,
   Download,
+  Filter,
+  Home,
   ImageIcon,
   Loader2,
   Maximize2,
+  MoreHorizontal,
   Palette,
   RotateCcw,
   Ruler,
   Search,
   Sparkles,
   Trash2,
+  User,
   UserRound,
   X,
   XCircle
@@ -28,8 +34,16 @@ import {
 import { getStoredAuthToken } from "./authClient";
 
 interface GalleryPageProps {
-  fetcher: typeof fetch;
+  fetcher?: typeof fetch;
+  mode?: "user" | "demo";
+  demoItems?: GalleryImageItem[];
+  mobile?: boolean;
+  mobileQuota?: number;
+  onAuthRequired?: () => void;
   onDeleted: (outputId: string) => void;
+  onMobileAccount?: () => void;
+  onMobileCreate?: () => void;
+  onMobileHome?: () => void;
   onReuse: (item: GalleryImageItem, modelConfigId?: string) => void;
 }
 
@@ -49,6 +63,21 @@ interface GalleryModelOption {
   enabled: boolean;
   role: string;
 }
+
+interface GalleryPreviewOverlay {
+  placement: "top-left" | "top-right" | "bottom-left" | "bottom-right";
+  logoDataUrl: string;
+  text: string;
+}
+
+interface PreviewOverlayMessage {
+  source: "kuajing-image-extension";
+  type: "kuajing-image:preview-overlay";
+  overlay?: unknown;
+}
+
+const BRAND_PREVIEW_WINDOW_NAME_PREFIX = "kuajing-image-brand-preview:";
+const emptyGalleryItems: GalleryImageItem[] = [];
 
 const stylePresetLabels: Record<StylePresetId, string> = {
   none: "无风格",
@@ -71,7 +100,19 @@ const sizePresetLabels: Record<string, string> = {
   "wide-4k": "宽屏展示 4K"
 };
 
-export function GalleryPage({ fetcher, onDeleted, onReuse }: GalleryPageProps) {
+export function GalleryPage({
+  fetcher,
+  mode = "user",
+  demoItems = emptyGalleryItems,
+  mobile = false,
+  mobileQuota,
+  onAuthRequired,
+  onDeleted,
+  onMobileAccount,
+  onMobileCreate,
+  onMobileHome,
+  onReuse
+}: GalleryPageProps) {
   const [items, setItems] = useState<GalleryImageItem[]>([]);
   const [query, setQuery] = useState("");
   const [isLoading, setIsLoading] = useState(true);
@@ -83,10 +124,55 @@ export function GalleryPage({ fetcher, onDeleted, onReuse }: GalleryPageProps) {
   const [pendingRetryItem, setPendingRetryItem] = useState<GalleryImageItem | null>(null);
   const [modelOptions, setModelOptions] = useState<GalleryModelOption[]>([]);
   const [deletingOutputId, setDeletingOutputId] = useState<string | null>(null);
+  const [previewOverlay, setPreviewOverlay] = useState<GalleryPreviewOverlay | null>(() => readPreviewOverlayFromWindowName());
   const statusTimerRef = useRef<number | undefined>();
   const openedAssetIdRef = useRef<string | null>(null);
+  const isDemoMode = mode === "demo";
+  const fetchApi = fetcher ?? fetch;
 
   useEffect(() => {
+    if (isDemoMode) {
+      const controller = new AbortController();
+
+      async function loadPublicDemoGallery(): Promise<void> {
+        setIsLoading(true);
+        setError("");
+
+        let nextItems = demoItems;
+        try {
+          const response = await fetchApi("/api/public/gallery", {
+            signal: controller.signal
+          });
+          if (response.ok) {
+            const body = (await response.json()) as GalleryResponse;
+            if (Array.isArray(body.items) && body.items.length > 0) {
+              nextItems = body.items;
+            }
+          }
+        } catch {
+          nextItems = demoItems;
+        }
+
+        if (!controller.signal.aborted) {
+          setItems(nextItems);
+          setIsLoading(false);
+          const requestedAssetId = assetIdFromLocation();
+          if (requestedAssetId && openedAssetIdRef.current !== requestedAssetId) {
+            const matchingItem = nextItems.find((item) => item.asset.id === requestedAssetId);
+            if (matchingItem) {
+              openedAssetIdRef.current = requestedAssetId;
+              setSelectedItem(matchingItem);
+            }
+          }
+        }
+      }
+
+      void loadPublicDemoGallery();
+      return () => {
+        controller.abort();
+      };
+    }
+
     const controller = new AbortController();
 
     async function loadGallery(): Promise<void> {
@@ -94,7 +180,10 @@ export function GalleryPage({ fetcher, onDeleted, onReuse }: GalleryPageProps) {
       setError("");
 
       try {
-        const response = await fetcher("/api/gallery", {
+        if (!fetcher) {
+          throw new Error("Gallery 加载器未配置。");
+        }
+        const response = await fetchApi("/api/gallery", {
           signal: controller.signal
         });
         if (!response.ok) {
@@ -133,14 +222,19 @@ export function GalleryPage({ fetcher, onDeleted, onReuse }: GalleryPageProps) {
     return () => {
       controller.abort();
     };
-  }, []);
+  }, [demoItems, fetcher, isDemoMode]);
 
   useEffect(() => {
+    if (isDemoMode || !fetcher) {
+      setModelOptions([]);
+      return;
+    }
+
     const controller = new AbortController();
 
     async function loadModels(): Promise<void> {
       try {
-        const response = await fetcher("/api/admin/image-models", { signal: controller.signal });
+        const response = await fetchApi("/api/admin/image-models", { signal: controller.signal });
         if (!response.ok) {
           return;
         }
@@ -155,7 +249,7 @@ export function GalleryPage({ fetcher, onDeleted, onReuse }: GalleryPageProps) {
 
     void loadModels();
     return () => controller.abort();
-  }, [fetcher]);
+  }, [fetcher, isDemoMode]);
 
   useEffect(() => {
     if (!selectedItem && !pendingDeleteItem && !pendingRetryItem) {
@@ -192,6 +286,28 @@ export function GalleryPage({ fetcher, onDeleted, onReuse }: GalleryPageProps) {
     };
   }, []);
 
+  useEffect(() => {
+    if (window.name.startsWith(BRAND_PREVIEW_WINDOW_NAME_PREFIX)) {
+      window.name = "";
+    }
+  }, []);
+
+  useEffect(() => {
+    const handlePreviewOverlayMessage = (event: MessageEvent): void => {
+      const data = event.data as PreviewOverlayMessage | undefined;
+      if (event.source !== window || !data || data.source !== "kuajing-image-extension" || data.type !== "kuajing-image:preview-overlay") {
+        return;
+      }
+
+      setPreviewOverlay(normalizePreviewOverlay(data.overlay));
+    };
+
+    window.addEventListener("message", handlePreviewOverlayMessage);
+    return () => {
+      window.removeEventListener("message", handlePreviewOverlayMessage);
+    };
+  }, []);
+
   const filteredItems = useMemo(() => {
     const normalizedQuery = normalizeSearchText(query);
     if (!normalizedQuery) {
@@ -202,6 +318,7 @@ export function GalleryPage({ fetcher, onDeleted, onReuse }: GalleryPageProps) {
   }, [items, query]);
   const featuredItem = filteredItems[0] ?? null;
   const gridItems = featuredItem ? filteredItems.slice(1) : filteredItems;
+  const mobileItems = filteredItems;
   const actionHandlers: GalleryActionHandlers = {
     onCopy: (item) => void copyPrompt(item),
     onDelete: requestDelete,
@@ -235,17 +352,29 @@ export function GalleryPage({ fetcher, onDeleted, onReuse }: GalleryPageProps) {
   }
 
   function downloadItem(item: GalleryImageItem): void {
-    window.open(authenticatedAssetUrl(`/api/assets/${encodeURIComponent(item.asset.id)}/download`), "_blank", "noopener,noreferrer");
-    showStatus("已打开原图下载。");
+    window.open(
+      isDemoMode ? assetDisplayUrl(item.asset) : authenticatedAssetUrl(`/api/assets/${encodeURIComponent(item.asset.id)}/download`),
+      "_blank",
+      "noopener,noreferrer"
+    );
+    showStatus(isDemoMode ? "已打开演示图片。" : "已打开原图下载。");
   }
 
   function requestDelete(item: GalleryImageItem): void {
     setError("");
+    if (isDemoMode) {
+      onAuthRequired?.();
+      return;
+    }
     setPendingDeleteItem(item);
   }
 
   function requestRetry(item: GalleryImageItem): void {
     setError("");
+    if (isDemoMode) {
+      onAuthRequired?.();
+      return;
+    }
     const enabledModelOptions = modelOptions.filter((model) => model.enabled);
     if (enabledModelOptions.length === 0) {
       onReuse(item);
@@ -261,11 +390,19 @@ export function GalleryPage({ fetcher, onDeleted, onReuse }: GalleryPageProps) {
   }
 
   async function deleteItem(item: GalleryImageItem): Promise<void> {
+    if (isDemoMode) {
+      onAuthRequired?.();
+      return;
+    }
+
     setDeletingOutputId(item.outputId);
     setError("");
 
     try {
-      const response = await fetcher(`/api/gallery/${encodeURIComponent(item.outputId)}`, {
+      if (!fetcher) {
+        throw new Error("Gallery 加载器未配置。");
+      }
+      const response = await fetchApi(`/api/gallery/${encodeURIComponent(item.outputId)}`, {
         method: "DELETE"
       });
       if (!response.ok) {
@@ -284,6 +421,164 @@ export function GalleryPage({ fetcher, onDeleted, onReuse }: GalleryPageProps) {
     }
   }
 
+  if (mobile) {
+    return (
+      <main className="mobile-gallery app-view" data-testid="gallery-page">
+        <header className="mobile-app-header">
+          <div className="mobile-app-header__side">
+            <button aria-label="返回首页" type="button" onClick={onMobileHome}>
+              <ChevronLeft className="size-5" aria-hidden="true" />
+            </button>
+            <button aria-label="首页" type="button" onClick={onMobileHome}>
+              <Home className="size-5" aria-hidden="true" />
+            </button>
+          </div>
+          <div className="mobile-app-header__title">
+            <strong>{isDemoMode ? "案例图库" : "作品图库"}</strong>
+          </div>
+          <button className="mobile-app-header__quota" type="button" onClick={onMobileAccount}>
+            剩余额度 {typeof mobileQuota === "number" ? mobileQuota : items.length}
+            <ChevronRight className="size-4" aria-hidden="true" />
+          </button>
+        </header>
+
+        <div className="mobile-gallery__content">
+          <button className="mobile-home-notice mobile-gallery__notice" type="button" onClick={onMobileAccount}>
+            <BellIconFallback />
+            <span>新用户注册送 20 张生图额度</span>
+            <span>去领取</span>
+          </button>
+
+          <div className="mobile-gallery__search-row">
+            <div className="mobile-gallery__search" role="search">
+              <Search className="size-5" aria-hidden="true" />
+              <input
+                aria-label="搜索作品"
+                data-testid="gallery-search"
+                placeholder="搜索作品名称、关键词、商品"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+              />
+            </div>
+            <button className="mobile-gallery__filter" type="button">
+              <Filter className="size-5" aria-hidden="true" />
+              筛选
+            </button>
+          </div>
+
+          <div className="mobile-gallery__chips" aria-label="作品类型筛选">
+            {["全部", "主图", "场景图", "海报", "翻译图", "长图"].map((label, index) => (
+              <button data-active={index === 0} key={label} type="button">
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {error ? (
+            <div className="mobile-alert" data-testid="gallery-error" role="alert">
+              <XCircle className="size-4 shrink-0" aria-hidden="true" />
+              <p>{error}</p>
+            </div>
+          ) : null}
+          {statusMessage ? (
+            <div className="mobile-alert" data-testid="gallery-message" role="status">
+              <ImageIcon className="size-4 shrink-0" aria-hidden="true" />
+              <p>{statusMessage}</p>
+            </div>
+          ) : null}
+
+          <div className="mobile-gallery__toolbar">
+            <button type="button">
+              最近生成
+              <ChevronDown className="size-4" aria-hidden="true" />
+            </button>
+            <label>
+              <input type="checkbox" />
+              多选
+            </label>
+          </div>
+
+          {isLoading ? (
+            <div className="mobile-gallery__empty" data-testid="gallery-loading" role="status">
+              <Loader2 className="size-5 animate-spin" aria-hidden="true" />
+              <p>正在载入作品...</p>
+            </div>
+          ) : mobileItems.length === 0 ? (
+            <div className="mobile-gallery__empty" data-testid="gallery-empty">
+              <ImageIcon className="size-7" aria-hidden="true" />
+              <p>{items.length === 0 ? "暂无作品" : "没有匹配结果"}</p>
+              <span>{items.length === 0 ? "生成成功的图片会出现在这里。" : "换一个关键词再试试。"}</span>
+            </div>
+          ) : (
+            <div className="mobile-gallery__grid" data-testid="gallery-grid">
+              {mobileItems.map((item) => (
+                <MobileGalleryCard
+                  deleting={deletingOutputId === item.outputId}
+                  item={item}
+                  key={item.outputId}
+                  onDownload={downloadItem}
+                  onMore={setSelectedItem}
+                  onReuse={requestRetry}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+
+        <nav className="mobile-bottom-nav" aria-label="手机底部导航">
+          <button className="mobile-workbench__tab" type="button" onClick={onMobileHome}>
+            <Home className="size-5" aria-hidden="true" />
+            <span>首页</span>
+          </button>
+          <button className="mobile-workbench__tab" type="button" onClick={onMobileCreate}>
+            <Sparkles className="size-5" aria-hidden="true" />
+            <span>生图</span>
+          </button>
+          <button className="mobile-workbench__tab" data-active="true" type="button">
+            <ImageIcon className="size-5" aria-hidden="true" />
+            <span>图库</span>
+          </button>
+          <button className="mobile-workbench__tab" type="button" onClick={onMobileAccount}>
+            <User className="size-5" aria-hidden="true" />
+            <span>我的</span>
+          </button>
+        </nav>
+
+        {selectedItem ? (
+          <GalleryDetailDialog
+            deleting={deletingOutputId === selectedItem.outputId}
+            demoMode={isDemoMode}
+            previewOverlay={previewOverlay}
+            item={selectedItem}
+            onClose={() => setSelectedItem(null)}
+            onCopy={() => void copyPrompt(selectedItem)}
+            onDelete={() => requestDelete(selectedItem)}
+            onDownload={() => downloadItem(selectedItem)}
+            onReuse={() => requestRetry(selectedItem)}
+          />
+        ) : null}
+
+        {pendingDeleteItem ? (
+          <DeleteGalleryDialog
+            deleting={deletingOutputId === pendingDeleteItem.outputId}
+            item={pendingDeleteItem}
+            onCancel={() => setPendingDeleteItem(null)}
+            onConfirm={() => void deleteItem(pendingDeleteItem)}
+          />
+        ) : null}
+
+        {pendingRetryItem ? (
+          <RetryGalleryDialog
+            item={pendingRetryItem}
+            models={modelOptions}
+            onCancel={() => setPendingRetryItem(null)}
+            onConfirm={(modelConfigId) => confirmRetry(pendingRetryItem, modelConfigId)}
+          />
+        ) : null}
+      </main>
+    );
+  }
+
   return (
     <main className="gallery-page app-view" data-testid="gallery-page">
       <div className="gallery-page__inner">
@@ -291,10 +586,10 @@ export function GalleryPage({ fetcher, onDeleted, onReuse }: GalleryPageProps) {
           <div className="gallery-header__copy">
             <p className="gallery-kicker">
               <Sparkles className="size-3.5" aria-hidden="true" />
-              Editorial Gallery
+              {isDemoMode ? "Public Demo Gallery" : "Editorial Gallery"}
             </p>
-            <h1>作品图库</h1>
-            <p>{items.length} 张本地作品，按最新生成排序。</p>
+            <h1>{isDemoMode ? "案例图库" : "作品图库"}</h1>
+            <p>{isDemoMode ? `${items.length} 张公开演示案例，可搜索提示词、主题和风格。` : `${items.length} 张本地作品，按最新生成排序。`}</p>
           </div>
           <div className="gallery-search" role="search">
             <Search className="size-4" aria-hidden="true" />
@@ -342,6 +637,7 @@ export function GalleryPage({ fetcher, onDeleted, onReuse }: GalleryPageProps) {
             {featuredItem ? (
               <FeaturedGalleryItem
                 deleting={deletingOutputId === featuredItem.outputId}
+                demoMode={isDemoMode}
                 expanded={Boolean(expandedPrompts[featuredItem.outputId])}
                 item={featuredItem}
                 onOpen={setSelectedItem}
@@ -355,6 +651,7 @@ export function GalleryPage({ fetcher, onDeleted, onReuse }: GalleryPageProps) {
                 {gridItems.map((item) => (
                   <GalleryCard
                     deleting={deletingOutputId === item.outputId}
+                    demoMode={isDemoMode}
                     expanded={Boolean(expandedPrompts[item.outputId])}
                     item={item}
                     key={item.outputId}
@@ -372,6 +669,8 @@ export function GalleryPage({ fetcher, onDeleted, onReuse }: GalleryPageProps) {
       {selectedItem ? (
         <GalleryDetailDialog
           deleting={deletingOutputId === selectedItem.outputId}
+          demoMode={isDemoMode}
+          previewOverlay={previewOverlay}
           item={selectedItem}
           onClose={() => setSelectedItem(null)}
           onCopy={() => void copyPrompt(selectedItem)}
@@ -404,6 +703,7 @@ export function GalleryPage({ fetcher, onDeleted, onReuse }: GalleryPageProps) {
 
 function FeaturedGalleryItem({
   deleting,
+  demoMode,
   expanded,
   item,
   onCopy,
@@ -414,6 +714,7 @@ function FeaturedGalleryItem({
   onTogglePrompt
 }: {
   deleting: boolean;
+  demoMode: boolean;
   expanded: boolean;
   item: GalleryImageItem;
   onOpen: (item: GalleryImageItem) => void;
@@ -465,6 +766,7 @@ function FeaturedGalleryItem({
         </div>
         <GalleryIconActions
           deleting={deleting}
+          demoMode={demoMode}
           item={item}
           onCopy={onCopy}
           onDelete={onDelete}
@@ -478,6 +780,7 @@ function FeaturedGalleryItem({
 
 function GalleryCard({
   deleting,
+  demoMode,
   expanded,
   item,
   onCopy,
@@ -488,6 +791,7 @@ function GalleryCard({
   onTogglePrompt
 }: {
   deleting: boolean;
+  demoMode: boolean;
   expanded: boolean;
   item: GalleryImageItem;
   onOpen: (item: GalleryImageItem) => void;
@@ -534,6 +838,7 @@ function GalleryCard({
           </div>
           <GalleryIconActions
             deleting={deleting}
+            demoMode={demoMode}
             item={item}
             onCopy={onCopy}
             onDelete={onDelete}
@@ -546,8 +851,53 @@ function GalleryCard({
   );
 }
 
+function MobileGalleryCard({
+  deleting,
+  item,
+  onDownload,
+  onMore,
+  onReuse
+}: {
+  deleting: boolean;
+  item: GalleryImageItem;
+  onDownload: (item: GalleryImageItem) => void;
+  onMore: (item: GalleryImageItem) => void;
+  onReuse: (item: GalleryImageItem) => void;
+}) {
+  return (
+    <article className="mobile-gallery-card" data-testid="gallery-card">
+      <button aria-label={`打开作品：${promptExcerpt(item.prompt)}`} className="mobile-gallery-card__image" type="button" onClick={() => onMore(item)}>
+        <img alt={item.prompt} height={item.asset.height} loading="lazy" src={assetDisplayUrl(item.asset, 512)} width={item.asset.width} />
+        <span>{item.mode === "edit" ? "场景图" : "主图"}</span>
+      </button>
+      <div className="mobile-gallery-card__meta">
+        <span><i /> 已完成</span>
+        <time>{formatCreatedTime(item.createdAt)}</time>
+        <button aria-label="更多" type="button" onClick={() => onMore(item)}>
+          <MoreHorizontal className="size-5" aria-hidden="true" />
+        </button>
+      </div>
+      <div className="mobile-gallery-card__actions">
+        <button type="button" onClick={() => onDownload(item)}>
+          <Download className="size-4" aria-hidden="true" />
+          下载
+        </button>
+        <button type="button" onClick={() => onReuse(item)}>
+          <RotateCcw className="size-4" aria-hidden="true" />
+          复用
+        </button>
+        <button disabled={deleting} type="button" onClick={() => onMore(item)}>
+          {deleting ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <MoreHorizontal className="size-4" aria-hidden="true" />}
+          更多
+        </button>
+      </div>
+    </article>
+  );
+}
+
 function GalleryIconActions({
   deleting,
+  demoMode,
   item,
   onCopy,
   onDelete,
@@ -555,6 +905,7 @@ function GalleryIconActions({
   onReuse
 }: {
   deleting: boolean;
+  demoMode: boolean;
   item: GalleryImageItem;
 } & GalleryActionHandlers) {
   const excerpt = promptExcerpt(item.prompt);
@@ -580,19 +931,19 @@ function GalleryIconActions({
         <Download className="size-4" aria-hidden="true" />
       </button>
       <button
-        aria-label={`重新生成：${excerpt}`}
+        aria-label={`${demoMode ? "登录后重新生成" : "重新生成"}：${excerpt}`}
         className="gallery-icon-action"
-        title="重新生成"
+        title={demoMode ? "登录后重新生成" : "重新生成"}
         type="button"
         onClick={() => onReuse(item)}
       >
         <RotateCcw className="size-4" aria-hidden="true" />
       </button>
       <button
-        aria-label={`删除 Gallery 图片：${excerpt}`}
+        aria-label={`${demoMode ? "登录后管理 Gallery 图片" : "删除 Gallery 图片"}：${excerpt}`}
         className="gallery-icon-action gallery-icon-action--danger"
         disabled={deleting}
-        title="从 Gallery 移除"
+        title={demoMode ? "登录后可管理作品" : "从 Gallery 移除"}
         type="button"
         onClick={() => onDelete(item)}
       >
@@ -600,6 +951,10 @@ function GalleryIconActions({
       </button>
     </div>
   );
+}
+
+function BellIconFallback() {
+  return <Sparkles className="size-5" aria-hidden="true" />;
 }
 
 function GalleryTags({ item, compact = false }: { item: GalleryImageItem; compact?: boolean }) {
@@ -688,7 +1043,9 @@ function CollapsiblePrompt({
 
 function GalleryDetailDialog({
   deleting,
+  demoMode,
   item,
+  previewOverlay,
   onClose,
   onCopy,
   onDelete,
@@ -696,7 +1053,9 @@ function GalleryDetailDialog({
   onReuse
 }: {
   deleting: boolean;
+  demoMode: boolean;
   item: GalleryImageItem;
+  previewOverlay: GalleryPreviewOverlay | null;
   onClose: () => void;
   onCopy: () => void;
   onDelete: () => void;
@@ -721,13 +1080,20 @@ function GalleryDetailDialog({
 
         <div className="gallery-modal__body">
           <div className="gallery-modal__media">
-            <img
-              alt={item.prompt}
-              className="gallery-modal__image"
-              height={item.asset.height}
-              src={assetDisplayUrl(item.asset)}
-              width={item.asset.width}
-            />
+            <div className="gallery-modal__image-frame">
+              <img
+                alt={item.prompt}
+                className="gallery-modal__image"
+                height={item.asset.height}
+                src={assetDisplayUrl(item.asset)}
+                width={item.asset.width}
+              />
+              {previewOverlay ? (
+                <span className={`brand-result-overlay brand-result-overlay-${previewOverlay.placement}`}>
+                  {previewOverlay.logoDataUrl ? <img alt="" src={previewOverlay.logoDataUrl} /> : <strong>{previewOverlay.text}</strong>}
+                </span>
+              ) : null}
+            </div>
           </div>
 
           <aside className="gallery-modal__copy">
@@ -762,11 +1128,11 @@ function GalleryDetailDialog({
           </button>
           <button className="secondary-action h-10" type="button" onClick={onReuse}>
             <RotateCcw className="size-4" aria-hidden="true" />
-            重新生成
+            {demoMode ? "登录后重跑" : "重新生成"}
           </button>
           <button className="secondary-action h-10 text-red-700 hover:text-red-800" disabled={deleting} type="button" onClick={onDelete}>
             {deleting ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Trash2 className="size-4" aria-hidden="true" />}
-            移除
+            {demoMode ? "登录管理" : "移除"}
           </button>
         </footer>
       </div>
@@ -900,6 +1266,10 @@ function previewUrlForWidth(previewUrls: Record<string, string> | undefined, pre
 }
 
 function authenticatedAssetUrl(url: string): string {
+  if (/^https?:\/\//iu.test(url)) {
+    return url;
+  }
+
   const token = getStoredAuthToken();
   if (!token) {
     return url;
@@ -912,6 +1282,36 @@ function authenticatedAssetUrl(url: string): string {
 function assetIdFromLocation(): string {
   const params = new URLSearchParams(window.location.search);
   return params.get("assetId")?.trim() || "";
+}
+
+function readPreviewOverlayFromWindowName(): GalleryPreviewOverlay | null {
+  if (!window.name.startsWith(BRAND_PREVIEW_WINDOW_NAME_PREFIX)) {
+    return null;
+  }
+
+  try {
+    return normalizePreviewOverlay(JSON.parse(window.name.slice(BRAND_PREVIEW_WINDOW_NAME_PREFIX.length)));
+  } catch {
+    return null;
+  }
+}
+
+function normalizePreviewOverlay(value: unknown): GalleryPreviewOverlay | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const payload = value as Partial<GalleryPreviewOverlay>;
+  const placement = payload.placement;
+  if (placement !== "top-left" && placement !== "top-right" && placement !== "bottom-left" && placement !== "bottom-right") {
+    return null;
+  }
+
+  return {
+    placement,
+    logoDataUrl: typeof payload.logoDataUrl === "string" ? payload.logoDataUrl : "",
+    text: typeof payload.text === "string" ? payload.text : ""
+  };
 }
 
 function modeLabel(mode: GalleryImageItem["mode"]): string {

@@ -1,21 +1,30 @@
-import { Copy, Download, ExternalLink, Globe, Package, ShieldCheck } from "lucide-react";
+import { Copy, Download, ExternalLink, Globe, Package, ShieldCheck, Video } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-const DEFAULT_ZIP_DOWNLOAD_URL = "https://imagen.neimou.com/downloads/kuajing-image-extension-prod-latest.zip";
-const RELEASE_MANIFEST_URL = "/downloads/kuajing-image-extension-prod-latest.json";
+const RELEASE_API_URL = "/api/extension-release";
+const INSTALL_VIDEO_URL = "https://player.bilibili.com/player.html?bvid=BV1D3R4BwEZt&page=1";
 
-interface ExtensionReleaseManifest {
-  version?: string;
-  latestDownloadUrl?: string;
-  downloadUrl?: string;
+interface ExtensionReleaseTarget {
+  latestDownloadUrl: string;
+  downloadUrl: string;
+  version: string;
+}
+
+interface ExtensionReleaseResponse {
+  prod: ExtensionReleaseTarget;
+}
+
+function browserFromUrl(): "chrome" | "edge" {
+  const browser = new URLSearchParams(window.location.search).get("browser");
+  return browser === "edge" ? "edge" : "chrome";
 }
 
 function extensionManagerUrl(browser: "chrome" | "edge"): string {
   return browser === "chrome" ? "chrome://extensions" : "edge://extensions";
 }
 
-function releaseDownloadUrl(manifest: ExtensionReleaseManifest): string {
-  const rawUrl = manifest.latestDownloadUrl || manifest.downloadUrl || DEFAULT_ZIP_DOWNLOAD_URL;
+function releaseDownloadUrl(manifest: ExtensionReleaseTarget): string {
+  const rawUrl = manifest.latestDownloadUrl || manifest.downloadUrl;
   const url = new URL(rawUrl, window.location.origin);
   if (manifest.version) {
     url.searchParams.set("v", manifest.version);
@@ -25,8 +34,8 @@ function releaseDownloadUrl(manifest: ExtensionReleaseManifest): string {
 
 export function InstallHelpApp() {
   const [copied, setCopied] = useState(false);
-  const [activeBrowser, setActiveBrowser] = useState<"chrome" | "edge">("chrome");
-  const [zipDownloadUrl, setZipDownloadUrl] = useState(DEFAULT_ZIP_DOWNLOAD_URL);
+  const [activeBrowser, setActiveBrowser] = useState<"chrome" | "edge">(() => browserFromUrl());
+  const [zipDownloadUrl, setZipDownloadUrl] = useState("");
   const extensionPage = useMemo(() => extensionManagerUrl(activeBrowser), [activeBrowser]);
 
   useEffect(() => {
@@ -34,17 +43,17 @@ export function InstallHelpApp() {
 
     async function loadReleaseManifest() {
       try {
-        const response = await fetch(`${RELEASE_MANIFEST_URL}?t=${Date.now()}`, { cache: "no-store" });
+        const response = await fetch(`${RELEASE_API_URL}?t=${Date.now()}`, { cache: "no-store" });
         if (!response.ok) {
           return;
         }
-        const manifest = (await response.json()) as ExtensionReleaseManifest;
+        const manifest = (await response.json()) as ExtensionReleaseResponse;
         if (!cancelled) {
-          setZipDownloadUrl(releaseDownloadUrl(manifest));
+          setZipDownloadUrl(releaseDownloadUrl(manifest.prod));
         }
       } catch {
         if (!cancelled) {
-          setZipDownloadUrl(DEFAULT_ZIP_DOWNLOAD_URL);
+          setZipDownloadUrl("");
         }
       }
     }
@@ -83,7 +92,7 @@ export function InstallHelpApp() {
             <h2>插件压缩包下载</h2>
             <p>始终指向当前生产版最新安装包。</p>
           </div>
-          <a className="install-download-button" href={zipDownloadUrl} target="_blank" rel="noreferrer">
+          <a className="install-download-button" href={zipDownloadUrl || "#"} target="_blank" rel="noreferrer">
             <Download size={16} />
             下载压缩包
           </a>
@@ -92,13 +101,32 @@ export function InstallHelpApp() {
         <div className="install-link-row">
           <div className="install-link">
             <span>ZIP 地址</span>
-            <code>{zipDownloadUrl}</code>
+            <code>{zipDownloadUrl || "正在加载..."}</code>
           </div>
           <button className="install-ghost-button" type="button" onClick={handleCopyLink}>
             <Copy size={16} />
             {copied ? "已复制" : "复制链接"}
           </button>
         </div>
+      </section>
+
+      <section className="install-video-card">
+        <div className="install-video-header">
+          <div className="install-step-title">
+            <Video size={18} />
+            安装视频
+          </div>
+          <p>跟着视频完成下载、解压、打开扩展管理页和加载目录。</p>
+        </div>
+        <iframe
+          className="install-video"
+          src={INSTALL_VIDEO_URL}
+          title="安装视频"
+          allow="fullscreen"
+          allowFullScreen
+          scrolling="no"
+          frameBorder="0"
+        />
       </section>
 
       <section className="install-browser-switcher">

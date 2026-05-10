@@ -7,7 +7,7 @@ const outputDir = resolve(rootDir, process.argv[2] || "downloads");
 const requestedTarget = process.argv[3] || "all";
 const extensionDir = resolve(rootDir, "apps/extension");
 const extensionPackage = JSON.parse(readFileSync(resolve(extensionDir, "package.json"), "utf8"));
-const version = extensionPackage.version || "0.0.0";
+const packageVersion = extensionPackage.version || "0.0.0";
 const publishedAt = new Date().toISOString();
 const releaseNotes = (process.env.EXTENSION_RELEASE_NOTES || "")
   .split(/\r?\n/u)
@@ -19,13 +19,11 @@ mkdirSync(outputDir, { recursive: true });
 const targets = [
   {
     name: "dev",
-    sourceDir: resolve(extensionDir, "dist-dev"),
-    outputFile: resolve(outputDir, `kuajing-image-extension-dev-v${version}.zip`)
+    sourceDir: resolve(extensionDir, "dist-dev")
   },
   {
     name: "prod",
-    sourceDir: resolve(extensionDir, "dist-prod"),
-    outputFile: resolve(outputDir, `kuajing-image-extension-prod-v${version}.zip`)
+    sourceDir: resolve(extensionDir, "dist-prod")
   }
 ];
 
@@ -153,24 +151,39 @@ function createZip(sourceDir, outputFile) {
   writeFileSync(outputFile, Buffer.concat([...localParts, ...centralParts, endRecord]));
 }
 
+function readBuiltManifest(sourceDir) {
+  try {
+    return JSON.parse(readFileSync(resolve(sourceDir, "manifest.json"), "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function versionForTarget(target) {
+  const manifestVersion = readBuiltManifest(target.sourceDir).version;
+  return typeof manifestVersion === "string" && manifestVersion.trim() ? manifestVersion.trim() : packageVersion;
+}
+
 for (const target of targets.filter((target) => requestedTarget === "all" || target.name === requestedTarget)) {
-  createZip(target.sourceDir, target.outputFile);
+  const version = versionForTarget(target);
+  const outputFile = resolve(outputDir, `kuajing-image-extension-${target.name}-v${version}.zip`);
+  createZip(target.sourceDir, outputFile);
   const latestZipFile = resolve(outputDir, `kuajing-image-extension-${target.name}-latest.zip`);
-  copyFileSync(target.outputFile, latestZipFile);
-  const bytes = readFileSync(target.outputFile);
+  copyFileSync(outputFile, latestZipFile);
+  const bytes = readFileSync(outputFile);
   const latestManifest = {
     target: target.name,
     version,
     publishedAt,
-    downloadUrl: `/downloads/${basename(target.outputFile)}`,
+    downloadUrl: `/downloads/${basename(outputFile)}`,
     latestDownloadUrl: `/downloads/${basename(latestZipFile)}`,
     installHelpUrl: "/install-help.html",
-    fileName: basename(target.outputFile),
+    fileName: basename(outputFile),
     sizeBytes: bytes.byteLength,
     sha256: createHash("sha256").update(bytes).digest("hex"),
     releaseNotes: releaseNotes.length > 0 ? releaseNotes : ["优化插件体验并修复已知问题。"]
   };
   writeFileSync(resolve(outputDir, `kuajing-image-extension-${target.name}-latest.json`), `${JSON.stringify(latestManifest, null, 2)}\n`);
-  const displayPath = relative(rootDir, target.outputFile);
+  const displayPath = relative(rootDir, outputFile);
   console.log(`${target.name}: ${displayPath}`);
 }

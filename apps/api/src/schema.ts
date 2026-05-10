@@ -22,6 +22,9 @@ export const users = mysqlTable(
     quotaUsed: bigint("quota_used", { mode: "number" }).notNull(),
     balanceCents: bigint("balance_cents", { mode: "number" }).notNull(),
     referralBalanceCents: bigint("referral_balance_cents", { mode: "number" }).notNull(),
+    invoicePaidCents: bigint("invoice_paid_cents", { mode: "number" }).notNull().default(0),
+    invoiceReservedCents: bigint("invoice_reserved_cents", { mode: "number" }).notNull().default(0),
+    invoiceIssuedCents: bigint("invoice_issued_cents", { mode: "number" }).notNull().default(0),
     inviteCode: shortText("invite_code", 64),
     inviterUserId: id("inviter_user_id"),
     storageQuotaBytes: bigint("storage_quota_bytes", { mode: "number" }).notNull(),
@@ -68,6 +71,52 @@ export const systemSettings = mysqlTable("system_settings", {
   createdAt: isoDate("created_at").notNull(),
   updatedAt: isoDate("updated_at").notNull()
 });
+
+export const helpCategories = mysqlTable(
+  "help_categories",
+  {
+    id: id("id").primaryKey(),
+    slug: shortText("slug", 128).notNull(),
+    name: shortText("name").notNull(),
+    description: text("description"),
+    audience: shortText("audience", 64),
+    sortOrder: int("sort_order").notNull(),
+    enabled: int("enabled").notNull(),
+    createdAt: isoDate("created_at").notNull(),
+    updatedAt: isoDate("updated_at").notNull()
+  },
+  (table) => ({
+    slugIdx: uniqueIndex("help_categories_slug_unique_idx").on(table.slug),
+    enabledSortIdx: index("help_categories_enabled_sort_idx").on(table.enabled, table.sortOrder)
+  })
+);
+
+export const helpArticles = mysqlTable(
+  "help_articles",
+  {
+    id: id("id").primaryKey(),
+    categoryId: id("category_id")
+      .notNull()
+      .references(() => helpCategories.id, { onDelete: "cascade" }),
+    slug: shortText("slug", 160).notNull(),
+    title: shortText("title").notNull(),
+    summary: text("summary"),
+    contentJson: longtext("content_json").notNull(),
+    coverImageUrl: text("cover_image_url"),
+    videoUrl: text("video_url"),
+    status: shortText("status", 32).notNull(),
+    featured: int("featured").notNull(),
+    sortOrder: int("sort_order").notNull(),
+    tagsJson: longtext("tags_json"),
+    createdAt: isoDate("created_at").notNull(),
+    updatedAt: isoDate("updated_at").notNull()
+  },
+  (table) => ({
+    slugIdx: uniqueIndex("help_articles_slug_unique_idx").on(table.slug),
+    categorySortIdx: index("help_articles_category_sort_idx").on(table.categoryId, table.sortOrder),
+    statusFeaturedIdx: index("help_articles_status_featured_idx").on(table.status, table.featured)
+  })
+);
 
 export const emailVerificationCodes = mysqlTable(
   "email_verification_codes",
@@ -194,6 +243,38 @@ export const billingOrders = mysqlTable(
     outTradeNoIdx: uniqueIndex("billing_orders_out_trade_no_unique_idx").on(table.outTradeNo),
     userCreatedAtIdx: index("billing_orders_user_created_at_idx").on(table.userId, table.createdAt),
     statusCreatedAtIdx: index("billing_orders_status_created_at_idx").on(table.status, table.createdAt)
+  })
+);
+
+export const invoiceApplications = mysqlTable(
+  "invoice_applications",
+  {
+    id: id("id").primaryKey(),
+    userId: id("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    invoiceType: shortText("invoice_type", 32).notNull(),
+    headerType: shortText("header_type", 32).notNull(),
+    title: shortText("title", 255).notNull(),
+    taxNumber: shortText("tax_number", 64),
+    invoiceContent: shortText("invoice_content", 255).notNull(),
+    amountCents: bigint("amount_cents", { mode: "number" }).notNull(),
+    email: shortText("email", 255).notNull(),
+    phone: shortText("phone", 32),
+    companyAddress: shortText("company_address", 255),
+    bankName: shortText("bank_name", 255),
+    bankAccount: shortText("bank_account", 255),
+    remark: text("remark"),
+    status: shortText("status", 32).notNull(),
+    handledByUserId: id("handled_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    handledAt: isoDate("handled_at"),
+    reviewNote: text("review_note"),
+    createdAt: isoDate("created_at").notNull(),
+    updatedAt: isoDate("updated_at").notNull()
+  },
+  (table) => ({
+    userCreatedAtIdx: index("invoice_applications_user_created_at_idx").on(table.userId, table.createdAt),
+    userStatusIdx: index("invoice_applications_user_status_idx").on(table.userId, table.status)
   })
 );
 
@@ -329,6 +410,7 @@ export const generationRecords = mysqlTable(
     modelProvider: shortText("model_provider", 64),
     modelDisplayName: shortText("model_display_name", 255),
     referenceAssetId: id("reference_asset_id").references(() => assets.id, { onDelete: "set null" }),
+    referenceMaskDataUrl: longtext("reference_mask_data_url"),
     createdAt: isoDate("created_at").notNull()
   },
   (table) => ({
@@ -349,12 +431,20 @@ export const generationOutputs = mysqlTable(
     status: shortText("status", 32).notNull(),
     assetId: id("asset_id").references(() => assets.id, { onDelete: "set null" }),
     error: text("error"),
+    publicGalleryEnabled: int("public_gallery_enabled").notNull().default(0),
+    publicGallerySortOrder: int("public_gallery_sort_order").notNull().default(0),
+    publicGalleryUpdatedAt: isoDate("public_gallery_updated_at"),
     createdAt: isoDate("created_at").notNull()
   },
   (table) => ({
     workspaceCreatedAtIdx: index("generation_outputs_workspace_created_at_idx").on(table.workspaceId, table.createdAt),
     generationIdx: index("generation_outputs_generation_id_idx").on(table.generationId),
-    assetIdx: index("generation_outputs_asset_id_idx").on(table.assetId)
+    assetIdx: index("generation_outputs_asset_id_idx").on(table.assetId),
+    publicGalleryIdx: index("generation_outputs_public_gallery_idx").on(
+      table.publicGalleryEnabled,
+      table.publicGallerySortOrder,
+      table.createdAt
+    )
   })
 );
 

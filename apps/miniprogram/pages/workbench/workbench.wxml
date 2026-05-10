@@ -55,8 +55,8 @@
     </view>
 
     <view class="field">
-      <text class="field-label">商品标题</text>
-      <input class="form-input" value="{{title}}" data-field="title" bindinput="onInput" placeholder="例如：真丝方巾 / 便携榨汁杯" />
+      <text class="field-label">{{mode === 'single-poster' || mode === 'category-kit' ? '商品标题（可选）' : '商品标题'}}</text>
+      <input class="form-input" value="{{title}}" data-field="title" bindinput="onInput" placeholder="{{mode === 'single-poster' || mode === 'category-kit' ? '可留空，由模型依据产品图和描述归纳' : '例如：便携榨汁杯 / 雪地靴'}}" />
     </view>
     <view class="field">
       <text class="field-label">商品描述</text>
@@ -85,8 +85,8 @@
   </view>
 
   <view class="panel">
-    <view class="panel-title">平台与市场</view>
-    <view class="two-fields">
+    <view class="panel-title">{{mode === 'text-translation' ? '翻译设置' : '平台与市场'}}</view>
+    <view wx:if="{{mode !== 'text-translation'}}" class="two-fields">
       <view class="field">
         <text class="field-label">平台</text>
         <picker range="{{platformLabels}}" value="{{platformIndex}}" bindchange="onPlatformChange">
@@ -118,12 +118,12 @@
     <view wx:if="{{mode === 'category-kit'}}" class="category-kit-card">
       <view class="kit-top">
         <view>
-          <view class="kit-label">当前品类方案</view>
-          <view class="kit-title">{{selectedCategoryTitle}}套图生产</view>
+          <view class="kit-label">自动套图方案</view>
+          <view class="kit-title">{{selectedCategoryTitle}}</view>
         </view>
-        <view class="kit-badge">默认</view>
+        <view class="kit-badge">{{activeSceneCount}} 张</view>
       </view>
-      <view class="kit-copy">已内置 Allegro/电商 Listing Image Kit：白底主图、造型主图、面料细节、尺寸说明、佩戴方式、生活场景等。</view>
+      <view class="kit-copy">上传 1-3 张产品图并填写一段描述，系统会按当前品类拆解整体、细节、卖点、规格、包装、用法、场景和保障图。</view>
       <view class="category-picker">
         <view wx:for="{{categoryKits}}" wx:key="id" class="category-option {{item.active ? 'active' : ''}}" bindtap="selectCategory" data-id="{{item.id}}">
           <view>
@@ -179,9 +179,9 @@
           </picker>
         </view>
         <view class="field">
-          <text class="field-label">每场景数量</text>
-          <picker range="{{countLabels}}" value="{{countIndex}}" bindchange="onCountChange">
-            <view class="select-box">{{countLabels[countIndex]}}</view>
+          <text class="field-label">{{mode === 'single-poster' || mode === 'category-kit' ? '输出张数' : '每场景数量'}}</text>
+          <picker disabled="{{mode === 'single-poster' || mode === 'category-kit'}}" range="{{countLabels}}" value="{{mode === 'single-poster' || mode === 'category-kit' ? 0 : countIndex}}" bindchange="onCountChange">
+            <view class="select-box {{mode === 'single-poster' || mode === 'category-kit' ? 'disabled' : ''}}">{{mode === 'single-poster' || mode === 'category-kit' ? '1 张' : countLabels[countIndex]}}</view>
           </picker>
         </view>
       </view>

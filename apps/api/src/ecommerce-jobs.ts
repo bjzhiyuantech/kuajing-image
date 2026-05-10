@@ -1,6 +1,8 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import type { RequestTenant } from "./auth-context.js";
+import { buildAssetCdnPreviewUrls, buildAssetCdnUrl } from "./asset-cdn.js";
 import type {
+  EcommerceCategoryKitPlanItem,
   EcommerceBatchGenerateResponse,
   EcommerceJobListResponse,
   EcommerceJobSummary,
@@ -10,6 +12,7 @@ import type {
   EcommerceSceneTemplateId,
   EcommerceTextLanguage,
   EcommerceStatsResponse,
+  GeneratedAsset,
   GenerationRecord,
   GenerationStatus,
   ImageQuality,
@@ -19,7 +22,7 @@ import type {
   StylePresetId
 } from "./contracts.js";
 import { db } from "./database.js";
-import { ecommerceBatchJobs } from "./schema.js";
+import { assets, ecommerceBatchJobs } from "./schema.js";
 
 export type PersistedEcommerceBatchJobStatus = EcommerceBatchGenerateResponse["status"];
 
@@ -31,6 +34,8 @@ export interface PersistedEcommerceBatchRequest {
   allowTextRecreation?: boolean;
   removeWatermarkAndLogo?: boolean;
   sceneTemplateIds: EcommerceSceneTemplateId[];
+  categoryKitPlannerPending?: boolean;
+  plannedImages?: EcommerceCategoryKitPlanItem[];
   sourcePageUrl?: string;
   size: ImageSize;
   stylePresetId: StylePresetId;
@@ -52,13 +57,17 @@ export interface CreateEcommerceBatchJobInput {
 export interface UpdateEcommerceBatchJobInput {
   status?: PersistedEcommerceBatchJobStatus;
   message?: string;
+  productTitle?: string;
+  totalScenes?: number;
   completedScenes?: number;
   records?: GenerationRecord[];
+  input?: PersistedEcommerceBatchRequest;
   completedAt?: string;
 }
 
 export async function createEcommerceBatchJob(input: CreateEcommerceBatchJobInput): Promise<EcommerceBatchGenerateResponse> {
   const records: GenerationRecord[] = [];
+  const totalScenes = getEcommerceBatchSceneCount(input.input);
   await db.insert(ecommerceBatchJobs).values({
     id: input.jobId,
     workspaceId: input.tenant.workspaceId,
@@ -68,7 +77,7 @@ export async function createEcommerceBatchJob(input: CreateEcommerceBatchJobInpu
     productTitle: input.input.product.title,
     platform: input.input.platform,
     market: input.input.market,
-    totalScenes: input.input.sceneTemplateIds.length,
+    totalScenes,
     completedScenes: 0,
     succeededScenes: 0,
     failedScenes: 0,
@@ -83,12 +92,16 @@ export async function createEcommerceBatchJob(input: CreateEcommerceBatchJobInpu
     jobId: input.jobId,
     status: "pending",
     message: input.message,
-    totalScenes: input.input.sceneTemplateIds.length,
+    totalScenes,
     completedScenes: 0,
     createdAt: input.now,
     updatedAt: input.now,
     records
   };
+}
+
+export function getEcommerceBatchSceneCount(input: PersistedEcommerceBatchRequest): number {
+  return input.plannedImages?.length || input.sceneTemplateIds.length;
 }
 
 function toStoredRequest(input: PersistedEcommerceBatchRequest): Record<string, unknown> {
@@ -120,8 +133,17 @@ export async function updateEcommerceBatchJob(
   if (patch.message) {
     update.message = patch.message;
   }
+  if (patch.productTitle) {
+    update.productTitle = patch.productTitle;
+  }
+  if (typeof patch.totalScenes === "number") {
+    update.totalScenes = patch.totalScenes;
+  }
   if (typeof patch.completedScenes === "number") {
     update.completedScenes = patch.completedScenes;
+  }
+  if (patch.input) {
+    update.requestJson = JSON.stringify(toStoredRequest(patch.input));
   }
   if (records) {
     update.recordsJson = JSON.stringify(records);
@@ -154,7 +176,7 @@ export async function getEcommerceBatchJob(
     )
     .limit(1);
 
-  return row ? toBatchJobResponse(row) : undefined;
+  return row ? toBatchJobResponse(tenant, row) : undefined;
 }
 
 export async function listEcommerceBatchJobs(tenant: RequestTenant, limit = 50): Promise<EcommerceJobListResponse> {
@@ -207,7 +229,8 @@ export async function getEcommerceStats(tenant: RequestTenant): Promise<Ecommerc
   return stats;
 }
 
-function toBatchJobResponse(row: typeof ecommerceBatchJobs.$inferSelect): EcommerceBatchGenerateResponse {
+async function toBatchJobResponse(tenant: RequestTenant, row: typeof ecommerceBatchJobs.$inferSelect): Promise<EcommerceBatchGenerateResponse> {
+  const records = await hydrateRecordAssetCdnFields(tenant, parseRecords(row.recordsJson));
   return {
     jobId: row.id,
     status: row.status as PersistedEcommerceBatchJobStatus,
@@ -217,7 +240,76 @@ function toBatchJobResponse(row: typeof ecommerceBatchJobs.$inferSelect): Ecomme
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     completedAt: row.completedAt ?? undefined,
-    records: parseRecords(row.recordsJson)
+    records
+  };
+}
+
+async function hydrateRecordAssetCdnFields(tenant: RequestTenant, records: GenerationRecord[]): Promise<GenerationRecord[]> {
+  const assetIds = Array.from(
+    new Set(
+      records.flatMap((record) =>
+        record.outputs.flatMap((output) => {
+          const assetId = output.asset?.id;
+          return assetId ? [assetId] : [];
+        })
+      )
+    )
+  );
+
+  if (assetIds.length === 0) {
+    return records;
+  }
+
+  const rows = await db
+    .select()
+    .from(assets)
+    .where(and(eq(assets.workspaceId, tenant.workspaceId), inArray(assets.id, assetIds)));
+  const assetById = new Map(rows.map((asset) => [asset.id, asset]));
+
+  return records.map((record) => ({
+    ...record,
+    outputs: record.outputs.map((output) => {
+      if (!output.asset) {
+        return output;
+      }
+
+      const currentAsset = assetById.get(output.asset.id);
+      if (!currentAsset) {
+        return output;
+      }
+
+      return {
+        ...output,
+        asset: {
+          ...output.asset,
+          ...toCurrentAssetCdnFields(currentAsset)
+        }
+      };
+    })
+  }));
+}
+
+function toCurrentAssetCdnFields(asset: typeof assets.$inferSelect): Pick<GeneratedAsset, "cdnUrl" | "cdnPreviewUrls" | "cloud"> {
+  return {
+    cdnUrl: buildAssetCdnUrl({
+      objectKey: asset.cloudObjectKey,
+      provider: asset.cloudProvider,
+      status: asset.cloudStatus
+    }),
+    cdnPreviewUrls: buildAssetCdnPreviewUrls({
+      objectKey: asset.cloudObjectKey,
+      provider: asset.cloudProvider,
+      status: asset.cloudStatus
+    }),
+    cloud:
+      (asset.cloudProvider === "cos" || asset.cloudProvider === "oss") && (asset.cloudStatus === "uploaded" || asset.cloudStatus === "failed")
+        ? {
+            provider: asset.cloudProvider,
+            status: asset.cloudStatus,
+            lastError: asset.cloudError ?? undefined,
+            uploadedAt: asset.cloudUploadedAt ?? undefined
+          }
+        : undefined
   };
 }
 

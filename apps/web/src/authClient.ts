@@ -85,17 +85,17 @@ export async function authFetch(input: RequestInfo | URL, init: RequestInit = {}
   return response;
 }
 
-export async function loginWithPassword(email: string, password: string): Promise<AuthSession> {
+export async function loginWithPassword(account: string, password: string): Promise<AuthSession> {
   const response = await fetch("/api/auth/login", {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({ email: email.trim(), password })
+    body: JSON.stringify({ account: account.trim(), password })
   });
 
   if (!response.ok) {
-    throw new Error(await readApiError(response, "登录失败，请检查邮箱和密码。"));
+    throw new Error(await readApiError(response, "登录失败，请检查手机号/邮箱和密码。"));
   }
 
   return parseAuthSession(await response.json());
@@ -253,11 +253,11 @@ export function parseAuthUser(value: unknown): AuthUser {
   }
 
   return {
-    id: stringFrom(value.id) || stringFrom(value.userId) || stringFrom(value.email) || "current-user",
-    email: stringFrom(value.email) || "unknown@example.com",
+    id: stringFrom(value.id) || stringFrom(value.userId) || stringFrom(value.email) || stringFrom(value.phone ?? value.mobile) || "current-user",
+    email: stringFrom(value.email),
     phone: stringFrom(value.phone ?? value.mobile),
     phoneVerifiedAt: stringFrom(value.phoneVerifiedAt ?? value.phone_verified_at),
-    displayName: stringFrom(value.displayName) || stringFrom(value.name) || stringFrom(value.email) || "未命名用户",
+    displayName: stringFrom(value.displayName) || stringFrom(value.name) || stringFrom(value.email) || stringFrom(value.phone ?? value.mobile) || "未命名用户",
     role: stringFrom(value.role) || "user",
     planId: stringFrom(value.planId ?? value.plan_id),
     planName: stringFrom(value.planName ?? value.plan_name ?? (isRecord(value.plan) ? value.plan.name : undefined)),

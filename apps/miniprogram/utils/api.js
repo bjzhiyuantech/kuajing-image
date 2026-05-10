@@ -1,7 +1,16 @@
 const app = getApp();
 
+function resolveDefaultBaseUrl() {
+  try {
+    const envVersion = wx.getAccountInfoSync().miniProgram.envVersion;
+    return envVersion === "release" ? "https://ai.neimou.com" : "https://dev.neimou.com";
+  } catch (error) {
+    return "https://dev.neimou.com";
+  }
+}
+
 function getBaseUrl() {
-  return app.globalData.apiBaseUrl || "https://imagen.neimou.com";
+  return app.globalData.apiBaseUrl || resolveDefaultBaseUrl();
 }
 
 function setBaseUrl(value) {
@@ -97,6 +106,11 @@ function wechatMiniAppLogin(code) {
   return request("/api/auth/wechat/miniapp/login", {
     method: "POST",
     data: { code }
+  }).then((result) => {
+    if (result && result.status === "bound" && result.session) {
+      setSession(result.session);
+    }
+    return result;
   });
 }
 
@@ -162,6 +176,10 @@ function getGallery() {
   return request("/api/gallery");
 }
 
+function getInvoiceApplications() {
+  return request("/api/billing/invoice/applications");
+}
+
 function createBatchJob(payload) {
   return request("/api/ecommerce/images/batch-generate", {
     method: "POST",
@@ -170,14 +188,23 @@ function createBatchJob(payload) {
   });
 }
 
+function applyInvoiceApplication(payload) {
+  return request("/api/billing/invoice/applications", {
+    method: "POST",
+    data: payload
+  });
+}
+
 module.exports = {
   clearSession,
+  applyInvoiceApplication,
   createBatchJob,
   getBaseUrl,
   getConfig,
   getGallery,
   getJob,
   getJobs,
+  getInvoiceApplications,
   getStats,
   getWechatMiniAppConfig,
   getToken,

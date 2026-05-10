@@ -555,7 +555,12 @@ async function applyPaidOrder(
       balanceAfter = balanceBefore + Number(order.amountCents ?? 0);
       await tx
         .update(users)
-        .set({ balanceCents: balanceAfter, currency: order.currency, updatedAt: now })
+        .set({
+          balanceCents: balanceAfter,
+          invoicePaidCents: Number(user.invoicePaidCents ?? 0) + Number(order.amountCents ?? 0),
+          currency: order.currency,
+          updatedAt: now
+        })
         .where(eq(users.id, user.id));
     } else if (order.type === "plan_purchase") {
       quotaAfter = 0;
@@ -567,6 +572,7 @@ async function applyPaidOrder(
           quotaTotal: Number(order.imageQuota ?? 0),
           quotaUsed: 0,
           storageQuotaBytes: Number(order.storageQuotaBytes ?? 0),
+          invoicePaidCents: Number(user.invoicePaidCents ?? 0) + Number(order.amountCents ?? 0),
           currency: order.currency,
           updatedAt: now
         })

@@ -1,5 +1,7 @@
 export {
   CUSTOM_SIZE_PRESET_ID,
+  ECOMMERCE_AUTO_CATEGORY_KIT_SCENE_IDS,
+  ECOMMERCE_DETAIL_CATEGORY_KIT_SCENE_IDS,
   ECOMMERCE_SCENE_TEMPLATES,
   ECOMMERCE_MARKETS,
   ECOMMERCE_PLATFORMS,
@@ -19,12 +21,65 @@ export {
   validateSceneImageSize
 } from "@gpt-image-canvas/shared";
 
+export type InvoiceApplicationStatus = "pending" | "processing" | "issued" | "rejected";
+
+export interface InvoiceApplicationProfile {
+  headerType: "company" | "personal";
+  title: string;
+  taxNumber?: string;
+  invoiceContent: string;
+  amountCents: number;
+  email: string;
+  phone?: string;
+  companyAddress?: string;
+  bankName?: string;
+  bankAccount?: string;
+  remark?: string;
+}
+
+export interface InvoiceApplicationRecord extends InvoiceApplicationProfile {
+  id: string;
+  userId?: string;
+  userEmail?: string;
+  userDisplayName?: string;
+  invoiceType: "electronic";
+  status: InvoiceApplicationStatus;
+  handledByUserId?: string;
+  handledAt?: string;
+  reviewNote?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface InvoiceSummary {
+  currency: string;
+  paidAmountCents: number;
+  issuedAmountCents: number;
+  reservedAmountCents: number;
+  availableAmountCents: number;
+  requestableAmountCents: number;
+}
+
+export interface InvoiceApplicationsResponse {
+  summary: InvoiceSummary;
+  profile?: InvoiceApplicationRecord;
+  applications: InvoiceApplicationRecord[];
+}
+
+export interface ApplyInvoiceRequest extends InvoiceApplicationProfile {}
+
+export interface UpdateInvoiceApplicationRequest {
+  status: InvoiceApplicationStatus;
+  reviewNote?: string;
+}
+
 export type {
   AppConfig,
   AdminAssetItem,
   AdminAssetsResponse,
   AdminAlipayConfigResponse,
   AdminBillingSettingsResponse,
+  AdminHelpCenterResponse,
   AdminInviteRewardSettingsResponse,
   AdminAdjustBalanceRequest,
   AdminPlansResponse,
@@ -32,6 +87,7 @@ export type {
   AdminWechatMiniAppConfigResponse,
   AdminUserItem,
   AdminUsersResponse,
+  BrandOverlayPlacement,
   AssetCloudUploadStatus,
   AuthMeResponse,
   AuthResponse,
@@ -44,9 +100,16 @@ export type {
   BillingSummaryResponse,
   BillingTransaction,
   BillingTransactionsResponse,
+  CategoryKitPlannerConfigEntry,
   CloudStorageProvider,
+  CategoryKitPlannerConfigResponse,
+  CategoryKitPlannerModelRole,
   EcommerceBatchGenerateRequest,
   EcommerceBatchGenerateResponse,
+  EcommerceCategoryKitPlanItem,
+  EcommerceCategoryKitPlanRequest,
+  EcommerceCategoryKitPlanResponse,
+  EcommerceGenerationConcurrencyConfigResponse,
   EcommerceJobListResponse,
   EcommerceJobSummary,
   EcommerceMarket,
@@ -56,6 +119,11 @@ export type {
   EcommerceTextLanguage,
   EcommerceStatsResponse,
   EditImageRequest,
+  DemoCanvasConfigResponse,
+  DemoCanvasExample,
+  DemoCanvasAssetUploadResponse,
+  ExtensionReleaseConfig,
+  ExtensionReleaseTargetConfig,
   GenerateImageRequest,
   GeneratedAsset,
   GeneratedAssetCloudInfo,
@@ -66,6 +134,12 @@ export type {
   GenerationRecord,
   GenerationResponse,
   GenerationStatus,
+  HelpArticle,
+  HelpArticleStatus,
+  HelpAssetUploadResponse,
+  HelpCategory,
+  HelpCenterResponse,
+  HelpContentBlock,
   ImageMode,
   ImageQuality,
   ImageSize,
@@ -83,6 +157,12 @@ export type {
   InviteRewardSettings,
   SaveAlipayConfigRequest,
   SaveBillingSettingsRequest,
+  SaveCategoryKitPlannerConfigEntry,
+  SaveCategoryKitPlannerConfigRequest,
+  SaveEcommerceGenerationConcurrencyConfigRequest,
+  SaveDemoCanvasConfigRequest,
+  SaveHelpArticleRequest,
+  SaveHelpCategoryRequest,
   SaveInviteRewardSettingsRequest,
   SaveStorageConfigRequest,
   SaveWechatMiniAppConfigRequest,

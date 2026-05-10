@@ -14,7 +14,8 @@ Page({
     allowBindExistingAccount: true,
     allowRegisterNewUser: true,
     bindMethod: "existing",
-    promptCompleteProfile: false
+    promptCompleteProfile: false,
+    acceptedAgreements: false
   },
 
   onLoad() {
@@ -46,6 +47,26 @@ Page({
     this.setData({ displayName: event.detail.value });
   },
 
+  onAgreementChange(event) {
+    this.setData({ acceptedAgreements: event.detail.value.includes("accepted") });
+  },
+
+  openUserAgreement() {
+    wx.navigateTo({ url: "/pages/agreement/agreement" });
+  },
+
+  openPrivacyAgreement() {
+    wx.navigateTo({ url: "/pages/privacy/privacy" });
+  },
+
+  ensureAgreementsAccepted() {
+    if (this.data.acceptedAgreements) {
+      return true;
+    }
+    wx.showToast({ title: "请先阅读并勾选用户协议和隐私协议", icon: "none" });
+    return false;
+  },
+
   toggleMode() {
     this.setData({ mode: this.data.mode === "login" ? "register" : "login" });
   },
@@ -56,6 +77,10 @@ Page({
   },
 
   async onSubmit() {
+    if (!this.ensureAgreementsAccepted()) {
+      return;
+    }
+
     if (this.data.loginMode === "wechat") {
       if (!this.data.wechatConfig || this.data.wechatConfig.enabled !== true) {
         wx.showToast({ title: "微信登录暂未启用", icon: "none" });
@@ -130,6 +155,10 @@ Page({
   },
 
   async bindExistingAccount() {
+    if (!this.ensureAgreementsAccepted()) {
+      return;
+    }
+
     const email = this.data.email.trim();
     const password = this.data.password;
     if (!email || !password) {
@@ -149,6 +178,10 @@ Page({
   },
 
   async registerNewUser() {
+    if (!this.ensureAgreementsAccepted()) {
+      return;
+    }
+
     const displayName = this.data.displayName.trim() || "微信用户";
     const email = this.data.email.trim();
     this.setData({ loading: true });

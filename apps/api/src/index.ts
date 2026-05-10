@@ -27,6 +27,7 @@ import {
   updateAuthProfile,
   type AuthSession
 } from "./auth-service.js";
+import { getExtensionReleaseConfig, saveExtensionReleaseConfig } from "./extension-release.js";
 import { hashPassword } from "./auth-crypto.js";
 import {
   GENERATION_COUNTS,
@@ -47,12 +48,22 @@ import {
   type AdminPlansResponse,
   type AdminStatsResponse,
   type AdminUsersResponse,
+  type CategoryKitPlannerConfigResponse,
+  type EcommerceGenerationConcurrencyConfigResponse,
   type SaveAlipayConfigRequest,
   type SaveBillingSettingsRequest,
+  type SaveCategoryKitPlannerConfigRequest,
+  type SaveEcommerceGenerationConcurrencyConfigRequest,
+  type SaveDemoCanvasConfigRequest,
+  type UpdateInvoiceApplicationRequest,
+  type SaveHelpArticleRequest,
+  type SaveHelpCategoryRequest,
   type SaveInviteRewardSettingsRequest,
   type SaveWechatMiniAppConfigRequest,
+  type ApplyInvoiceRequest,
   type EcommerceBatchGenerateRequest,
   type EcommerceBatchGenerateResponse,
+  type EcommerceCategoryKitPlanItem,
   type EcommerceJobListResponse,
   type EcommerceStatsResponse,
   type EcommerceMarket,
@@ -60,6 +71,7 @@ import {
   type EcommerceProductBrief,
   type EcommerceSceneTemplateId,
   type EcommerceTextLanguage,
+  type BrandOverlayPlacement,
   type GenerationCount,
   type ImageQuality,
   type ImageSize,
@@ -67,6 +79,8 @@ import {
   type Plan,
   type ReferenceImageInput,
   type SaveStorageConfigRequest,
+  type ExtensionReleaseConfig,
+  type ExtensionReleaseTargetConfig,
   type StylePresetId
 } from "./contracts.js";
 import { closeDatabase, ensureTenant, initializeDatabase } from "./database.js";
@@ -89,8 +103,17 @@ import {
   saveAlipayConfig,
   saveBillingSettings
 } from "./billing.js";
+import { DemoCanvasAssetError, uploadDemoCanvasAsset } from "./demo-canvas-assets.js";
+import { getAdminDemoCanvasConfig, getDemoCanvasConfig, saveDemoCanvasConfig } from "./demo-canvas-config.js";
+import {
+  InvoiceError,
+  applyForInvoice,
+  getInvoiceApplications,
+  listAdminInvoiceApplications,
+  updateInvoiceApplication
+} from "./invoice-service.js";
 import { EmailError, getSmtpSettings, saveSmtpSettings, sendRegisterEmailCode } from "./email-service.js";
-import { SmsError, getAliyunSmsSettings, saveAliyunSmsSettings, sendBindPhoneSmsCode, sendRegisterSmsCode } from "./sms-service.js";
+import { SmsError, getAliyunSmsSettings, normalizePhone, saveAliyunSmsSettings, sendBindPhoneSmsCode, sendRegisterSmsCode } from "./sms-service.js";
 import {
   ProviderError,
   type EditImageProviderInput,
@@ -105,8 +128,18 @@ import {
   type ImageModelConfigEntry
 } from "./image-model-config.js";
 import {
-  getStoredAssetFile,
+  generateCategoryKitPlan,
+  getCategoryKitPlannerConfig,
+  saveCategoryKitPlannerConfig
+} from "./category-kit-planner.js";
+import {
+  getEcommerceGenerationConcurrencyConfig,
+  initializeEcommerceGenerationConcurrency,
+  saveEcommerceGenerationConcurrencyConfig
+} from "./ecommerce-generation-concurrency.js";
+import {
   readStoredAsset,
+  saveCanvasAsset,
   runReferenceImageGeneration,
   runReferenceImageGenerationWithFallback,
   runTextToImageGeneration,
@@ -120,7 +153,17 @@ import {
   listEcommerceBatchJobs,
   updateEcommerceBatchJob
 } from "./ecommerce-jobs.js";
-import { deleteAdminGalleryOutput, deleteGalleryOutput, getAdminGalleryImages, getGalleryImages, getProjectState, saveProjectSnapshot } from "./project-store.js";
+import {
+  deleteAdminGalleryOutput,
+  deleteGalleryOutput,
+  getAdminGalleryImages,
+  getGalleryImages,
+  getProjectState,
+  getPublicGalleryAssetTenant,
+  getPublicGalleryImages,
+  saveProjectSnapshot,
+  updateAdminGalleryPublicStatus
+} from "./project-store.js";
 import { planExpiryFrom, resetExpiredUserPlans } from "./plan-expiration.js";
 import {
   getInviteRewardSettings,
@@ -131,6 +174,18 @@ import {
 import { runtimePaths, serverConfig } from "./runtime.js";
 import { assets, ecommerceBatchJobs, subscriptionPlans, users, workspaceMembers, workspaces } from "./schema.js";
 import { getStorageConfig, saveStorageConfig, testStorageConfig } from "./storage-config.js";
+import {
+  HelpError,
+  createHelpArticle,
+  createHelpCategory,
+  deleteHelpArticle,
+  deleteHelpCategory,
+  getAdminHelpCenter,
+  getHelpCenter,
+  updateHelpArticle,
+  updateHelpCategory
+} from "./help-service.js";
+import { HelpAssetError, uploadHelpCenterAsset } from "./help-assets.js";
 
 const MAX_PROJECT_SNAPSHOT_BYTES = 100 * 1024 * 1024;
 const MAX_PROJECT_NAME_LENGTH = 120;
@@ -139,7 +194,6 @@ const MAX_PLAN_DESCRIPTION_LENGTH = 1000;
 const MAX_CURRENCY_LENGTH = 16;
 const DEFAULT_ADMIN_PLAN_ID = "free";
 const DEFAULT_ADMIN_STORAGE_QUOTA_BYTES = 1024 * 1024 * 1024;
-const ECOMMERCE_BATCH_SCENE_CONCURRENCY = 3;
 
 interface ProjectPayload {
   name?: string;
@@ -155,6 +209,8 @@ type ResolvedEcommerceBatchGenerateRequest = Omit<
   quality: ImageQuality;
   size: ImageSize;
   stylePresetId: StylePresetId;
+  categoryKitPlannerPending?: boolean;
+  plannedImages?: EcommerceCategoryKitPlanItem[];
 };
 
 interface EcommerceBatchJob {
@@ -179,6 +235,18 @@ app.onError((error, c) => {
   }
   if (error instanceof BillingError) {
     return c.json(errorResponse(error.code, error.message), error.status as 400 | 401 | 402 | 403 | 404 | 409 | 500);
+  }
+  if (error instanceof InvoiceError) {
+    return c.json(errorResponse(error.code, error.message), error.status as 400 | 401 | 402 | 403 | 404 | 409 | 500);
+  }
+  if (error instanceof HelpError) {
+    return c.json(errorResponse(error.code, error.message), error.status as 400 | 401 | 403 | 404 | 409 | 500);
+  }
+  if (error instanceof HelpAssetError) {
+    return c.json(errorResponse(error.code, error.message), error.status as 400 | 401 | 403 | 404 | 409 | 413 | 500 | 502);
+  }
+  if (error instanceof DemoCanvasAssetError) {
+    return c.json(errorResponse(error.code, error.message), error.status as 400 | 401 | 403 | 404 | 409 | 413 | 500 | 502);
   }
 
   console.error(error);
@@ -213,6 +281,61 @@ app.get("/api/config", async (c) => {
   };
 
   return c.json(config);
+});
+
+app.get("/api/extension-release", async (c) => c.json(await getExtensionReleaseConfig()));
+
+app.get("/api/help", async (c) => c.json(await getHelpCenter()));
+
+app.get("/api/public/demo-canvas", async (c) => c.json(await getDemoCanvasConfig()));
+
+app.get("/api/public/gallery", async (c) => c.json(await getPublicGalleryImages()));
+
+app.get("/api/public/assets/:id/preview", async (c) => {
+  const parsedWidth = parsePreviewWidth(c.req.query("width"));
+  if (!parsedWidth.ok) {
+    return c.json(errorResponse(parsedWidth.code, parsedWidth.message), 400);
+  }
+
+  const tenant = await getPublicGalleryAssetTenant(c.req.param("id"));
+  if (!tenant) {
+    return c.json(errorResponse("not_found", "找不到公开展示的图像资源。"), 404);
+  }
+
+  const preview = await readStoredAssetPreview(tenant, c.req.param("id"), parsedWidth.width);
+  if (!preview) {
+    return c.json(errorResponse("not_found", "找不到公开展示的图像资源。"), 404);
+  }
+
+  return new Response(new Uint8Array(preview.bytes), {
+    status: 200,
+    headers: {
+      "Cache-Control": "public, max-age=31536000, immutable",
+      "Content-Disposition": `inline; filename="${downloadFileName(c.req.param("id"))}-${preview.width}.webp"`,
+      "Content-Type": "image/webp"
+    }
+  });
+});
+
+app.get("/api/public/assets/:id", async (c) => {
+  const tenant = await getPublicGalleryAssetTenant(c.req.param("id"));
+  if (!tenant) {
+    return c.json(errorResponse("not_found", "找不到公开展示的图像资源。"), 404);
+  }
+
+  const asset = await readStoredAsset(tenant, c.req.param("id"));
+  if (!asset) {
+    return c.json(errorResponse("not_found", "找不到公开展示的图像资源。"), 404);
+  }
+
+  return new Response(new Uint8Array(asset.bytes), {
+    status: 200,
+    headers: {
+      "Cache-Control": "public, max-age=31536000, immutable",
+      "Content-Disposition": `inline; filename="${asset.file.fileName}"`,
+      "Content-Type": asset.file.mimeType
+    }
+  });
 });
 
 app.post("/api/auth/register", async (c) => {
@@ -477,11 +600,56 @@ app.delete("/api/gallery/:outputId", async (c) => {
   });
 });
 
+app.put("/api/admin/gallery/:outputId/public", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+  const parsed = parsePublicGalleryPayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  const item = await updateAdminGalleryPublicStatus(c.req.param("outputId"), parsed.value);
+  if (!item) {
+    return c.json(errorResponse("not_found", "找不到可公开展示的 Gallery 图片记录。"), 404);
+  }
+
+  return c.json({ item });
+});
+
 app.get("/api/storage/config", async (c) => {
-  return c.json(await getStorageConfig(await requestTenant(c)));
+  return c.json(errorResponse("forbidden", "云存储由后台统一配置。"), 403);
 });
 
 app.put("/api/storage/config", async (c) => {
+  return c.json(errorResponse("forbidden", "云存储由后台统一配置。"), 403);
+});
+
+app.post("/api/storage/config/test", async (c) => {
+  return c.json(errorResponse("forbidden", "云存储由后台统一配置。"), 403);
+});
+
+app.get("/api/admin/storage/config", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return c.json(await getStorageConfig());
+});
+
+app.put("/api/admin/storage/config", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
   const payload = await readJson(c.req.raw);
   if (!payload.ok) {
     return c.json(payload.error, 400);
@@ -493,13 +661,18 @@ app.put("/api/storage/config", async (c) => {
   }
 
   try {
-    return c.json(await saveStorageConfig(await requestTenant(c), parsed.value));
+    return c.json(await saveStorageConfig(undefined, parsed.value));
   } catch (error) {
     return c.json(errorResponse("storage_config_error", errorToMessage(error)), 400);
   }
 });
 
-app.post("/api/storage/config/test", async (c) => {
+app.post("/api/admin/storage/config/test", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
   const payload = await readJson(c.req.raw);
   if (!payload.ok) {
     return c.json(payload.error, 400);
@@ -510,7 +683,7 @@ app.post("/api/storage/config/test", async (c) => {
     return c.json(parsed.error, 400);
   }
 
-  return c.json(await testStorageConfig(await requestTenant(c), parsed.value));
+  return c.json(await testStorageConfig(undefined, parsed.value));
 });
 
 app.get("/api/assets/:id/preview", async (c) => {
@@ -564,6 +737,36 @@ app.get("/api/assets/:id", async (c) => {
       "Content-Type": asset.file.mimeType
     }
   });
+});
+
+app.post("/api/assets", async (c) => {
+  let formData: FormData;
+  try {
+    formData = await c.req.raw.formData();
+  } catch {
+    return c.json(errorResponse("invalid_request_body", "无法读取上传文件。"), 400);
+  }
+
+  const file = formData.get("file");
+  const width = Number(formData.get("width"));
+  const height = Number(formData.get("height"));
+  if (!(file instanceof File) || !file.type.startsWith("image/")) {
+    return c.json(errorResponse("invalid_asset", "请上传有效的图片文件。"), 400);
+  }
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return c.json(errorResponse("invalid_asset_dimensions", "请提供有效的图片尺寸。"), 400);
+  }
+
+  const bytes = Buffer.from(await file.arrayBuffer());
+  const asset = await saveCanvasAsset(await requestTenant(c), {
+    bytes,
+    fileName: file.name || "canvas-image.png",
+    mimeType: file.type,
+    width: Math.round(width),
+    height: Math.round(height)
+  });
+
+  return c.json({ asset });
 });
 
 app.put("/api/project", async (c) => {
@@ -657,14 +860,19 @@ app.post("/api/ecommerce/images/batch-generate", async (c) => {
   }
 
   const tenant = await requestTenant(c);
+  const session = authSessions.get(c);
   const now = new Date().toISOString();
   const jobId = randomUUID();
+  const input: ResolvedEcommerceBatchGenerateRequest = {
+    ...parsed.value,
+    createComparisonCollage: parsed.value.createComparisonCollage === true && session?.user.role === "admin"
+  };
 
   const response = await createEcommerceBatchJob({
     jobId,
     tenant,
-    input: parsed.value,
-    message: "批量任务已创建，服务端正在排队生成。",
+    input,
+    message: "批量任务已创建，服务端会按场景并发生成。",
     now
   });
 
@@ -672,7 +880,7 @@ app.post("/api/ecommerce/images/batch-generate", async (c) => {
   try {
     charge = await reserveGenerationCharge({
       tenant,
-      imageCount: parsed.value.sceneTemplateIds.length * parsed.value.countPerScene
+      imageCount: input.sceneTemplateIds.length * input.countPerScene
     });
     await attachGenerationToCharge(charge.transactionId, jobId);
   } catch (error) {
@@ -687,13 +895,78 @@ app.post("/api/ecommerce/images/batch-generate", async (c) => {
   const job: EcommerceBatchJob = {
     jobId,
     tenant,
-    input: parsed.value,
+    input,
     providerConfigs,
-    totalScenes: parsed.value.sceneTemplateIds.length,
+    totalScenes: input.sceneTemplateIds.length,
     completedScenes: 0,
     records: []
   };
   runningEcommerceBatchJobs.set(job.jobId, job);
+  void runEcommerceBatchJob(job.jobId);
+
+  return c.json(response, 202);
+});
+
+app.post("/api/ecommerce/images/category-kit-generate", async (c) => {
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+
+  const parsed = parseEcommerceBatchPayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+  if (!parsed.value.referenceImage) {
+    return c.json(errorResponse("invalid_reference_image", "品类套图需要至少一张参考图。"), 400);
+  }
+
+  const tenant = await requestTenant(c);
+  const session = authSessions.get(c);
+  const now = new Date().toISOString();
+  const jobId = randomUUID();
+  const input: ResolvedEcommerceBatchGenerateRequest = {
+    ...parsed.value,
+    createComparisonCollage: parsed.value.createComparisonCollage === true && session?.user.role === "admin",
+    categoryKitPlannerPending: true,
+    countPerScene: 1
+  };
+  const providerConfigs = await getActiveImageModelConfigs();
+  logEcommerceCategoryKit("request-received", {
+    jobId,
+    workspaceId: tenant.workspaceId,
+    productTitle: input.product.title || "",
+    referenceImage: Boolean(input.referenceImage),
+    sceneTemplateCount: input.sceneTemplateIds.length,
+    imageModelCount: providerConfigs.length
+  });
+  if (providerConfigs.length === 0) {
+    return providerErrorJson(c, new ProviderError("missing_api_key", "未配置可用的图像模型，请在后台模型管理中添加 API Key。", 500));
+  }
+
+  const response = await createEcommerceBatchJob({
+    jobId,
+    tenant,
+    input,
+    message: "品类套图任务已进入后端队列，服务端会先调用文本模型规划，再并发生成。",
+    now
+  });
+
+  const job: EcommerceBatchJob = {
+    jobId,
+    tenant,
+    input,
+    providerConfigs,
+    totalScenes: input.sceneTemplateIds.length,
+    completedScenes: 0,
+    records: []
+  };
+  runningEcommerceBatchJobs.set(job.jobId, job);
+  logEcommerceCategoryKit("queued", {
+    jobId,
+    workspaceId: tenant.workspaceId,
+    totalScenes: response.totalScenes
+  });
   void runEcommerceBatchJob(job.jobId);
 
   return c.json(response, 202);
@@ -738,6 +1011,22 @@ app.get("/api/billing/orders", async (c) => {
 
 app.get("/api/billing/summary", async (c) => {
   return c.json(await getBillingSummary(await requestTenant(c)));
+});
+
+app.get("/api/billing/invoice/applications", async (c) => {
+  return c.json(await getInvoiceApplications(await requestTenant(c)));
+});
+
+app.post("/api/billing/invoice/applications", async (c) => {
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+  const parsed = parseInvoiceApplicationPayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+  return c.json(await applyForInvoice(await requestTenant(c), parsed.value), 201);
 });
 
 app.get("/api/referral/summary", async (c) => {
@@ -789,6 +1078,186 @@ app.get("/api/admin/stats", async (c) => {
   }
 
   return c.json(await getAdminStats());
+});
+
+app.get("/api/admin/help", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return c.json(await getAdminHelpCenter());
+});
+
+app.get("/api/admin/demo-canvas", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return c.json(await getAdminDemoCanvasConfig());
+});
+
+app.put("/api/admin/demo-canvas", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+  const parsed = parseDemoCanvasPayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  return c.json(await saveDemoCanvasConfig(parsed.value));
+});
+
+app.post("/api/admin/demo-canvas/assets", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  let formData: FormData;
+  try {
+    formData = await c.req.raw.formData();
+  } catch {
+    return c.json(errorResponse("invalid_request_body", "无法读取上传图片。"), 400);
+  }
+
+  const file = formData.get("file");
+  if (!(file instanceof File)) {
+    return c.json(errorResponse("invalid_demo_canvas_asset", "请上传有效的图片文件。"), 400);
+  }
+
+  const upload = await uploadDemoCanvasAsset({
+    bytes: Buffer.from(await file.arrayBuffer()),
+    fileName: file.name || "demo-canvas-image.png",
+    mimeType: file.type
+  });
+
+  return c.json(upload, 201);
+});
+
+app.post("/api/admin/help/assets", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  let formData: FormData;
+  try {
+    formData = await c.req.raw.formData();
+  } catch {
+    return c.json(errorResponse("invalid_request_body", "无法读取上传图片。"), 400);
+  }
+
+  const file = formData.get("file");
+  if (!(file instanceof File)) {
+    return c.json(errorResponse("invalid_help_asset", "请上传有效的图片文件。"), 400);
+  }
+
+  const upload = await uploadHelpCenterAsset({
+    bytes: Buffer.from(await file.arrayBuffer()),
+    fileName: file.name || "help-image.png",
+    mimeType: file.type
+  });
+
+  return c.json(upload, 201);
+});
+
+app.post("/api/admin/help/categories", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+  const parsed = parseHelpCategoryPayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  return c.json(await createHelpCategory(parsed.value), 201);
+});
+
+app.put("/api/admin/help/categories/:categoryId", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+  const parsed = parseHelpCategoryPayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  return c.json(await updateHelpCategory(c.req.param("categoryId"), parsed.value));
+});
+
+app.delete("/api/admin/help/categories/:categoryId", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return c.json(await deleteHelpCategory(c.req.param("categoryId")));
+});
+
+app.post("/api/admin/help/articles", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+  const parsed = parseHelpArticlePayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  return c.json(await createHelpArticle(parsed.value), 201);
+});
+
+app.put("/api/admin/help/articles/:articleId", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+  const parsed = parseHelpArticlePayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  return c.json(await updateHelpArticle(c.req.param("articleId"), parsed.value));
+});
+
+app.delete("/api/admin/help/articles/:articleId", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return c.json(await deleteHelpArticle(c.req.param("articleId")));
 });
 
 app.get("/api/admin/users", async (c) => {
@@ -857,6 +1326,34 @@ app.put("/api/admin/billing/settings", async (c) => {
   return c.json(await saveBillingSettings(parsed.value));
 });
 
+app.get("/api/admin/extension-release", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return c.json(await getExtensionReleaseConfig());
+});
+
+app.put("/api/admin/extension-release", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+
+  const parsed = parseExtensionReleasePayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  return c.json(await saveExtensionReleaseConfig(parsed.value));
+});
+
 app.get("/api/admin/referral/settings", async (c) => {
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
@@ -920,6 +1417,90 @@ app.put("/api/admin/image-models", async (c) => {
   }
 
   return c.json(await saveImageModelConfig(parsed.value));
+});
+
+app.get("/api/admin/ecommerce/category-kit-planner", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return c.json(await getCategoryKitPlannerConfig());
+});
+
+app.put("/api/admin/ecommerce/category-kit-planner", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+
+  const parsed = parseCategoryKitPlannerConfigPayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  return c.json(await saveCategoryKitPlannerConfig(parsed.value));
+});
+
+app.get("/api/admin/image-generation/concurrency", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return c.json(await getEcommerceGenerationConcurrencyConfig());
+});
+
+app.put("/api/admin/image-generation/concurrency", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+
+  const parsed = parseEcommerceGenerationConcurrencyConfigPayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  return c.json(await saveEcommerceGenerationConcurrencyConfig(parsed.value));
+});
+
+app.get("/api/admin/ecommerce/concurrency", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return c.json(await getEcommerceGenerationConcurrencyConfig());
+});
+
+app.put("/api/admin/ecommerce/concurrency", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+
+  const parsed = parseEcommerceGenerationConcurrencyConfigPayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  return c.json(await saveEcommerceGenerationConcurrencyConfig(parsed.value));
 });
 
 app.get("/api/admin/payment/alipay", async (c) => {
@@ -1058,6 +1639,33 @@ app.get("/api/admin/billing/orders", async (c) => {
   }
 
   return c.json(await listAdminBillingOrders(parseListLimit(c.req.query("limit"))));
+});
+
+app.get("/api/admin/billing/invoice/applications", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return c.json(await listAdminInvoiceApplications(parseListLimit(c.req.query("limit"))));
+});
+
+app.put("/api/admin/billing/invoice/applications/:applicationId", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+  const parsed = parseInvoiceApplicationUpdatePayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+  const session = authSessions.get(c) ?? (await requireAdminSession(c.req.raw.headers));
+  return c.json({ application: await updateInvoiceApplication(c.req.param("applicationId"), session.user.id, parsed.value) });
 });
 
 app.post("/api/admin/plans", async (c) => {
@@ -1275,28 +1883,111 @@ async function runEcommerceBatchJob(jobId: string): Promise<void> {
   }
 
   try {
-    await updateEcommerceBatchJob(job.tenant, job.jobId, {
-      status: "running",
-      message: "服务端正在分批生成场景，页面可以离开后稍晚回来查看。"
+    if (job.input.categoryKitPlannerPending) {
+      if (!job.input.referenceImage) {
+        throw new Error("品类套图需要至少一张参考图。");
+      }
+
+      logEcommerceCategoryKit("planner-stage-start", {
+        jobId,
+        workspaceId: job.tenant.workspaceId,
+        productTitle: job.input.product.title || "",
+        hasReferenceImage: Boolean(job.input.referenceImage),
+        sceneTemplateCount: job.input.sceneTemplateIds.length
+      });
+
+      const plan = await generateCategoryKitPlan(
+        {
+          product: job.input.product,
+          platform: job.input.platform,
+          market: job.input.market,
+          textLanguage: job.input.textLanguage,
+          referenceImage: job.input.referenceImage,
+          extraDirection: job.input.extraDirection
+        },
+        { jobId }
+      );
+      logEcommerceCategoryKit("planner-stage-success", {
+        jobId,
+        workspaceId: job.tenant.workspaceId,
+        imageCount: plan.imagePlan.length,
+        model: plan.model
+      });
+      const productTitle = resolveCategoryKitProductTitle(job.input.product.title, plan.productSummary);
+      job.input = {
+        ...job.input,
+        product: {
+          ...job.input.product,
+          title: productTitle
+        },
+        categoryKitPlannerPending: false,
+        plannedImages: plan.imagePlan,
+        countPerScene: 1
+      };
+      job.totalScenes = plan.imagePlan.length;
+      job.completedScenes = 0;
+      job.records = [];
+      await updateEcommerceBatchJob(job.tenant, job.jobId, {
+        status: "running",
+        productTitle,
+        totalScenes: job.totalScenes,
+        completedScenes: 0,
+        input: job.input,
+        message: `后台文本模型已规划 ${plan.imagePlan.length} 张图，正在检查额度并准备并发生成。`
+      });
+
+      const charge = await reserveGenerationCharge({
+        tenant: job.tenant,
+        imageCount: plan.imagePlan.length
+      });
+      await attachGenerationToCharge(charge.transactionId, job.jobId);
+      await updateEcommerceBatchJob(job.tenant, job.jobId, {
+        message: `后台文本模型已规划 ${plan.imagePlan.length} 张图，服务端开始按队列并发生成。`
+      });
+    } else {
+      await updateEcommerceBatchJob(job.tenant, job.jobId, {
+        status: "running",
+        message: "服务端正在并发生成场景，页面可以离开后稍晚回来查看。"
+      });
+    }
+
+    const concurrencyConfig: EcommerceGenerationConcurrencyConfigResponse = await getEcommerceGenerationConcurrencyConfig();
+    const sceneConcurrency = Math.max(1, concurrencyConfig.jobConcurrency);
+    logEcommerceCategoryKit("concurrency-config", {
+      jobId,
+      workspaceId: job.tenant.workspaceId,
+      globalConcurrency: concurrencyConfig.globalConcurrency,
+      jobConcurrency: sceneConcurrency,
+      source: concurrencyConfig.source
     });
 
-    const records = new Array<EcommerceBatchGenerateResponse["records"][number] | undefined>(job.input.sceneTemplateIds.length);
+    type SceneItem =
+      | { index: number; kind: "planned"; plannedImage: EcommerceCategoryKitPlanItem }
+      | { index: number; kind: "template"; sceneTemplateId: EcommerceSceneTemplateId };
+    const sceneItems: SceneItem[] = job.input.plannedImages?.length
+      ? job.input.plannedImages.map((plannedImage, index) => ({ index, kind: "planned" as const, plannedImage }))
+      : job.input.sceneTemplateIds.map((sceneTemplateId, index) => ({ index, kind: "template" as const, sceneTemplateId }));
+    const records = new Array<EcommerceBatchGenerateResponse["records"][number] | undefined>(sceneItems.length);
 
     await mapWithConcurrency(
-      job.input.sceneTemplateIds.map((sceneTemplateId, index) => ({ sceneTemplateId, index })),
-      ECOMMERCE_BATCH_SCENE_CONCURRENCY,
-      async ({ sceneTemplateId, index }) => {
+      sceneItems,
+      sceneConcurrency,
+      async (sceneItem) => {
         try {
-          const prompt = composeEcommercePrompt({
-            product: job.input.product,
-            platform: job.input.platform,
-            market: job.input.market,
-            textLanguage: job.input.textLanguage,
-            allowTextRecreation: job.input.allowTextRecreation,
-            removeWatermarkAndLogo: job.input.removeWatermarkAndLogo,
-            sceneTemplateId,
-            extraDirection: job.input.extraDirection
-          });
+          const prompt =
+            sceneItem.kind === "planned"
+              ? composePlannedCategoryKitPrompt(sceneItem.plannedImage)
+              : composeEcommercePrompt({
+                product: job.input.product,
+                platform: job.input.platform,
+                market: job.input.market,
+                textLanguage: job.input.textLanguage,
+                allowTextRecreation: job.input.allowTextRecreation,
+                removeWatermarkAndLogo: job.input.removeWatermarkAndLogo,
+                brandOverlayPlacement: job.input.brandOverlayPlacement,
+                sceneTemplateId: sceneItem.sceneTemplateId,
+                extraDirection: job.input.extraDirection
+              });
           const generationInput = {
             originalPrompt: prompt,
             presetId: job.input.stylePresetId ?? "product",
@@ -1313,19 +2004,19 @@ async function runEcommerceBatchJob(jobId: string): Promise<void> {
                 { ...generationInput, referenceImage: job.input.referenceImage },
                 job.providerConfigs,
                 undefined,
-                { skipCharge: true }
+                { skipCharge: true, createComparisonCollage: job.input.createComparisonCollage === true }
               )
             : await runTextToImageGenerationWithFallback(job.tenant, generationInput, job.providerConfigs, undefined, { skipCharge: true });
-          records[index] = response.record;
+          records[sceneItem.index] = response.record;
         } catch (error) {
-          records[index] = failedEcommerceSceneRecord(job.input, sceneTemplateId, errorToMessage(error));
+          records[sceneItem.index] = failedEcommerceSceneRecord(job.input, sceneItem, errorToMessage(error));
         } finally {
           job.completedScenes += 1;
           job.records = records.flatMap((record) => (record ? [record] : []));
           const failedCount = job.records.filter((record) => record.status === "failed").length;
           await updateEcommerceBatchJob(job.tenant, job.jobId, {
             status: "running",
-            message: `服务端正在分批生成：${job.completedScenes}/${job.totalScenes} 个场景完成，${failedCount} 个失败。`,
+            message: `服务端并发生成中：${job.completedScenes}/${job.totalScenes} 个场景完成，${failedCount} 个失败。`,
             completedScenes: job.completedScenes,
             records: job.records
           });
@@ -1347,26 +2038,65 @@ async function runEcommerceBatchJob(jobId: string): Promise<void> {
       records: job.records,
       completedAt: new Date().toISOString()
     });
+  } catch (error) {
+    logEcommerceCategoryKit("planner-stage-failed", {
+      jobId,
+      workspaceId: job.tenant.workspaceId,
+      message: errorToMessage(error)
+    });
+    const message = errorToMessage(error);
+    await updateEcommerceBatchJob(job.tenant, job.jobId, {
+      status: "failed",
+      message: `批量任务失败：${message}`,
+      completedScenes: job.completedScenes,
+      records: job.records,
+      completedAt: new Date().toISOString()
+    });
   } finally {
     runningEcommerceBatchJobs.delete(jobId);
   }
 }
 
+function logEcommerceCategoryKit(event: string, details: Record<string, unknown>): void {
+  console.info(`[ecommerce-category-kit] ${event} ${JSON.stringify(details)}`);
+}
+
+function composePlannedCategoryKitPrompt(plannedImage: EcommerceCategoryKitPlanItem): string {
+  const notes = plannedImage.notes?.trim();
+  if (!notes) {
+    return plannedImage.prompt;
+  }
+
+  return `${plannedImage.prompt}\n\nText / layout notes: ${notes}`;
+}
+
+function resolveCategoryKitProductTitle(inputTitle: string, productSummary: string): string {
+  const title = inputTitle.trim();
+  if (title && title !== "AI 自拆品类套图") {
+    return title;
+  }
+
+  return productSummary.trim().slice(0, 120) || title || "AI 自拆品类套图";
+}
+
 function failedEcommerceSceneRecord(
   input: ResolvedEcommerceBatchGenerateRequest,
-  sceneTemplateId: EcommerceSceneTemplateId,
+  sceneItem: { index: number; sceneTemplateId?: EcommerceSceneTemplateId; plannedImage?: EcommerceCategoryKitPlanItem },
   message: string
 ): EcommerceBatchGenerateResponse["records"][number] {
-  const prompt = composeEcommercePrompt({
-    product: input.product,
-    platform: input.platform,
-    market: input.market,
-    textLanguage: input.textLanguage,
-    allowTextRecreation: input.allowTextRecreation,
-    removeWatermarkAndLogo: input.removeWatermarkAndLogo,
-    sceneTemplateId,
-    extraDirection: input.extraDirection
-  });
+  const prompt = sceneItem.plannedImage
+    ? sceneItem.plannedImage.prompt
+    : composeEcommercePrompt({
+        product: input.product,
+        platform: input.platform,
+        market: input.market,
+        textLanguage: input.textLanguage,
+        allowTextRecreation: input.allowTextRecreation,
+        removeWatermarkAndLogo: input.removeWatermarkAndLogo,
+        brandOverlayPlacement: input.brandOverlayPlacement,
+        sceneTemplateId: sceneItem.sceneTemplateId as EcommerceSceneTemplateId,
+        extraDirection: input.extraDirection
+      });
   return {
     id: randomUUID(),
     mode: input.referenceImage ? "edit" : "generate",
@@ -1673,11 +2403,14 @@ async function getAdminPlans(): Promise<AdminPlansResponse> {
 }
 
 async function createOrPromoteAdminUser(input: {
-  email: string;
+  phone?: string;
+  email?: string;
   password?: string;
   displayName?: string;
 }): Promise<{ userId: string; created: boolean }> {
-  const existing = await findUserByEmail(input.email);
+  const phone = input.phone?.trim() ? normalizePhone(input.phone) : undefined;
+  const email = input.email?.trim() ? input.email.trim().toLowerCase() : undefined;
+  const existing = (phone ? await findUserByPhone(phone) : undefined) ?? (email ? await findUserByEmail(email) : undefined);
   const now = new Date().toISOString();
 
   if (existing) {
@@ -1700,13 +2433,15 @@ async function createOrPromoteAdminUser(input: {
   const defaultPlan = await getPlanOrUndefined(DEFAULT_ADMIN_PLAN_ID);
   const userId = randomUUID();
   const workspaceId = randomUUID();
-  const displayName = input.displayName ?? input.email.split("@", 1)[0] ?? "Administrator";
+  const displayName = input.displayName ?? phone ?? email?.split("@", 1)[0] ?? "Administrator";
 
   await db.transaction(async (tx) => {
     await tx.insert(users).values({
       id: userId,
       numericId: undefined,
-      email: input.email,
+      email: email ?? null,
+      phone: phone ?? null,
+      phoneVerifiedAt: phone ? now : null,
       passwordHash: hashPassword(input.password ?? ""),
       displayName,
       role: "admin",
@@ -1716,6 +2451,9 @@ async function createOrPromoteAdminUser(input: {
       quotaUsed: 0,
       balanceCents: 0,
       referralBalanceCents: 0,
+      invoicePaidCents: 0,
+      invoiceReservedCents: 0,
+      invoiceIssuedCents: 0,
       inviteCode: undefined,
       inviterUserId: undefined,
       storageQuotaBytes: Number(defaultPlan?.storageQuotaBytes ?? DEFAULT_ADMIN_STORAGE_QUOTA_BYTES),
@@ -1746,6 +2484,11 @@ async function createOrPromoteAdminUser(input: {
 
 async function findUserByEmail(email: string): Promise<(typeof users.$inferSelect) | undefined> {
   const [row] = await db.select().from(users).where(eq(users.email, email)).limit(1);
+  return row;
+}
+
+async function findUserByPhone(phone: string): Promise<(typeof users.$inferSelect) | undefined> {
+  const [row] = await db.select().from(users).where(eq(users.phone, phone)).limit(1);
   return row;
 }
 
@@ -1799,6 +2542,8 @@ function toAdminUserItem(
     numericId: user.numericId ?? undefined,
     id: user.id,
     email: user.email ?? "",
+    phone: user.phone ?? undefined,
+    phoneVerifiedAt: user.phoneVerifiedAt ?? undefined,
     displayName: user.displayName,
     role: user.role === "admin" ? "admin" : "user",
     planId: user.planId ?? undefined,
@@ -1912,6 +2657,112 @@ function parseListLimit(value: string | undefined): number {
   return Number.isInteger(parsed) ? Math.max(1, Math.min(parsed, 100)) : 50;
 }
 
+function parsePublicGalleryPayload(input: unknown): ParseResult<{ enabled: boolean; sortOrder?: number }> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_public_gallery", "公开案例设置必须是 JSON 对象。")
+    };
+  }
+
+  const enabled = parseOptionalBoolean(input.enabled ?? input.publicGalleryEnabled);
+  if (typeof enabled !== "boolean") {
+    return {
+      ok: false,
+      error: errorResponse("invalid_public_gallery", "enabled 必须是布尔值。")
+    };
+  }
+
+  const rawSortOrder = input.sortOrder ?? input.publicGallerySortOrder;
+  if (rawSortOrder === undefined || rawSortOrder === null || rawSortOrder === "") {
+    return {
+      ok: true,
+      value: { enabled }
+    };
+  }
+
+  const sortOrder = typeof rawSortOrder === "number" ? rawSortOrder : Number(rawSortOrder);
+  if (!Number.isInteger(sortOrder) || sortOrder < 0 || sortOrder > 9999) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_public_gallery_sort", "公开案例排序必须是 0 到 9999 的整数。")
+    };
+  }
+
+  return {
+    ok: true,
+    value: { enabled, sortOrder }
+  };
+}
+
+function parseDemoCanvasPayload(input: unknown): ParseResult<SaveDemoCanvasConfigRequest> {
+  if (!isRecord(input) || !Array.isArray(input.examples)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_demo_canvas", "游客画布配置必须包含 examples 数组。")
+    };
+  }
+
+  if (input.examples.length > 20) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_demo_canvas", "游客画布案例最多配置 20 组。")
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      examples: input.examples.filter(isRecord).map((example) => ({
+        id: parseOptionalString(example.id) || randomUUID(),
+        title: parseOptionalString(example.title) || "画布案例",
+        category: parseOptionalString(example.category) || "演示案例",
+        beforeLabel: parseOptionalString(example.beforeLabel) || "修改前",
+        afterLabel: parseOptionalString(example.afterLabel) || "修改后",
+        brief: parseOptionalString(example.brief) || "展示修改前后的效果对比。",
+        prompt: parseOptionalString(example.prompt) || "根据参考图生成适合电商展示的图片。",
+        presetId: parseStylePresetValue(example.presetId),
+        size: parseDemoCanvasSize(example.size),
+        quality: parseImageQualityValue(example.quality),
+        outputFormat: parseOutputFormatValue(example.outputFormat),
+        createdAt: parseOptionalString(example.createdAt) || new Date().toISOString(),
+        beforeUrl: parseOptionalString(example.beforeUrl) || "",
+        afterUrl: parseOptionalString(example.afterUrl) || "",
+        enabled: parseOptionalBoolean(example.enabled) ?? true,
+        sortOrder: parseNonNegativeInteger(example.sortOrder) ?? 0
+      }))
+    }
+  };
+}
+
+function parseDemoCanvasSize(value: unknown): ImageSize {
+  const source = isRecord(value) ? value : {};
+  return {
+    width: parseImageDimension(source.width, 1024),
+    height: parseImageDimension(source.height, 1024)
+  };
+}
+
+function parseImageDimension(value: unknown, fallback: number): number {
+  const numericValue = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  return Number.isInteger(numericValue) && numericValue >= 256 && numericValue <= 4096 ? numericValue : fallback;
+}
+
+function parseStylePresetValue(value: unknown): StylePresetId {
+  const presetId = parseOptionalString(value);
+  return STYLE_PRESETS.some((preset) => preset.id === presetId) ? (presetId as StylePresetId) : "product";
+}
+
+function parseImageQualityValue(value: unknown): ImageQuality {
+  const quality = parseOptionalString(value);
+  return quality === "low" || quality === "medium" || quality === "high" || quality === "auto" ? quality : "auto";
+}
+
+function parseOutputFormatValue(value: unknown): OutputFormat {
+  const outputFormat = parseOptionalString(value);
+  return outputFormat === "jpeg" || outputFormat === "png" || outputFormat === "webp" ? outputFormat : "png";
+}
+
 function parseAuthPayload(
   input: unknown,
   includeDisplayName: boolean
@@ -1923,13 +2774,14 @@ function parseAuthPayload(
     };
   }
 
-  const email = stringValue(input.email)?.trim();
-  const phone = stringValue(input.phone)?.trim();
+  const account = stringValue(input.account ?? input.identifier ?? input.login)?.trim();
+  const email = stringValue(input.email)?.trim() || (!includeDisplayName && account?.includes("@") ? account : undefined);
+  const phone = stringValue(input.phone)?.trim() || (!includeDisplayName && account && !account.includes("@") ? account : undefined);
   const password = stringValue(input.password);
-  if ((!includeDisplayName && !email) || (includeDisplayName && !phone) || !password) {
+  if ((!includeDisplayName && !email && !phone) || (includeDisplayName && !phone) || !password) {
     return {
       ok: false,
-      error: errorResponse("invalid_credentials", includeDisplayName ? "请输入手机号和密码。" : "请输入邮箱和密码。")
+      error: errorResponse("invalid_credentials", includeDisplayName ? "请输入手机号和密码。" : "请输入手机号/邮箱和密码。")
     };
   }
 
@@ -2225,7 +3077,8 @@ function parseAssignPlanPayload(input: unknown): ParseResult<{
 }
 
 function parseAdminUserPayload(input: unknown): ParseResult<{
-  email: string;
+  phone?: string;
+  email?: string;
   password?: string;
   displayName?: string;
 }> {
@@ -2236,8 +3089,24 @@ function parseAdminUserPayload(input: unknown): ParseResult<{
     };
   }
 
-  const email = parseLimitedString(input.email, 255)?.toLowerCase();
-  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email)) {
+  const phoneInput = parseLimitedString(input.phone, 32);
+  const emailInput = parseLimitedString(input.email, 255)?.toLowerCase();
+  if (!phoneInput && !emailInput) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_admin_contact", "请输入手机号或邮箱。")
+    };
+  }
+
+  const phone = phoneInput ? normalizePhone(phoneInput) : undefined;
+  if (phone && !/^1[3-9]\d{9}$/u.test(phone)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_admin_phone", "请输入有效手机号。")
+    };
+  }
+
+  if (emailInput && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(emailInput)) {
     return {
       ok: false,
       error: errorResponse("invalid_admin_email", "请输入有效管理员邮箱。")
@@ -2263,7 +3132,8 @@ function parseAdminUserPayload(input: unknown): ParseResult<{
   return {
     ok: true,
     value: {
-      email,
+      phone,
+      email: emailInput,
       password,
       displayName
     }
@@ -2396,6 +3266,68 @@ function parseBillingSettingsPayload(input: unknown): ParseResult<SaveBillingSet
   };
 }
 
+function parseExtensionReleasePayload(input: unknown): ParseResult<Parameters<typeof saveExtensionReleaseConfig>[0]> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_extension_release", "插件发布配置内容必须是 JSON 对象。")
+    };
+  }
+
+  const dev = parseExtensionReleaseTargetPayload(input.dev);
+  if (!dev.ok) {
+    return dev;
+  }
+  const prod = parseExtensionReleaseTargetPayload(input.prod);
+  if (!prod.ok) {
+    return prod;
+  }
+
+  return {
+    ok: true,
+    value: { dev: dev.value, prod: prod.value }
+  };
+}
+
+function parseExtensionReleaseTargetPayload(
+  input: unknown
+): ParseResult<Parameters<typeof saveExtensionReleaseConfig>[0]["dev"]> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_extension_release", "插件发布配置项必须是 JSON 对象。")
+    };
+  }
+
+  const fileName = parseLimitedString(input.fileName, 255);
+  const version = parseLimitedString(input.version, 64);
+  const apiBaseUrl = parseLimitedString(input.apiBaseUrl, 1000);
+  const downloadUrl = parseLimitedString(input.downloadUrl, 2000);
+  const latestDownloadUrl = parseLimitedString(input.latestDownloadUrl, 2000);
+  const installHelpUrl = parseLimitedString(input.installHelpUrl, 2000);
+  const sha256 = parseLimitedString(input.sha256, 128);
+  const publishedAt = parseLimitedString(input.publishedAt, 64);
+  const releaseNotes = Array.isArray(input.releaseNotes)
+    ? input.releaseNotes.filter((item): item is string => typeof item === "string").map((line) => line.trim()).filter(Boolean).slice(0, 20)
+    : undefined;
+
+  return {
+    ok: true,
+    value: {
+      apiBaseUrl,
+      version,
+      downloadUrl,
+      latestDownloadUrl,
+      installHelpUrl,
+      fileName,
+      sizeBytes: parseNonNegativeInteger(input.sizeBytes),
+      sha256,
+      publishedAt,
+      releaseNotes
+    }
+  };
+}
+
 function parseImageModelConfigPayload(input: unknown): ParseResult<{ models: Parameters<typeof saveImageModelConfig>[0]["models"] }> {
   if (!isRecord(input) || !Array.isArray(input.models)) {
     return {
@@ -2448,6 +3380,104 @@ function parseImageModelConfigPayload(input: unknown): ParseResult<{ models: Par
     ok: true,
     value: {
       models: models as Parameters<typeof saveImageModelConfig>[0]["models"]
+    }
+  };
+}
+
+function parseCategoryKitPlannerConfigPayload(input: unknown): ParseResult<SaveCategoryKitPlannerConfigRequest> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_category_kit_planner", "文本模型配置内容必须是 JSON 对象。")
+    };
+  }
+  const rawModels = Array.isArray(input.models) ? input.models : [input];
+  const models = rawModels.map((item, index) => parseCategoryKitPlannerConfigEntry(item, index)).filter((item): item is SaveCategoryKitPlannerConfigRequest["models"][number] => Boolean(item));
+
+  if (models.length === 0) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_category_kit_planner", "至少需要配置一个文本模型。")
+    };
+  }
+
+  if (models.length !== rawModels.length) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_category_kit_planner", "文本模型配置项不完整。")
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      models
+    }
+  };
+}
+
+function parseCategoryKitPlannerConfigEntry(input: unknown, index: number): SaveCategoryKitPlannerConfigRequest["models"][number] | undefined {
+  if (!isRecord(input)) {
+    return undefined;
+  }
+
+  const enabled = typeof input.enabled === "boolean" ? input.enabled : undefined;
+  const model = parseLimitedString(input.model, 255);
+  const name = parseLimitedString(input.name, 120);
+  if (typeof enabled !== "boolean" || !model || !name) {
+    return undefined;
+  }
+
+  const role = input.role === "fallback" ? "fallback" : "primary";
+  const priority = typeof input.priority === "number" && Number.isInteger(input.priority) && input.priority > 0 ? input.priority : index + 1;
+  const timeoutMs = typeof input.timeoutMs === "number" && Number.isInteger(input.timeoutMs) && input.timeoutMs > 0 ? input.timeoutMs : undefined;
+
+  return {
+    id: parseLimitedString(input.id, 64) || undefined,
+    enabled,
+    name,
+    role,
+    priority,
+    apiKey: typeof input.apiKey === "string" ? input.apiKey : undefined,
+    preserveApiKey: typeof input.preserveApiKey === "boolean" ? input.preserveApiKey : undefined,
+    baseUrl: parseLimitedString(input.baseUrl, 512),
+    model,
+    timeoutMs
+  };
+}
+
+function parseEcommerceGenerationConcurrencyConfigPayload(
+  input: unknown
+): ParseResult<SaveEcommerceGenerationConcurrencyConfigRequest> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_ecommerce_generation_concurrency", "并发配置内容必须是 JSON 对象。")
+    };
+  }
+
+  const globalConcurrency =
+    parsePositiveConcurrency(input.globalConcurrency) ??
+    parsePositiveConcurrency(input.totalConcurrency) ??
+    parsePositiveConcurrency(input.totalThreads);
+  const jobConcurrency =
+    parsePositiveConcurrency(input.jobConcurrency) ??
+    parsePositiveConcurrency(input.taskConcurrency) ??
+    parsePositiveConcurrency(input.sceneConcurrency) ??
+    parsePositiveConcurrency(input.singleTaskConcurrency);
+
+  if (!globalConcurrency || !jobConcurrency) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_ecommerce_generation_concurrency", "请填写有效的全局并发线程和单任务并发线程。")
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      globalConcurrency,
+      jobConcurrency
     }
   };
 }
@@ -2654,6 +3684,88 @@ function parsePurchasePlanPayload(input: unknown): ParseResult<{
   };
 }
 
+function parseInvoiceApplicationPayload(input: unknown): ParseResult<ApplyInvoiceRequest> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_invoice_application", "开票申请内容必须是 JSON 对象。")
+    };
+  }
+
+  const amountCents = parseNonNegativeInteger(input.amountCents);
+  if (amountCents === undefined || amountCents <= 0) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_invoice_application", "开票金额必须是大于 0 的整数分。")
+    };
+  }
+
+  const headerType = input.headerType === "personal" ? "personal" : input.headerType === "company" ? "company" : undefined;
+  if (!headerType) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_invoice_application", "headerType 必须是 company 或 personal。")
+    };
+  }
+
+  const title = stringValue(input.title);
+  const email = stringValue(input.email);
+  const invoiceContent = stringValue(input.invoiceContent);
+  if (!title || !email || !invoiceContent) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_invoice_application", "请填写发票抬头、接收邮箱和开票内容。")
+    };
+  }
+
+  if (headerType === "company" && !stringValue(input.taxNumber)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_invoice_application", "企业抬头需要填写纳税人识别号。")
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      headerType,
+      title,
+      taxNumber: stringValue(input.taxNumber),
+      invoiceContent,
+      amountCents,
+      email,
+      phone: stringValue(input.phone),
+      companyAddress: stringValue(input.companyAddress),
+      bankName: stringValue(input.bankName),
+      bankAccount: stringValue(input.bankAccount),
+      remark: stringValue(input.remark)
+    }
+  };
+}
+
+function parseInvoiceApplicationUpdatePayload(input: unknown): ParseResult<UpdateInvoiceApplicationRequest> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_invoice_update", "开票处理内容必须是 JSON 对象。")
+    };
+  }
+  const status = input.status;
+  if (status !== "pending" && status !== "processing" && status !== "issued" && status !== "rejected") {
+    return {
+      ok: false,
+      error: errorResponse("invalid_invoice_update", "status 必须是 pending、processing、issued 或 rejected。")
+    };
+  }
+  return {
+    ok: true,
+    value: {
+      status,
+      reviewNote: stringValue(input.reviewNote)
+    }
+  };
+}
+
 function parseGeneratePayload(input: unknown): ParseResult<ImageProviderInput> {
   const base = parseBaseImagePayload(input);
   if (!base.ok) {
@@ -2688,18 +3800,24 @@ async function parseEditPayload(tenant: RequestTenant, input: unknown): Promise<
   }
 
   const fileName = input.referenceImage.fileName;
+  const maskDataUrl = parseOptionalString(input.referenceImage.maskDataUrl);
+  const maskedDataUrl = parseOptionalString(input.referenceImage.maskedDataUrl);
+  const annotatedDataUrl = parseOptionalString(input.referenceImage.annotatedDataUrl);
   const referenceAssetId = parseOptionalString(input.referenceAssetId);
 
-  if (referenceAssetId && !(await getStoredAssetFile(tenant, referenceAssetId))) {
+  if (referenceAssetId && !(await readStoredAsset(tenant, referenceAssetId))) {
     return {
       ok: false,
-      error: errorResponse("invalid_request", "找不到可记录的本地参考图像资源。")
+      error: errorResponse("invalid_request", "找不到可读取的参考图像资源。")
     };
   }
 
   const referenceImage: ReferenceImageInput = {
     dataUrl,
-    fileName: typeof fileName === "string" && fileName.trim() ? fileName.trim() : undefined
+    fileName: typeof fileName === "string" && fileName.trim() ? fileName.trim() : undefined,
+    maskDataUrl: maskDataUrl ?? undefined,
+    maskedDataUrl: maskedDataUrl ?? undefined,
+    annotatedDataUrl: annotatedDataUrl ?? undefined
   };
 
   return {
@@ -2939,6 +4057,7 @@ function parseEcommerceBatchPayload(input: unknown): ParseResult<ResolvedEcommer
       textLanguage: textLanguage.value,
       allowTextRecreation: parseOptionalBoolean(input.allowTextRecreation) ?? true,
       removeWatermarkAndLogo: parseOptionalBoolean(input.removeWatermarkAndLogo) ?? true,
+      brandOverlayPlacement: parseBrandOverlayPlacement(input.brandOverlayPlacement),
       sceneTemplateIds: sceneTemplateIds.value,
       size: resolvedSize.size,
       stylePresetId: stylePreset.value,
@@ -2947,9 +4066,21 @@ function parseEcommerceBatchPayload(input: unknown): ParseResult<ResolvedEcommer
       countPerScene: count.value,
       sourcePageUrl: parseOptionalString(input.sourcePageUrl),
       referenceImage: parseEcommerceReferenceImage(input.referenceImage),
+      createComparisonCollage: parseOptionalBoolean(input.createComparisonCollage) === true,
       extraDirection: parseOptionalString(input.extraDirection)
     }
   };
+}
+
+function parseBrandOverlayPlacement(value: unknown): BrandOverlayPlacement | undefined {
+  const placement = parseOptionalString(value);
+  if (!placement) {
+    return undefined;
+  }
+  if (placement === "top-left" || placement === "top-right" || placement === "bottom-left" || placement === "bottom-right") {
+    return placement;
+  }
+  return undefined;
 }
 
 function parseEcommerceReferenceImage(value: unknown): ReferenceImageInput | undefined {
@@ -2963,9 +4094,15 @@ function parseEcommerceReferenceImage(value: unknown): ReferenceImageInput | und
   }
 
   const fileName = value.fileName;
+  const maskDataUrl = parseOptionalString(value.maskDataUrl);
+  const maskedDataUrl = parseOptionalString(value.maskedDataUrl);
+  const annotatedDataUrl = parseOptionalString(value.annotatedDataUrl);
   return {
     dataUrl,
-    fileName: typeof fileName === "string" && fileName.trim() ? fileName.trim() : undefined
+    fileName: typeof fileName === "string" && fileName.trim() ? fileName.trim() : undefined,
+    maskDataUrl: maskDataUrl ?? undefined,
+    maskedDataUrl: maskedDataUrl ?? undefined,
+    annotatedDataUrl: annotatedDataUrl ?? undefined
   };
 }
 
@@ -3167,6 +4304,111 @@ function parseDimension(value: unknown): number {
   return typeof value === "number" ? value : Number.NaN;
 }
 
+function parseHelpCategoryPayload(input: unknown): ParseResult<SaveHelpCategoryRequest> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_help_category", "帮助分类内容必须是 JSON 对象。")
+    };
+  }
+
+  const name = parseLimitedString(input.name, 120);
+  if (!name) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_help_category_name", "分类名称不能为空，且不能超过 120 个字符。")
+    };
+  }
+
+  const sortOrder = Object.hasOwn(input, "sortOrder") ? parseNonNegativeInteger(input.sortOrder) : 0;
+  if (sortOrder === undefined) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_help_category_sort", "分类排序必须是非负整数。")
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      slug: parseOptionalString(input.slug),
+      name,
+      description: parseOptionalString(input.description),
+      audience: parseOptionalString(input.audience),
+      sortOrder,
+      enabled: parseOptionalBoolean(input.enabled) ?? true
+    }
+  };
+}
+
+function parseHelpArticlePayload(input: unknown): ParseResult<SaveHelpArticleRequest> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_help_article", "帮助文章内容必须是 JSON 对象。")
+    };
+  }
+
+  const categoryId = parseOptionalString(input.categoryId);
+  const title = parseLimitedString(input.title, 160);
+  if (!categoryId) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_help_article_category", "请选择文章分类。")
+    };
+  }
+  if (!title) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_help_article_title", "文章标题不能为空，且不能超过 160 个字符。")
+    };
+  }
+
+  const sortOrder = Object.hasOwn(input, "sortOrder") ? parseNonNegativeInteger(input.sortOrder) : 0;
+  if (sortOrder === undefined) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_help_article_sort", "文章排序必须是非负整数。")
+    };
+  }
+
+  const contentMarkdown = parseHelpMarkdown(input.contentMarkdown);
+  if (!contentMarkdown) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_help_article_content", "请输入帮助内容。")
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      categoryId,
+      slug: parseOptionalString(input.slug),
+      title,
+      summary: parseOptionalString(input.summary),
+      contentMarkdown,
+      coverImageUrl: parseOptionalString(input.coverImageUrl),
+      videoUrl: parseOptionalString(input.videoUrl),
+      status: input.status === "draft" ? "draft" : "published",
+      featured: parseOptionalBoolean(input.featured) ?? false,
+      sortOrder,
+      tags: parseStringList(input.tags)
+    }
+  };
+}
+
+function parseStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.map((item) => (typeof item === "string" ? item.trim() : "")).filter(Boolean).slice(0, 50);
+}
+
+function parseHelpMarkdown(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
 function parseOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
@@ -3203,6 +4445,14 @@ function parseNonNegativeInteger(value: unknown): number | undefined {
     return undefined;
   }
   return value;
+}
+
+function parsePositiveConcurrency(value: unknown): number | undefined {
+  const numericValue = typeof value === "number" ? value : typeof value === "string" ? Number.parseInt(value, 10) : Number.NaN;
+  if (!Number.isSafeInteger(numericValue) || numericValue <= 0) {
+    return undefined;
+  }
+  return numericValue;
 }
 
 function stringValue(value: unknown): string | undefined {
@@ -3432,6 +4682,7 @@ function isMainModule(): boolean {
 
 if (isMainModule()) {
   await initializeDatabase();
+  await initializeEcommerceGenerationConcurrency();
 
   const server = serve(
     {

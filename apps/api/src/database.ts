@@ -135,6 +135,9 @@ async function createSchema(): Promise<void> {
       quota_used BIGINT NOT NULL DEFAULT 0,
       balance_cents BIGINT NOT NULL DEFAULT 0,
       referral_balance_cents BIGINT NOT NULL DEFAULT 0,
+      invoice_paid_cents BIGINT NOT NULL DEFAULT 0,
+      invoice_reserved_cents BIGINT NOT NULL DEFAULT 0,
+      invoice_issued_cents BIGINT NOT NULL DEFAULT 0,
       invite_code VARCHAR(64),
       inviter_user_id VARCHAR(64),
       storage_quota_bytes BIGINT NOT NULL DEFAULT 0,
@@ -180,6 +183,45 @@ async function createSchema(): Promise<void> {
   await seedDefaultSystemSettings();
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS help_categories (
+      id VARCHAR(64) PRIMARY KEY,
+      slug VARCHAR(128) NOT NULL,
+      name VARCHAR(255) NOT NULL,
+      description TEXT,
+      audience VARCHAR(64),
+      sort_order INT NOT NULL DEFAULT 0,
+      enabled INT NOT NULL DEFAULT 1,
+      created_at VARCHAR(32) NOT NULL,
+      updated_at VARCHAR(32) NOT NULL,
+      UNIQUE KEY help_categories_slug_unique_idx (slug),
+      KEY help_categories_enabled_sort_idx (enabled, sort_order)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS help_articles (
+      id VARCHAR(64) PRIMARY KEY,
+      category_id VARCHAR(64) NOT NULL,
+      slug VARCHAR(160) NOT NULL,
+      title VARCHAR(255) NOT NULL,
+      summary TEXT,
+      content_json LONGTEXT NOT NULL,
+      cover_image_url TEXT,
+      video_url TEXT,
+      status VARCHAR(32) NOT NULL DEFAULT 'published',
+      featured INT NOT NULL DEFAULT 0,
+      sort_order INT NOT NULL DEFAULT 0,
+      tags_json LONGTEXT,
+      created_at VARCHAR(32) NOT NULL,
+      updated_at VARCHAR(32) NOT NULL,
+      UNIQUE KEY help_articles_slug_unique_idx (slug),
+      KEY help_articles_category_sort_idx (category_id, sort_order),
+      KEY help_articles_status_featured_idx (status, featured),
+      CONSTRAINT help_articles_category_fk FOREIGN KEY (category_id) REFERENCES help_categories(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+  await seedDefaultHelpCenter();
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS email_verification_codes (
       id VARCHAR(64) PRIMARY KEY,
       email VARCHAR(255) NOT NULL,
@@ -219,7 +261,6 @@ async function createSchema(): Promise<void> {
       CONSTRAINT workspaces_owner_user_fk FOREIGN KEY (owner_user_id) REFERENCES users(id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
-
   await pool.query(`
     CREATE TABLE IF NOT EXISTS workspace_members (
       id VARCHAR(64) PRIMARY KEY,
@@ -315,6 +356,7 @@ async function createSchema(): Promise<void> {
       model_provider VARCHAR(64),
       model_display_name VARCHAR(255),
       reference_asset_id VARCHAR(64),
+      reference_mask_data_url LONGTEXT,
       created_at VARCHAR(32) NOT NULL,
       KEY generation_jobs_workspace_created_at_idx (workspace_id, created_at),
       CONSTRAINT generation_jobs_workspace_fk FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -333,15 +375,20 @@ async function createSchema(): Promise<void> {
       status VARCHAR(32) NOT NULL,
       asset_id VARCHAR(64),
       error TEXT,
+      public_gallery_enabled INT NOT NULL DEFAULT 0,
+      public_gallery_sort_order INT NOT NULL DEFAULT 0,
+      public_gallery_updated_at VARCHAR(32),
       created_at VARCHAR(32) NOT NULL,
       KEY generation_outputs_workspace_created_at_idx (workspace_id, created_at),
       KEY generation_outputs_generation_id_idx (generation_id),
       KEY generation_outputs_asset_id_idx (asset_id),
+      KEY generation_outputs_public_gallery_idx (public_gallery_enabled, public_gallery_sort_order, created_at),
       CONSTRAINT generation_outputs_workspace_fk FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
       CONSTRAINT generation_outputs_generation_fk FOREIGN KEY (generation_id) REFERENCES generation_jobs(id) ON DELETE CASCADE,
       CONSTRAINT generation_outputs_asset_fk FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
+  await migrateGenerationOutputsTable();
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS billing_transactions (
@@ -407,6 +454,37 @@ async function createSchema(): Promise<void> {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
   await migrateBillingOrdersTable();
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS invoice_applications (
+      id VARCHAR(64) PRIMARY KEY,
+      user_id VARCHAR(64) NOT NULL,
+      invoice_type VARCHAR(32) NOT NULL,
+      header_type VARCHAR(32) NOT NULL,
+      title VARCHAR(255) NOT NULL,
+      tax_number VARCHAR(64),
+      invoice_content VARCHAR(255) NOT NULL,
+      amount_cents BIGINT NOT NULL DEFAULT 0,
+      email VARCHAR(255) NOT NULL,
+      phone VARCHAR(32),
+      company_address VARCHAR(255),
+      bank_name VARCHAR(255),
+      bank_account VARCHAR(255),
+      remark TEXT,
+      status VARCHAR(32) NOT NULL,
+      handled_by_user_id VARCHAR(64),
+      handled_at VARCHAR(32),
+      review_note TEXT,
+      created_at VARCHAR(32) NOT NULL,
+      updated_at VARCHAR(32) NOT NULL,
+      KEY invoice_applications_user_created_at_idx (user_id, created_at),
+      KEY invoice_applications_user_status_idx (user_id, status),
+      CONSTRAINT invoice_applications_user_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      CONSTRAINT invoice_applications_handled_by_user_fk FOREIGN KEY (handled_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+  await migrateInvoiceApplicationsTable();
+  await syncInvoiceLedgerCaches();
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ecommerce_batch_jobs (
@@ -518,8 +596,8 @@ async function upsertTenantRows(input: {
 }): Promise<void> {
   await pool.query(
     `
-      INSERT INTO users (id, email, password_hash, display_name, role, plan_id, plan_expires_at, quota_total, quota_used, balance_cents, referral_balance_cents, invite_code, inviter_user_id, storage_quota_bytes, storage_used_bytes, currency, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO users (id, email, password_hash, display_name, role, plan_id, plan_expires_at, quota_total, quota_used, balance_cents, referral_balance_cents, invoice_paid_cents, invoice_reserved_cents, invoice_issued_cents, invite_code, inviter_user_id, storage_quota_bytes, storage_used_bytes, currency, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
         email = VALUES(email),
         password_hash = IF(VALUES(password_hash) <> '', VALUES(password_hash), password_hash),
@@ -531,6 +609,9 @@ async function upsertTenantRows(input: {
         quota_used = quota_used,
         balance_cents = balance_cents,
         referral_balance_cents = referral_balance_cents,
+        invoice_paid_cents = invoice_paid_cents,
+        invoice_reserved_cents = invoice_reserved_cents,
+        invoice_issued_cents = invoice_issued_cents,
         invite_code = IF(invite_code IS NULL OR invite_code = '', VALUES(invite_code), invite_code),
         inviter_user_id = inviter_user_id,
         storage_quota_bytes = IF(storage_quota_bytes = 0, VALUES(storage_quota_bytes), storage_quota_bytes),
@@ -549,6 +630,9 @@ async function upsertTenantRows(input: {
       input.quotaTotal ?? defaultSubscriptionPlans[0].imageQuota,
       input.quotaUsed ?? 0,
       input.balanceCents ?? 0,
+      0,
+      0,
+      0,
       0,
       inviteCodeFromUserId(input.userId),
       null,
@@ -600,6 +684,9 @@ async function migrateUsersTable(): Promise<void> {
   await addColumnIfMissing("users", "quota_used", "BIGINT NOT NULL DEFAULT 0");
   await addColumnIfMissing("users", "balance_cents", "BIGINT NOT NULL DEFAULT 0");
   await addColumnIfMissing("users", "referral_balance_cents", "BIGINT NOT NULL DEFAULT 0");
+  await addColumnIfMissing("users", "invoice_paid_cents", "BIGINT NOT NULL DEFAULT 0");
+  await addColumnIfMissing("users", "invoice_reserved_cents", "BIGINT NOT NULL DEFAULT 0");
+  await addColumnIfMissing("users", "invoice_issued_cents", "BIGINT NOT NULL DEFAULT 0");
   await addColumnIfMissing("users", "invite_code", "VARCHAR(64)");
   await addColumnIfMissing("users", "inviter_user_id", "VARCHAR(64)");
   await addColumnIfMissing("users", "storage_quota_bytes", "BIGINT NOT NULL DEFAULT 0");
@@ -643,6 +730,18 @@ async function migrateGenerationJobsTable(): Promise<void> {
   await addColumnIfMissing("generation_jobs", "model_config_id", "VARCHAR(64)");
   await addColumnIfMissing("generation_jobs", "model_provider", "VARCHAR(64)");
   await addColumnIfMissing("generation_jobs", "model_display_name", "VARCHAR(255)");
+  await addColumnIfMissing("generation_jobs", "reference_mask_data_url", "LONGTEXT");
+}
+
+async function migrateGenerationOutputsTable(): Promise<void> {
+  await addColumnIfMissing("generation_outputs", "public_gallery_enabled", "INT NOT NULL DEFAULT 0");
+  await addColumnIfMissing("generation_outputs", "public_gallery_sort_order", "INT NOT NULL DEFAULT 0");
+  await addColumnIfMissing("generation_outputs", "public_gallery_updated_at", "VARCHAR(32)");
+  await addIndexIfMissing(
+    "generation_outputs",
+    "generation_outputs_public_gallery_idx",
+    "KEY generation_outputs_public_gallery_idx (public_gallery_enabled, public_gallery_sort_order, created_at)"
+  );
 }
 
 function defaultPlanExpiryFrom(base: Date): string {
@@ -717,6 +816,44 @@ async function migrateBillingOrdersTable(): Promise<void> {
   );
 }
 
+async function migrateInvoiceApplicationsTable(): Promise<void> {
+  await addColumnIfMissing("invoice_applications", "handled_by_user_id", "VARCHAR(64)");
+  await addColumnIfMissing("invoice_applications", "handled_at", "VARCHAR(32)");
+  await addColumnIfMissing("invoice_applications", "review_note", "TEXT");
+  await addIndexIfMissing(
+    "invoice_applications",
+    "invoice_applications_user_created_at_idx",
+    "KEY invoice_applications_user_created_at_idx (user_id, created_at)"
+  );
+  await addIndexIfMissing(
+    "invoice_applications",
+    "invoice_applications_user_status_idx",
+    "KEY invoice_applications_user_status_idx (user_id, status)"
+  );
+}
+
+async function syncInvoiceLedgerCaches(): Promise<void> {
+  await pool.query(`
+    UPDATE users u
+    SET
+      invoice_paid_cents = (
+        SELECT COALESCE(SUM(o.amount_cents), 0)
+        FROM billing_orders o
+        WHERE o.user_id = u.id AND o.status = 'paid' AND o.type IN ('recharge', 'plan_purchase')
+      ),
+      invoice_reserved_cents = (
+        SELECT COALESCE(SUM(i.amount_cents), 0)
+        FROM invoice_applications i
+        WHERE i.user_id = u.id AND i.status IN ('pending', 'processing')
+      ),
+      invoice_issued_cents = (
+        SELECT COALESCE(SUM(i.amount_cents), 0)
+        FROM invoice_applications i
+        WHERE i.user_id = u.id AND i.status = 'issued'
+      )
+  `);
+}
+
 async function seedDefaultSystemSettings(): Promise<void> {
   const now = new Date().toISOString();
   const defaults = [
@@ -779,6 +916,184 @@ async function seedDefaultSystemSettings(): Promise<void> {
         ON DUPLICATE KEY UPDATE setting_key = setting_key
       `,
       [key, JSON.stringify(value), now, now]
+    );
+  }
+}
+
+async function seedDefaultHelpCenter(): Promise<void> {
+  const now = new Date().toISOString();
+  const categories = [
+    { id: "help-getting-started", slug: "getting-started", name: "注册与登录", description: "账号注册、登录、手机号验证和账号安全。", audience: "all", sortOrder: 10 },
+    { id: "help-billing", slug: "billing", name: "充值、套餐与提现", description: "充值购买、余额、发票、邀请返现和提现说明。", audience: "all", sortOrder: 20 },
+    { id: "help-extension", slug: "extension", name: "插件安装与采集", description: "浏览器插件安装、更新和网页侧商品采集。", audience: "operator", sortOrder: 30 },
+    { id: "help-creation", slug: "creation-gallery", name: "生图与作品管理", description: "上传产品图、生成电商图、查看作品库和下载。", audience: "creator", sortOrder: 40 },
+    { id: "help-cross-border", slug: "cross-border", name: "跨境电商场景", description: "面向 Amazon、Shopee、独立站等海外渠道的图片生产流程。", audience: "cross-border", sortOrder: 50 },
+    { id: "help-1688", slug: "1688-factory", name: "1688 商家场景", description: "工厂、档口、源头商家的主图、详情图和批量出图方法。", audience: "1688", sortOrder: 60 }
+  ] as const;
+
+  for (const category of categories) {
+    await pool.query(
+      `
+        INSERT INTO help_categories (id, slug, name, description, audience, sort_order, enabled, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+        ON DUPLICATE KEY UPDATE id = id
+      `,
+      [category.id, category.slug, category.name, category.description, category.audience, category.sortOrder, now, now]
+    );
+  }
+
+  const articles = [
+    {
+      id: "help-article-register-login",
+      categoryId: "help-getting-started",
+      slug: "register-login",
+      title: "如何注册、登录并完成手机号验证",
+      summary: "新用户可用手机号注册，已有用户直接登录；进入核心功能前需要完成手机号验证。",
+      tags: ["注册", "登录", "手机号"],
+      featured: 1,
+      sortOrder: 10,
+      contentMarkdown: `## 操作步骤
+
+1. 点击注册，填写手机号、验证码和密码。
+2. 已有账号选择登录，输入手机号或邮箱和密码。
+3. 进入账户页补充手机号验证，验证后可使用生图、作品库、充值等权益。
+
+> 通过邀请链接注册时，邀请码会自动带入，双方可获得对应奖励。`
+    },
+    {
+      id: "help-article-recharge-plan",
+      categoryId: "help-billing",
+      slug: "recharge-plan-balance",
+      title: "如何充值、购买套餐和查看余额",
+      summary: "账户页支持查看套餐、额度、余额、订单流水，并可通过支付宝充值或购买套餐。",
+      tags: ["充值", "套餐", "余额"],
+      featured: 1,
+      sortOrder: 10,
+      contentMarkdown: `## 充值流程
+
+1. 打开账户页的“套餐与余额”。
+2. 输入充值金额，点击支付宝充值。
+3. 支付完成后返回页面刷新余额和订单状态。
+
+购买套餐时可选择余额支付或支付宝支付；余额不足时建议先充值再购买。`
+    },
+    {
+      id: "help-article-withdraw",
+      categoryId: "help-billing",
+      slug: "withdraw-referral-balance",
+      title: "如何提现邀请返现",
+      summary: "当前系统已有邀请现金返现余额记录，但暂未开放用户端自动提现入口。",
+      tags: ["提现", "邀请返现", "余额"],
+      featured: 1,
+      sortOrder: 20,
+      contentMarkdown: `> [!WARNING] 目前没有自动提现接口。邀请返现会进入现金激励账户，后台可查看返现流水；如需提现，建议先由客服或管理员人工登记处理。
+
+## 建议后续补齐的提现规则
+
+- 提现门槛：例如满 50 元可申请。
+- 收款方式：支付宝账号、姓名、手机号。
+- 审核状态：待审核、处理中、已打款、驳回。
+- 风控限制：订单退款期后再结算返现。`
+    },
+    {
+      id: "help-article-extension-install",
+      categoryId: "help-extension",
+      slug: "install-browser-extension",
+      title: "如何安装和更新浏览器插件",
+      summary: "下载插件压缩包，解压后在 Chrome 或 Edge 扩展管理页加载目录。",
+      tags: ["插件", "Chrome", "Edge"],
+      featured: 0,
+      sortOrder: 10,
+      contentMarkdown: `## 安装步骤
+
+1. 在工具内点击下载插件。
+2. 解压 zip 文件。
+3. 打开 Chrome 或 Edge 的扩展管理页，启用开发者模式。
+4. 选择“加载已解压的扩展程序”，选中解压后的插件目录。
+
+插件更新时重新下载最新版压缩包，替换解压目录后在扩展管理页点击重新加载。`
+    },
+    {
+      id: "help-article-gallery",
+      categoryId: "help-creation",
+      slug: "view-download-gallery",
+      title: "如何查看作品、复用图片和下载",
+      summary: "作品库集中展示已生成图片，可预览、下载、复用到画布或删除。",
+      tags: ["作品库", "下载", "复用"],
+      featured: 0,
+      sortOrder: 10,
+      contentMarkdown: `## 查看作品
+
+1. 点击顶部“作品库”。
+2. 按生成时间查看图片。
+3. 选择图片下载，或复用回画布继续编辑。
+
+> [!INFO] 云存储开启后，作品可跨设备查看；删除作品会移除对应记录。`
+    },
+    {
+      id: "help-article-cross-border",
+      categoryId: "help-cross-border",
+      slug: "cross-border-product-images",
+      title: "跨境卖家如何从工厂图生成海外电商素材",
+      summary: "把中文商品图、工厂实拍图转成适合海外市场的主图、场景图、卖点图和多语言素材。",
+      tags: ["跨境电商", "Amazon", "Shopee", "独立站"],
+      featured: 1,
+      sortOrder: 10,
+      contentMarkdown: `## 推荐流程
+
+1. 上传清晰产品图，补充英文商品标题和核心卖点。
+2. 选择目标平台和市场，如 Amazon 美国站或 Shopee 东南亚。
+3. 选择主图、场景图、详情图等模板，一次生成多张候选。
+4. 下载合规图片后上传到店铺，保留效果好的提示词继续迭代。
+
+## 适合场景
+
+- 铺货前快速测试图片方向。
+- 把 1688 或淘宝供货图改成海外审美。
+- 为独立站、广告投放、社媒种草补齐素材。`
+    },
+    {
+      id: "help-article-1688",
+      categoryId: "help-1688",
+      slug: "1688-factory-main-image",
+      title: "1688 商家如何低成本做主图和详情图",
+      summary: "源头工厂可用现有白底图、实拍图快速生成模特图、场景图和详情页素材。",
+      tags: ["1688", "工厂", "主图", "详情页"],
+      featured: 1,
+      sortOrder: 10,
+      contentMarkdown: `## 推荐流程
+
+1. 上传商品白底图或实拍图。
+2. 填写材质、尺寸、适用人群、使用场景。
+3. 选择主图、场景图或详情页模板生成。
+4. 把满意图片下载后用于 1688 店铺装修、旺铺详情、活动页。
+
+> [!SUCCESS] 适合服饰、箱包、家居、小商品、美妆包装等需要多场景展示的类目。`
+    }
+  ] as const;
+
+  for (const article of articles) {
+    await pool.query(
+      `
+        INSERT INTO help_articles (
+          id, category_id, slug, title, summary, content_json, status, featured, sort_order, tags_json, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, 'published', ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE id = id
+      `,
+      [
+        article.id,
+        article.categoryId,
+        article.slug,
+        article.title,
+        article.summary,
+        article.contentMarkdown,
+        article.featured,
+        article.sortOrder,
+        JSON.stringify(article.tags),
+        now,
+        now
+      ]
     );
   }
 }

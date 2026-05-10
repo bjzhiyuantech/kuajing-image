@@ -1,5 +1,6 @@
 import OpenAI, { APIConnectionTimeoutError, APIError, APIUserAbortError, toFile } from "openai";
 import type { Image, ImageEditParamsNonStreaming, ImageGenerateParamsNonStreaming, ImagesResponse } from "openai/resources/images";
+import sharp from "sharp";
 import {
   IMAGE_MODEL,
   type ImageQuality,
@@ -72,6 +73,7 @@ export interface GeminiImageProviderConfig {
 
 const DEFAULT_OPENAI_IMAGE_TIMEOUT_MS = 20 * 60 * 1000;
 const MAX_REFERENCE_IMAGE_BYTES = 50 * 1024 * 1024;
+const MAX_MASK_IMAGE_BYTES = 4 * 1024 * 1024;
 const MAX_PROVIDER_IMAGE_BYTES = 100 * 1024 * 1024;
 const SUPPORTED_REFERENCE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp"]);
 
@@ -173,11 +175,35 @@ class OpenAIImageProvider implements ImageProvider {
   async edit(input: EditImageProviderInput, signal?: AbortSignal): Promise<ProviderResult> {
     try {
       const reference = await dataUrlToFile(input.referenceImage);
+
+      if (this.config.baseURL && input.referenceImage.maskDataUrl) {
+        const annotatedReference = await createAnnotatedReferenceFile(input.referenceImage, signal);
+        const response = await this.client.images.edit(
+          imageEditRequestBody({
+            model: this.config.model,
+            image: [annotatedReference.file, reference],
+            prompt: editPromptWithMarkedReferenceInstructions(input.prompt, {
+              ...input.referenceImage,
+              annotatedDataUrl: annotatedReference.annotatedDataUrl
+            }, { multipleReferenceImages: true }),
+            size: input.sizeApiValue,
+            quality: input.quality,
+            output_format: input.outputFormat,
+            n: input.count
+          }),
+          { signal }
+        );
+
+        return await normalizeProviderResponse(response, input.sizeApiValue, this.config.model, signal);
+      }
+
+      const mask = input.referenceImage.maskDataUrl ? await dataUrlToPngFile(input.referenceImage.maskDataUrl) : undefined;
       const response = await this.client.images.edit(
         imageEditRequestBody({
           model: this.config.model,
           image: [reference],
-          prompt: input.prompt,
+          mask,
+          prompt: editPromptWithMaskInstructions(input.prompt, input.referenceImage),
           size: input.sizeApiValue,
           quality: input.quality,
           output_format: input.outputFormat,
@@ -201,7 +227,7 @@ class GeminiImageProvider implements ImageProvider {
   }
 
   async edit(input: EditImageProviderInput, signal?: AbortSignal): Promise<ProviderResult> {
-    return this.generateContent(input, input.referenceImage, signal);
+    return this.generateContent(input, await resolveGeminiReferenceImage(input.referenceImage, signal), signal);
   }
 
   private async generateContent(
@@ -213,13 +239,14 @@ class GeminiImageProvider implements ImageProvider {
       const images: ProviderImage[] = [];
       for (let index = 0; index < input.count; index += 1) {
         const endpoint = this.endpointUrl();
+        const prompt = referenceImage ? editPromptWithMarkedReferenceInstructions(input.prompt, referenceImage) : input.prompt;
         const response = await fetch(endpoint, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             "x-goog-api-key": this.config.apiKey
           },
-          body: JSON.stringify(geminiGenerateContentBody(input, referenceImage)),
+          body: JSON.stringify(geminiGenerateContentBody({ ...input, prompt }, referenceImage)),
           signal: timeoutSignal(signal, this.config.timeoutMs)
         });
 
@@ -273,6 +300,135 @@ function imageEditRequestBody(body: FlexibleImageEditParams): ImageEditParamsNon
   return body as unknown as ImageEditParamsNonStreaming;
 }
 
+async function resolveGeminiReferenceImage(referenceImage: ReferenceImageInput, signal?: AbortSignal): Promise<ReferenceImageInput> {
+  throwIfAborted(signal);
+  if (referenceImage.annotatedDataUrl || referenceImage.maskedDataUrl || !referenceImage.maskDataUrl) {
+    return referenceImage;
+  }
+
+  const { maskedDataUrl, annotatedDataUrl } = await composeReferenceImageVariants(referenceImage.dataUrl, referenceImage.maskDataUrl, signal);
+  return {
+    ...referenceImage,
+    maskedDataUrl,
+    annotatedDataUrl
+  };
+}
+
+async function composeReferenceImageVariants(
+  baseDataUrl: string,
+  maskDataUrl: string,
+  signal?: AbortSignal
+): Promise<{ maskedDataUrl: string; annotatedDataUrl: string }> {
+  throwIfAborted(signal);
+  const baseImage = parseDataUrl(baseDataUrl, "参考图像");
+  const maskImage = parseDataUrl(maskDataUrl, "蒙版");
+  const metadata = await sharp(baseImage.bytes).metadata();
+  const width = metadata.width ?? 0;
+  const height = metadata.height ?? 0;
+  if (width <= 0 || height <= 0) {
+    throw new ProviderError("unsupported_provider_behavior", "参考图像格式不受支持。", 400);
+  }
+
+  const resizedMask = await sharp(maskImage.bytes).resize(width, height, { fit: "fill" }).png().toBuffer();
+  const inverseMask = await sharp({
+    create: {
+      width,
+      height,
+      channels: 4,
+      background: { r: 255, g: 255, b: 255, alpha: 1 }
+    }
+  })
+    .composite([{ input: resizedMask, blend: "dest-out" }])
+    .png()
+    .toBuffer();
+
+  throwIfAborted(signal);
+  const baseResized = sharp(baseImage.bytes).resize(width, height, { fit: "fill" });
+  const [maskedBuffer, annotatedOverlayBuffer] = await Promise.all([
+    baseResized
+      .clone()
+      .composite([{ input: inverseMask, blend: "dest-out" }])
+      .png()
+      .toBuffer(),
+    sharp({
+      create: {
+        width,
+        height,
+        channels: 4,
+        background: { r: 255, g: 59, b: 48, alpha: 0.16 }
+      }
+    })
+      .composite([{ input: inverseMask, blend: "dest-in" }])
+      .png()
+      .toBuffer()
+  ]);
+  const annotatedBuffer = await baseResized
+    .clone()
+    .composite([{ input: annotatedOverlayBuffer, blend: "over" }])
+    .png()
+    .toBuffer();
+
+  return {
+    maskedDataUrl: pngBufferToDataUrl(maskedBuffer),
+    annotatedDataUrl: pngBufferToDataUrl(annotatedBuffer)
+  };
+}
+
+async function createAnnotatedReferenceFile(
+  referenceImage: ReferenceImageInput,
+  signal?: AbortSignal
+): Promise<{ file: File; annotatedDataUrl: string }> {
+  throwIfAborted(signal);
+  if (referenceImage.annotatedDataUrl) {
+    return {
+      file: await dataUrlToFile({
+        ...referenceImage,
+        dataUrl: referenceImage.annotatedDataUrl,
+        fileName: markedReferenceFileName(referenceImage.fileName)
+      }),
+      annotatedDataUrl: referenceImage.annotatedDataUrl
+    };
+  }
+
+  if (!referenceImage.maskDataUrl) {
+    return {
+      file: await dataUrlToFile(referenceImage),
+      annotatedDataUrl: referenceImage.dataUrl
+    };
+  }
+
+  const { annotatedDataUrl } = await composeReferenceImageVariants(referenceImage.dataUrl, referenceImage.maskDataUrl, signal);
+  return {
+    file: await dataUrlToFile({
+      ...referenceImage,
+      dataUrl: annotatedDataUrl,
+      fileName: markedReferenceFileName(referenceImage.fileName)
+    }),
+    annotatedDataUrl
+  }
+}
+
+function parseDataUrl(dataUrl: string, label: string): { bytes: Buffer } {
+  const match = /^data:([^;,]+);base64,(.+)$/su.exec(dataUrl);
+  if (!match) {
+    throw new ProviderError("unsupported_provider_behavior", `${label} 格式不受支持。`, 400);
+  }
+
+  return {
+    bytes: Buffer.from(match[2], "base64")
+  };
+}
+
+function pngBufferToDataUrl(bytes: Buffer): string {
+  return `data:image/png;base64,${bytes.toString("base64")}`;
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw new DOMException("The operation was aborted.", "AbortError");
+  }
+}
+
 function toProviderError(error: unknown): Error {
   if (isAbortError(error)) {
     return error;
@@ -311,10 +467,15 @@ function geminiGenerateContentBody(input: ImageProviderInput, referenceImage: Re
     }
   ];
   if (referenceImage) {
+    const sourceImage = referenceImage.annotatedDataUrl
+      ? { ...referenceImage, dataUrl: referenceImage.annotatedDataUrl, fileName: markedReferenceFileName(referenceImage.fileName) }
+      : referenceImage.maskedDataUrl
+        ? { ...referenceImage, dataUrl: referenceImage.maskedDataUrl }
+        : referenceImage;
     parts.push({
       inline_data: {
-        mime_type: referenceImageMimeType(referenceImage),
-        data: referenceImage.dataUrl.split(",")[1] ?? referenceImage.dataUrl
+        mime_type: referenceImageMimeType(sourceImage),
+        data: sourceImage.dataUrl.split(",")[1] ?? sourceImage.dataUrl
       }
     });
   }
@@ -330,6 +491,52 @@ function geminiGenerateContentBody(input: ImageProviderInput, referenceImage: Re
       responseModalities: ["IMAGE"]
     }
   };
+}
+
+function editPromptWithMaskInstructions(prompt: string, referenceImage: ReferenceImageInput): string {
+  const instructions: string[] = [];
+  if (referenceImage.maskDataUrl) {
+    instructions.push(
+      "The provided mask marks the user's selected or circled area. Apply the requested change inside the transparent mask area and keep all unmasked content unchanged."
+    );
+  }
+  if (instructions.length === 0) {
+    return prompt;
+  }
+  return [prompt, "Reference editing instructions:", ...instructions].join("\n");
+}
+
+function editPromptWithMarkedReferenceInstructions(
+  prompt: string,
+  referenceImage: ReferenceImageInput,
+  options?: { multipleReferenceImages?: boolean }
+): string {
+  const instructions: string[] = [];
+  if (referenceImage.annotatedDataUrl) {
+    instructions.push(
+      options?.multipleReferenceImages
+        ? "The first reference image contains the visible red editing marker. The second reference image is the clean original. Use the marked image to locate the target area and the original image to preserve details, but do not reproduce the marker in the final image."
+        : "The visible red outline in the reference image is only an editing marker. Use it to locate the target area, but do not reproduce the marker in the final image."
+    );
+  } else if (referenceImage.maskedDataUrl) {
+    instructions.push(
+      "The transparent or blanked-out area in the reference image marks the user's selected area. Apply the requested change there and keep the rest unchanged."
+    );
+  }
+  if (referenceImage.maskDataUrl) {
+    instructions.push(
+      "The provided mask marks the user's selected area. Apply the requested change inside that area and keep the rest unchanged."
+    );
+  }
+  if (instructions.length === 0) {
+    return prompt;
+  }
+  return [prompt, "Reference editing instructions:", ...instructions].join("\n");
+}
+
+function markedReferenceFileName(fileName: string | undefined): string | undefined {
+  const sanitized = sanitizeFileName(fileName);
+  return sanitized ? `marked-${sanitized}` : "marked-reference.png";
 }
 
 function geminiProviderImage(body: unknown): ProviderImage {
@@ -544,6 +751,25 @@ async function dataUrlToFile(input: ReferenceImageInput): Promise<File> {
   const extension = normalizedMimeType === "image/jpeg" ? "jpg" : normalizedMimeType.split("/")[1] || "png";
   const fileName = sanitizeFileName(input.fileName) ?? `reference.${extension}`;
   return toFile(bytes, fileName, { type: normalizedMimeType });
+}
+
+async function dataUrlToPngFile(dataUrl: string, fileName = "mask.png"): Promise<File> {
+  const match = /^data:([^;,]+);base64,(.+)$/u.exec(dataUrl);
+  if (!match) {
+    throw new ProviderError("unsupported_provider_behavior", "蒙版格式不受支持。", 400);
+  }
+
+  const mimeType = match[1].toLowerCase();
+  if (mimeType !== "image/png") {
+    throw new ProviderError("unsupported_provider_behavior", "蒙版必须是 PNG 格式。", 400);
+  }
+
+  const bytes = Buffer.from(match[2], "base64");
+  if (bytes.length > MAX_MASK_IMAGE_BYTES) {
+    throw new ProviderError("unsupported_provider_behavior", "蒙版不能超过 4MB。", 400);
+  }
+
+  return toFile(bytes, sanitizeFileName(fileName) ?? "mask.png", { type: "image/png" });
 }
 
 function sanitizeFileName(fileName: string | undefined): string | undefined {

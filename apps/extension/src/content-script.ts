@@ -1,16 +1,48 @@
 import type { PageContext } from "./types";
 
 const capturedResponseImageUrls = new Set<string>();
+const capturedResourceImageUrls = new Set<string>();
 const capturedProductAttributes = new Map<string, string>();
 let pageCaptureScriptInjected = false;
+const BRAND_PREVIEW_WINDOW_NAME_PREFIX = "kuajing-image-brand-preview:";
+const WEB_AUTH_TOKEN_STORAGE_KEY = "gpt-image-canvas.authToken";
+const MAX_CAPTURED_IMAGE_URLS = 1200;
+
+interface BrandPreviewOverlayMessage {
+  placement: "top-left" | "top-right" | "bottom-left" | "bottom-right";
+  logoDataUrl?: string;
+  text?: string;
+}
+
+interface ExtensionProbeRequestMessage {
+  source: "kuajing-image-web";
+  type: "kuajing-image:probe-extension";
+  token: string;
+}
+
+function rememberCapturedUrl(target: Set<string>, value: string): void {
+  const normalized = absoluteUrl(normalizeUrlCandidate(value));
+  if (!normalized) {
+    return;
+  }
+  target.add(normalized);
+  while (target.size > MAX_CAPTURED_IMAGE_URLS) {
+    const oldest = target.values().next().value;
+    if (!oldest) {
+      break;
+    }
+    target.delete(oldest);
+  }
+}
 
 function recordCapturedUrls(urls: string[]): void {
   for (const url of urls) {
-    const normalized = absoluteUrl(normalizeUrlCandidate(url));
-    if (normalized) {
-      capturedResponseImageUrls.add(normalized);
-    }
+    rememberCapturedUrl(capturedResponseImageUrls, url);
   }
+}
+
+function recordCapturedResourceUrl(url: string): void {
+  rememberCapturedUrl(capturedResourceImageUrls, url);
 }
 
 function recordCapturedAttributes(attributes: Array<{ label: string; value: string }>): void {
@@ -37,17 +69,43 @@ function installPageCaptureListener(): void {
   });
 }
 
+function installExtensionProbeListener(): void {
+  window.addEventListener("message", (event) => {
+    const data = event.data as ExtensionProbeRequestMessage | undefined;
+    if (event.source !== window || !data || data.source !== "kuajing-image-web" || data.type !== "kuajing-image:probe-extension" || typeof data.token !== "string") {
+      return;
+    }
+
+    window.postMessage(
+      {
+        source: "kuajing-image-extension",
+        type: "kuajing-image:probe-extension-result",
+        token: data.token,
+        installed: true
+      },
+      window.location.origin
+    );
+  });
+}
+
 function injectPageCaptureScript(): void {
-  if (pageCaptureScriptInjected || !document.documentElement) {
+  if (pageCaptureScriptInjected) {
     return;
   }
+
+  const root = document.documentElement || document.head || document.body;
+  if (!root) {
+    window.setTimeout(injectPageCaptureScript, 0);
+    return;
+  }
+
   pageCaptureScriptInjected = true;
 
   const script = document.createElement("script");
   script.dataset.source = "kuajing-image-page-hook";
   script.src = chrome.runtime.getURL("page-hook.js");
 
-  (document.documentElement || document.head || document.body).appendChild(script);
+  root.appendChild(script);
   script.addEventListener("load", () => script.remove(), { once: true });
   script.addEventListener("error", () => script.remove(), { once: true });
 }
@@ -75,6 +133,71 @@ function absoluteUrl(value: string): string {
   }
 }
 
+function normalizeImagePath(pathname: string): string {
+  return pathname
+    .replace(/\/(?:resize|quality|format|fit|crop|thumbnail|imageView2|x-oss-process|imageslim)[^/]*(?=\/|$)/giu, "/")
+    .replace(/\/(?:w|h|width|height|q|quality|format|fit|crop|thumbnail)[,_=-]?\d{1,5}[a-z0-9]*(?=\/|$)/giu, "/")
+    .replace(/(?:[!@][^/]*?)(?=(?:\.[a-z0-9]+)?$)/giu, "")
+    .replace(/\.(?:\d{2,5})x\d{2,5}\.(jpg|jpeg|png|webp|gif|avif|bmp)$/iu, ".$1")
+    .replace(/\.(jpg|jpeg|png|webp|gif|avif|bmp)_(?:\d{2,5}x\d{2,5}|(?:sum|m|b|q)\d+|webp|jpg|jpeg|png|avif|gif)(?:\.[a-z0-9]+)?$/giu, ".$1")
+    .replace(/_(?:\d{2,5}x\d{2,5}|\d{2,5}[wh]|[wh]\d{2,5}|q\d{1,3}|m\d{1,3}|b\d{1,3}|webp|jpg|jpeg|png|avif|gif)(?=(?:\.[a-z0-9]+)?$)/giu, "")
+    .replace(/(?:!!|_)(?:\d{2,5}x\d{2,5}|(?:sum|m|b|q)\d+|webp|jpg|jpeg|png|avif|gif)+(?=(?:\.[a-z0-9]+)?$)/giu, "")
+    .replace(/\/{2,}/gu, "/");
+}
+
+function normalizeImageSearchParams(search: string): string {
+  if (!search) {
+    return "";
+  }
+
+  const ignoredKeys = new Set([
+    "w",
+    "h",
+    "width",
+    "height",
+    "size",
+    "quality",
+    "q",
+    "fmt",
+    "format",
+    "fit",
+    "crop",
+    "thumbnail",
+    "scale",
+    "ratio",
+    "imageslim",
+    "imageview2",
+    "x-oss-process",
+    "x-oss-quality",
+    "x-oss-resize",
+    "auto-orient",
+    "__r__",
+    "_",
+    "_t",
+    "timestamp",
+    "ts",
+    "cache",
+    "cachebuster"
+  ]);
+
+  try {
+    const params = new URLSearchParams(search);
+    const kept = Array.from(params.entries())
+      .filter(([key, value]) => {
+        const normalizedKey = key.toLowerCase();
+        const normalizedValue = value.trim();
+        if (!normalizedKey || ignoredKeys.has(normalizedKey) || !normalizedValue) {
+          return false;
+        }
+        return !/^\d{1,5}(?:x\d{1,5})?(?:[wh])?$/iu.test(normalizedValue);
+      })
+      .sort(([leftKey, leftValue], [rightKey, rightValue]) => leftKey.localeCompare(rightKey) || leftValue.localeCompare(rightValue));
+    return kept.length > 0 ? `?${new URLSearchParams(kept).toString()}` : "";
+  } catch {
+    return "";
+  }
+}
+
 interface ImageCandidate {
   url: string;
   score: number;
@@ -87,15 +210,50 @@ interface ImageProbeResult {
   height: number;
   ok: boolean;
   fingerprint?: string;
+  sharpness?: number;
 }
 
 interface RankedImageCandidate extends ImageCandidate {
   identityKey: string;
 }
 
+interface AcceptedImageCandidate extends ImageProbeResult {
+  candidateScore: number;
+  context: string;
+  identityKey: string;
+  exactKey: string;
+}
+
+interface CommonDecorativeImageFeatureRecord {
+  kind: "url" | "fingerprint";
+  key: string;
+  seenPages: string[];
+  seenCount: number;
+  width: number;
+  height: number;
+  lastSeenAt: number;
+}
+
+interface CommonDecorativeImageFeatureStore {
+  version: 1;
+  records: CommonDecorativeImageFeatureRecord[];
+}
+
+interface BackgroundImageMetricsResult {
+  ok: boolean;
+  width: number;
+  height: number;
+  fingerprint?: string;
+  sharpness?: number;
+}
+
 const IMAGE_URL_PATTERN = /(?:https?:)?\/\/[^"'()<>\s\\]+?\.(?:jpg|jpeg|png|webp|gif|bmp|avif)(?:[._!-][^"'()<>\s\\?]*)?(?:\?[^"'()<>\s\\]*)?/giu;
+const RESOURCE_IMAGE_URL_PATTERN =
+  /\.(?:jpg|jpeg|png|webp|gif|bmp|avif)(?:[._!-][^"'()<>\s\\?]*)?(?:[?#]|$)|\/img\/|[?&](?:image|img|pic|picture|photo|src)=/iu;
 const DETAIL_ROOT_SELECTOR =
   "#detail, [class*='detail'], [class*='Detail'], [class*='desc'], [class*='Desc'], [class*='content'], [class*='Content'], [class*='rich'], [class*='Rich'], [id*='detail'], [id*='Detail'], [id*='desc'], [id*='Desc'], [data-module*='detail'], [data-module*='Detail']";
+const COMMON_DECORATIVE_IMAGE_FEATURE_STORAGE_KEY = "kuajing-image.common-decorative-image-features.v1";
+const MAX_COMMON_DECORATIVE_IMAGE_FEATURES = 1200;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -125,7 +283,7 @@ function isLikelyDecorativeImage(url: string, context = ""): boolean {
     /logo|icon|sprite|avatar|qrcode|qr-code|barcode|xiaohongshu|小红书|pinduoduo|拼多多|douyin|抖音|kuaishou|快手|jd|京东|taobao|淘宝|alipay|支付|wangwang|旺旺/u.test(
       lower
     ) ||
-    /48\s*小时|发货|保障|货源|服务|售后|赔付|极速|闪电|service|promise|guarantee|delivery|insurance|官方铺货|免费福利|铺货|分销|智淘/u.test(lower)
+    /48\s*小时|发货|保障|货源|服务|售后|赔付|极速|闪电|service|promise|guarantee|delivery|insurance|官方铺货|免费福利|铺货|代发|分销|采销|店管家|掌中宝|智淘/u.test(lower)
   );
 }
 
@@ -156,20 +314,10 @@ function imageIdentityKey(url: string): string {
   try {
     const parsed = new URL(url);
     parsed.hash = "";
-    parsed.search = "";
     parsed.protocol = "https:";
-    parsed.pathname = parsed.pathname
-      .replace(/\.(?:\d{2,5}x\d{2,5})\.(jpg|jpeg|png|webp|gif|avif|bmp)$/iu, ".$1")
-      .replace(/_(?:\d+x\d+|(?:sum|m|b|q)\d+|webp|jpg|jpeg|png|avif|gif)(?=(?:\.[a-z0-9]+)?$)/giu, "")
-      .replace(/\.(?:jpg|jpeg|png|webp|gif|avif|bmp)_(?:\d+x\d+|(?:sum|m|b|q)\d+|webp|jpg|jpeg|png|avif|gif).*$/giu, (match) => {
-        const extension = match.match(/\.(jpg|jpeg|png|webp|gif|avif|bmp)/iu)?.[0] ?? "";
-        return extension.toLowerCase();
-      })
-      .replace(/(?:!!|_)(?:\d+x\d+|(?:sum|m|b|q)\d+|webp|jpg|jpeg|png|avif|gif)+(?=(?:\.[a-z0-9]+)?$)/giu, "")
-      .replace(/\/resize,m_[^/]+/giu, "")
-      .replace(/\/quality,Q_[^/]+/giu, "")
-      .replace(/\/format,[^/]+/giu, "");
-    return `${parsed.hostname}${parsed.pathname}`.toLowerCase();
+    parsed.pathname = normalizeImagePath(parsed.pathname);
+    parsed.search = normalizeImageSearchParams(parsed.search);
+    return `${parsed.hostname}${parsed.pathname}${parsed.search}`.toLowerCase();
   } catch {
     return url.toLowerCase();
   }
@@ -650,21 +798,37 @@ function addBackgroundImageCandidates(doc: Document, candidates: ImageCandidate[
   }
 }
 
+function isImageLikeResourceEntry(entry: PerformanceResourceTiming): boolean {
+  const url = entry.name;
+  const initiatorType = (entry.initiatorType || "").toLowerCase();
+  return (
+    initiatorType === "img" ||
+    initiatorType === "image" ||
+    RESOURCE_IMAGE_URL_PATTERN.test(url)
+  );
+}
+
+function addResourceEntryImageCandidate(entry: PerformanceResourceTiming, candidates: ImageCandidate[], seen: Set<string>): void {
+  if (!isImageLikeResourceEntry(entry)) {
+    return;
+  }
+
+  recordCapturedResourceUrl(entry.name);
+  const score = isAlibabaProductResourceImage(entry.name) ? 132 : 82;
+  const context = isAlibabaProductResourceImage(entry.name) ? "captured 1688 network resource image" : "captured network resource image";
+  addImageCandidate(candidates, seen, entry.name, score, context);
+}
+
 function addResourceImageCandidates(doc: Document, candidates: ImageCandidate[], seen: Set<string>): void {
-  const resourceEntries = performance.getEntriesByType("resource") as PerformanceResourceTiming[];
-  for (const entry of resourceEntries.slice(0, 1200)) {
-    const url = entry.name;
-    const initiatorType = (entry.initiatorType || "").toLowerCase();
-    if (
-      initiatorType === "img" ||
-      initiatorType === "image" ||
-      /\.(?:jpg|jpeg|png|webp|gif|bmp|avif)(?:[?#]|$)/iu.test(url) ||
-      /[?&](?:image|img|pic|picture|photo|src)=/iu.test(url)
-    ) {
-      const score = isAlibabaProductResourceImage(url) ? 130 : 78;
-      const context = isAlibabaProductResourceImage(url) ? "1688 ibank product detail gallery resource image" : "performance resource image";
-      addImageCandidate(candidates, seen, url, score, context);
-    }
+  const resourceEntries = (doc.defaultView?.performance.getEntriesByType("resource") ?? []) as PerformanceResourceTiming[];
+  for (const entry of resourceEntries.slice(-2500)) {
+    addResourceEntryImageCandidate(entry, candidates, seen);
+  }
+
+  for (const url of capturedResourceImageUrls) {
+    const score = isAlibabaProductResourceImage(url) ? 136 : 86;
+    const context = isAlibabaProductResourceImage(url) ? "observed 1688 network image" : "observed network image";
+    addImageCandidate(candidates, seen, url, score, context);
   }
 }
 
@@ -673,6 +837,54 @@ function addCapturedResponseImageCandidates(candidates: ImageCandidate[], seen: 
     const score = isAlibabaProductResourceImage(url) ? 140 : 92;
     const context = isAlibabaProductResourceImage(url) ? "captured response 1688 detail image" : "captured response image";
     addImageCandidate(candidates, seen, url, score, context);
+  }
+}
+
+function addCapturedNetworkImageCandidates(candidates: ImageCandidate[], seen: Set<string>, urls: string[]): void {
+  for (const url of urls) {
+    const score = isAlibabaProductResourceImage(url) ? 150 : 96;
+    const context = isAlibabaProductResourceImage(url) ? "chrome webRequest 1688 product image" : "chrome webRequest image";
+    addImageCandidate(candidates, seen, url, score, context);
+  }
+}
+
+function installResourceCaptureObserver(): void {
+  try {
+    performance.setResourceTimingBufferSize(5000);
+  } catch {
+    // Older pages may not expose a configurable timing buffer.
+  }
+
+  try {
+    for (const entry of performance.getEntriesByType("resource") as PerformanceResourceTiming[]) {
+      if (isImageLikeResourceEntry(entry)) {
+        recordCapturedResourceUrl(entry.name);
+      }
+    }
+  } catch {
+    // Ignore resource timing implementations that throw while the page is loading.
+  }
+
+  try {
+    const observer = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        if (entry.entryType === "resource" && isImageLikeResourceEntry(entry as PerformanceResourceTiming)) {
+          recordCapturedResourceUrl((entry as PerformanceResourceTiming).name);
+        }
+      }
+    });
+    observer.observe({ type: "resource", buffered: true });
+  } catch {
+    // PerformanceObserver is best-effort; direct scans still run during page reads.
+  }
+}
+
+async function readCapturedNetworkImageUrls(): Promise<string[]> {
+  try {
+    const response = (await chrome.runtime.sendMessage({ type: "kuajing-image:get-captured-network-images" })) as { urls?: unknown };
+    return Array.isArray(response?.urls) ? response.urls.filter((url): url is string => typeof url === "string" && Boolean(url.trim())) : [];
+  } catch {
+    return [];
   }
 }
 
@@ -751,19 +963,19 @@ function addGlobalStateImageCandidates(doc: Document, candidates: ImageCandidate
   }
 }
 
-function imageFingerprint(image: HTMLImageElement): string | undefined {
+function imageMetrics(image: HTMLImageElement): { fingerprint?: string; sharpness?: number } {
   if (image.naturalWidth <= 0 || image.naturalHeight <= 0) {
-    return undefined;
+    return {};
   }
 
   try {
     const canvas = document.createElement("canvas");
-    const size = 8;
+    const size = 32;
     canvas.width = size;
     canvas.height = size;
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
     if (!ctx) {
-      return undefined;
+      return {};
     }
 
     ctx.drawImage(image, 0, 0, size, size);
@@ -772,10 +984,36 @@ function imageFingerprint(image: HTMLImageElement): string | undefined {
     for (let index = 0; index < data.length; index += 4) {
       luminance.push(data[index] * 0.299 + data[index + 1] * 0.587 + data[index + 2] * 0.114);
     }
-    const average = luminance.reduce((total, value) => total + value, 0) / luminance.length;
-    return luminance.map((value) => (value >= average ? "1" : "0")).join("");
+    const hashBlockSize = 4;
+    const hashLuminance: number[] = [];
+    for (let blockY = 0; blockY < 8; blockY += 1) {
+      for (let blockX = 0; blockX < 8; blockX += 1) {
+        let total = 0;
+        for (let y = 0; y < hashBlockSize; y += 1) {
+          for (let x = 0; x < hashBlockSize; x += 1) {
+            total += luminance[(blockY * hashBlockSize + y) * size + blockX * hashBlockSize + x];
+          }
+        }
+        hashLuminance.push(total / (hashBlockSize * hashBlockSize));
+      }
+    }
+    const average = hashLuminance.reduce((total, value) => total + value, 0) / hashLuminance.length;
+    const fingerprint = hashLuminance.map((value) => (value >= average ? "1" : "0")).join("");
+
+    const laplacianValues: number[] = [];
+    for (let y = 1; y < size - 1; y += 1) {
+      for (let x = 1; x < size - 1; x += 1) {
+        const center = luminance[y * size + x] * 4;
+        const neighbors = luminance[(y - 1) * size + x] + luminance[(y + 1) * size + x] + luminance[y * size + x - 1] + luminance[y * size + x + 1];
+        laplacianValues.push(center - neighbors);
+      }
+    }
+    const laplacianAverage = laplacianValues.reduce((total, value) => total + value, 0) / laplacianValues.length;
+    const sharpness =
+      laplacianValues.reduce((total, value) => total + (value - laplacianAverage) ** 2, 0) / Math.max(laplacianValues.length, 1);
+    return { fingerprint, sharpness };
   } catch {
-    return undefined;
+    return {};
   }
 }
 
@@ -790,7 +1028,7 @@ function probeImage(url: string): Promise<ImageProbeResult> {
 
     image.onload = () => {
       window.clearTimeout(timer);
-      resolve({ url, width: image.naturalWidth, height: image.naturalHeight, ok: true, fingerprint: imageFingerprint(image) });
+      resolve({ url, width: image.naturalWidth, height: image.naturalHeight, ok: true, ...imageMetrics(image) });
     };
     image.onerror = () => {
       window.clearTimeout(timer);
@@ -800,21 +1038,288 @@ function probeImage(url: string): Promise<ImageProbeResult> {
   });
 }
 
+async function probeImageWithBackgroundMetrics(url: string): Promise<ImageProbeResult> {
+  const pageProbeResult = await probeImage(url);
+  if (!pageProbeResult.ok || pageProbeResult.fingerprint) {
+    return pageProbeResult;
+  }
+
+  try {
+    const metrics = (await chrome.runtime.sendMessage({
+      type: "kuajing-image:probe-image-metrics",
+      url
+    })) as BackgroundImageMetricsResult;
+    if (!metrics?.ok) {
+      return pageProbeResult;
+    }
+    return {
+      ...pageProbeResult,
+      width: metrics.width || pageProbeResult.width,
+      height: metrics.height || pageProbeResult.height,
+      fingerprint: metrics.fingerprint,
+      sharpness: metrics.sharpness
+    };
+  } catch {
+    return pageProbeResult;
+  }
+}
+
+function fingerprintDistance(left: string, right: string): number {
+  if (left.length !== right.length) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  let distance = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) {
+      distance += 1;
+    }
+  }
+  return distance;
+}
+
+function isBetterImageCandidate(candidate: AcceptedImageCandidate, existing: AcceptedImageCandidate): boolean {
+  const candidateArea = candidate.width * candidate.height;
+  const existingArea = existing.width * existing.height;
+  const largerArea = Math.max(candidateArea, existingArea);
+  const areaDeltaRatio = largerArea > 0 ? Math.abs(candidateArea - existingArea) / largerArea : 0;
+
+  if (areaDeltaRatio > 0.1) {
+    return candidateArea > existingArea;
+  }
+
+  const candidateSharpness = candidate.sharpness ?? 0;
+  const existingSharpness = existing.sharpness ?? 0;
+  const sharperValue = Math.max(candidateSharpness, existingSharpness);
+  const sharpnessDeltaRatio = sharperValue > 0 ? Math.abs(candidateSharpness - existingSharpness) / sharperValue : 0;
+  if (sharpnessDeltaRatio > 0.15) {
+    return candidateSharpness > existingSharpness;
+  }
+
+  const candidateRank = imageUrlVariantRank(candidate.url) + candidate.candidateScore;
+  const existingRank = imageUrlVariantRank(existing.url) + existing.candidateScore;
+  return candidateRank > existingRank;
+}
+
+function imageAspectRatio(candidate: AcceptedImageCandidate): number {
+  return candidate.height > 0 ? candidate.width / candidate.height : 0;
+}
+
+function isLikelyDuplicateFingerprint(candidate: AcceptedImageCandidate, existing: AcceptedImageCandidate): boolean {
+  if (!candidate.fingerprint || !existing.fingerprint) {
+    return false;
+  }
+
+  const distance = fingerprintDistance(candidate.fingerprint, existing.fingerprint);
+  if (distance === 0) {
+    return true;
+  }
+
+  const candidateRatio = imageAspectRatio(candidate);
+  const existingRatio = imageAspectRatio(existing);
+  const widerRatio = Math.max(candidateRatio, existingRatio);
+  const ratioDelta = widerRatio > 0 ? Math.abs(candidateRatio - existingRatio) / widerRatio : 0;
+  return distance <= 3 && ratioDelta <= 0.08;
+}
+
+function commonDecorativeFeatureStorageKey(record: Pick<CommonDecorativeImageFeatureRecord, "kind" | "key">): string {
+  return `${record.kind}:${record.key}`;
+}
+
+function currentPageFeatureKey(): string {
+  try {
+    const parsed = new URL(location.href);
+    parsed.hash = "";
+    parsed.search = "";
+    return parsed.toString();
+  } catch {
+    return location.href.split(/[?#]/u)[0] || location.href;
+  }
+}
+
+function imageFeatureKeys(candidate: AcceptedImageCandidate): Array<Pick<CommonDecorativeImageFeatureRecord, "kind" | "key">> {
+  const keys: Array<Pick<CommonDecorativeImageFeatureRecord, "kind" | "key">> = [{ kind: "url", key: candidate.identityKey }];
+  if (candidate.fingerprint) {
+    keys.push({ kind: "fingerprint", key: candidate.fingerprint });
+  }
+  return keys;
+}
+
+function hasStrongProductPlacementContext(context: string): boolean {
+  return /main|gallery|album|detail|desc|content|rich|主图|详情|细节|商品详情|carousel|swiper/u.test(context);
+}
+
+function hasDecorativeSignal(candidate: AcceptedImageCandidate): boolean {
+  return isLikelyDecorativeImage(candidate.url, candidate.context);
+}
+
+function isReusableDecorativeImageShape(candidate: AcceptedImageCandidate): boolean {
+  const longestSide = Math.max(candidate.width, candidate.height);
+  const shortestSide = Math.min(candidate.width, candidate.height);
+  if (longestSide <= 0 || shortestSide <= 0) {
+    return false;
+  }
+
+  const aspectRatio = candidate.width / candidate.height;
+  const squareBadge = aspectRatio >= 0.72 && aspectRatio <= 1.38 && longestSide <= 640 && shortestSide >= 72;
+  const bannerBadge = aspectRatio > 1.38 && aspectRatio <= 4.5 && longestSide <= 960 && shortestSide <= 360;
+  return (squareBadge || bannerBadge) && !hasStrongProductPlacementContext(candidate.context);
+}
+
+function shouldTrackCommonDecorativeFeature(candidate: AcceptedImageCandidate): boolean {
+  return hasDecorativeSignal(candidate) || isReusableDecorativeImageShape(candidate);
+}
+
+function isCommonDecorativeFeature(candidate: AcceptedImageCandidate, records: Map<string, CommonDecorativeImageFeatureRecord>): boolean {
+  if (!shouldTrackCommonDecorativeFeature(candidate)) {
+    return false;
+  }
+
+  for (const featureKey of imageFeatureKeys(candidate)) {
+    const record = records.get(commonDecorativeFeatureStorageKey(featureKey));
+    if (!record) {
+      continue;
+    }
+
+    const requiredSeenPages = featureKey.kind === "url" || hasDecorativeSignal(candidate) ? 2 : 3;
+    if (record.seenPages.length >= requiredSeenPages) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function isCommonDecorativeUrlFeature(url: string, records: Map<string, CommonDecorativeImageFeatureRecord>): boolean {
+  const record = records.get(commonDecorativeFeatureStorageKey({ kind: "url", key: imageIdentityKey(url) }));
+  return Boolean(record && record.seenPages.length >= 2);
+}
+
+function isCommonDecorativeImageFeatureStore(value: unknown): value is CommonDecorativeImageFeatureStore {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { version?: unknown }).version === 1 &&
+    Array.isArray((value as { records?: unknown }).records)
+  );
+}
+
+async function loadCommonDecorativeImageFeatures(): Promise<Map<string, CommonDecorativeImageFeatureRecord>> {
+  try {
+    const stored = await chrome.storage.local.get(COMMON_DECORATIVE_IMAGE_FEATURE_STORAGE_KEY);
+    const value = stored[COMMON_DECORATIVE_IMAGE_FEATURE_STORAGE_KEY];
+    if (!isCommonDecorativeImageFeatureStore(value)) {
+      return new Map();
+    }
+
+    return new Map(
+      value.records
+        .filter((record) => record.kind && record.key)
+        .map((record) => [commonDecorativeFeatureStorageKey(record), record])
+    );
+  } catch {
+    return new Map();
+  }
+}
+
+async function saveCommonDecorativeImageFeatures(records: Map<string, CommonDecorativeImageFeatureRecord>): Promise<void> {
+  const prunedRecords = Array.from(records.values())
+    .sort((left, right) => right.lastSeenAt - left.lastSeenAt)
+    .slice(0, MAX_COMMON_DECORATIVE_IMAGE_FEATURES);
+
+  try {
+    await chrome.storage.local.set({
+      [COMMON_DECORATIVE_IMAGE_FEATURE_STORAGE_KEY]: {
+        version: 1,
+        records: prunedRecords
+      } satisfies CommonDecorativeImageFeatureStore
+    });
+  } catch {
+    // Feature learning is best-effort; image collection still works without it.
+  }
+}
+
+async function rememberCommonDecorativeImageFeatures(
+  candidates: AcceptedImageCandidate[],
+  records: Map<string, CommonDecorativeImageFeatureRecord>
+): Promise<Map<string, CommonDecorativeImageFeatureRecord>> {
+  const pageKey = currentPageFeatureKey();
+  const now = Date.now();
+  let changed = false;
+
+  for (const candidate of candidates) {
+    if (!shouldTrackCommonDecorativeFeature(candidate)) {
+      continue;
+    }
+
+    for (const featureKey of imageFeatureKeys(candidate)) {
+      const storageKey = commonDecorativeFeatureStorageKey(featureKey);
+      const record = records.get(storageKey) ?? {
+        kind: featureKey.kind,
+        key: featureKey.key,
+        seenPages: [],
+        seenCount: 0,
+        width: candidate.width,
+        height: candidate.height,
+        lastSeenAt: now
+      };
+
+      if (!record.seenPages.includes(pageKey)) {
+        record.seenPages = [...record.seenPages, pageKey].slice(-8);
+      }
+      record.seenCount += 1;
+      record.width = Math.max(record.width, candidate.width);
+      record.height = Math.max(record.height, candidate.height);
+      record.lastSeenAt = now;
+      records.set(storageKey, record);
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    await saveCommonDecorativeImageFeatures(records);
+  }
+  return records;
+}
+
+function dedupeProbedImages(candidates: AcceptedImageCandidate[]): AcceptedImageCandidate[] {
+  const groups: AcceptedImageCandidate[] = [];
+
+  for (const candidate of candidates) {
+    const groupIndex = groups.findIndex(
+      (group) =>
+        group.identityKey === candidate.identityKey ||
+        group.exactKey === candidate.exactKey ||
+        isLikelyDuplicateFingerprint(candidate, group)
+    );
+
+    if (groupIndex < 0) {
+      groups.push(candidate);
+      continue;
+    }
+
+    if (isBetterImageCandidate(candidate, groups[groupIndex])) {
+      groups[groupIndex] = candidate;
+    }
+  }
+
+  return groups.sort((left, right) => right.candidateScore - left.candidateScore || right.width * right.height - left.width * left.height);
+}
+
 async function filterProductImageUrls(candidates: ImageCandidate[]): Promise<string[]> {
-  const acceptedKeys = new Set<string>();
-  const acceptedFingerprints = new Set<string>();
+  const commonDecorativeFeatures = await loadCommonDecorativeImageFeatures();
   const dedupedCandidates = bestImageCandidates(candidates);
   const sortedCandidates = dedupedCandidates
     .sort((left, right) => right.score - left.score)
     .slice(0, 180);
-  const accepted: string[] = [];
-  const fallbackUrls = sortedCandidates.map((candidate) => candidate.url).filter((url) => !hasTinySizeHint(url)).slice(0, 120);
+  const accepted: AcceptedImageCandidate[] = [];
+  const fallbackUrlCandidates = sortedCandidates.map((candidate) => candidate.url).filter((url) => !hasTinySizeHint(url));
 
-  for (let index = 0; index < sortedCandidates.length && accepted.length < 120; index += 12) {
+  for (let index = 0; index < sortedCandidates.length; index += 12) {
     const batch = sortedCandidates.slice(index, index + 12);
     const results = await Promise.race([
-      Promise.all(batch.map((candidate) => probeImage(candidate.url).then((result) => ({ ...result, context: candidate.context })))),
-      sleep(3200).then(() => [] as ImageProbeResult[])
+      Promise.all(batch.map((candidate) => probeImageWithBackgroundMetrics(candidate.url).then((result) => ({ ...result, candidateScore: candidate.score, context: candidate.context })))),
+      sleep(5200).then(() => [] as ImageProbeResult[])
     ]);
     for (const result of results) {
       if (!result.ok) {
@@ -824,29 +1329,31 @@ async function filterProductImageUrls(candidates: ImageCandidate[]): Promise<str
       const shortestSide = Math.min(result.width, result.height);
       const identityKey = imageIdentityKey(result.url);
       const exactKey = exactImageUrlKey(result.url);
-      const fingerprint = result.fingerprint;
-      const context = (result as ImageProbeResult & { context?: string }).context?.toLowerCase() ?? "";
+      const context = (result as ImageProbeResult & { candidateScore?: number; context?: string }).context?.toLowerCase() ?? "";
       const allowSmallImage = /gallery|album|thumb|sku|offer|product|detail|desc|content|rich|主图|商品|图片|image|img|carousel|swiper|thumbnail/u.test(context);
       const minLongestSide = allowSmallImage ? 80 : 220;
       const minShortestSide = allowSmallImage ? 60 : 120;
       if (
         longestSide >= minLongestSide &&
-        shortestSide >= minShortestSide &&
-        !acceptedKeys.has(identityKey) &&
-        !acceptedKeys.has(exactKey) &&
-        (!fingerprint || !acceptedFingerprints.has(fingerprint))
+        shortestSide >= minShortestSide
       ) {
-        acceptedKeys.add(identityKey);
-        acceptedKeys.add(exactKey);
-        if (fingerprint) {
-          acceptedFingerprints.add(fingerprint);
-        }
-        accepted.push(result.url);
+        accepted.push({
+          ...result,
+          candidateScore: (result as ImageProbeResult & { candidateScore?: number }).candidateScore ?? 0,
+          context,
+          identityKey,
+          exactKey
+        });
       }
     }
   }
 
-  return accepted.length > 0 ? accepted : fallbackUrls;
+  const updatedCommonDecorativeFeatures = await rememberCommonDecorativeImageFeatures(accepted, commonDecorativeFeatures);
+  const filtered = dedupeProbedImages(accepted.filter((candidate) => !isCommonDecorativeFeature(candidate, updatedCommonDecorativeFeatures)))
+    .map((candidate) => candidate.url)
+    .slice(0, 120);
+  const fallbackUrls = fallbackUrlCandidates.filter((url) => !isCommonDecorativeUrlFeature(url, updatedCommonDecorativeFeatures)).slice(0, 120);
+  return filtered.length > 0 ? filtered : fallbackUrls;
 }
 
 function collectAccessibleDocuments(doc: Document, depth = 0, seen = new Set<Document>()): Document[] {
@@ -903,7 +1410,9 @@ async function pageContext(): Promise<PageContext> {
   const imageCandidates: ImageCandidate[] = [];
   const seenImageUrls = new Set<string>();
   const documents = collectAccessibleDocuments(document);
+  const networkImageUrls = await readCapturedNetworkImageUrls();
 
+  addCapturedNetworkImageCandidates(imageCandidates, seenImageUrls, networkImageUrls);
   addCapturedResponseImageCandidates(imageCandidates, seenImageUrls);
 
   for (const doc of documents) {
@@ -929,6 +1438,7 @@ async function pageContext(): Promise<PageContext> {
     addResourceImageCandidates(doc, imageCandidates, seenImageUrls);
     addCapturedResponseImageCandidates(imageCandidates, seenImageUrls);
   }
+  addCapturedNetworkImageCandidates(imageCandidates, seenImageUrls, await readCapturedNetworkImageUrls());
 
   return {
     title: readProductTitle(document),
@@ -946,6 +1456,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message?.type === "kuajing-image:sync-auth" && typeof message.token === "string") {
+    let persisted = false;
+    try {
+      window.localStorage.setItem(WEB_AUTH_TOKEN_STORAGE_KEY, message.token);
+      persisted = true;
+    } catch {
+      persisted = false;
+    }
     window.postMessage(
       {
         source: "kuajing-image-extension",
@@ -954,12 +1471,39 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       },
       window.location.origin
     );
-    sendResponse({ ok: true });
+    sendResponse({ ok: true, persisted });
     return true;
+  }
+
+  if (message?.type === "kuajing-image:set-preview-overlay") {
+    const overlay = message.overlay as BrandPreviewOverlayMessage | undefined;
+    if (!overlay || !overlay.placement) {
+      sendResponse({ ok: false });
+      return false;
+    }
+
+    const payload = {
+      placement: overlay.placement,
+      logoDataUrl: typeof overlay.logoDataUrl === "string" ? overlay.logoDataUrl : "",
+      text: typeof overlay.text === "string" ? overlay.text : ""
+    };
+    window.name = `${BRAND_PREVIEW_WINDOW_NAME_PREFIX}${JSON.stringify(payload)}`;
+    window.postMessage(
+      {
+        source: "kuajing-image-extension",
+        type: "kuajing-image:preview-overlay",
+        overlay: payload
+      },
+      window.location.origin
+    );
+    sendResponse({ ok: true });
+    return false;
   }
 
   return false;
 });
 
 installPageCaptureListener();
+installExtensionProbeListener();
+installResourceCaptureObserver();
 injectPageCaptureScript();

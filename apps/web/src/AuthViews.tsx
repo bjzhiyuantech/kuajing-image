@@ -3,6 +3,8 @@ import {
   ArrowRight,
   BarChart3,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Clock,
   Copy,
   CreditCard,
@@ -29,26 +31,53 @@ import {
   User,
   UserPlus,
   Users,
-  Wallet
+  Wallet,
+  Upload,
+  X
 } from "lucide-react";
 import type React from "react";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import QRCode from "qrcode";
-import { PHONE_VERIFICATION_REQUIRED_CODE, PHONE_VERIFICATION_REQUIRED_MESSAGE, authFetch, readApiError, readApiErrorDetail, type AuthSession, type AuthUser } from "./authClient";
+import { PHONE_VERIFICATION_REQUIRED_CODE, PHONE_VERIFICATION_REQUIRED_MESSAGE, authFetch, getStoredAuthToken, readApiError, readApiErrorDetail, type AuthSession, type AuthUser } from "./authClient";
 import { BRAND_TAGLINE, BrandMark, BrandName } from "./Brand";
-import type { AdminWechatMiniAppConfigResponse, MaskedSecret } from "@gpt-image-canvas/shared";
+import { AdminHelpPanel } from "./HelpCenter";
+import type {
+  AdminWechatMiniAppConfigResponse,
+  CategoryKitPlannerModelRole,
+  EcommerceGenerationConcurrencyConfigResponse,
+  CloudStorageProvider,
+  DemoCanvasAssetUploadResponse,
+  DemoCanvasConfigResponse,
+  DemoCanvasExample,
+  GalleryImageItem,
+  ImageQuality,
+  MaskedSecret,
+  OutputFormat,
+  SaveCategoryKitPlannerConfigRequest,
+  SaveEcommerceGenerationConcurrencyConfigRequest,
+  SaveDemoCanvasConfigRequest,
+  SaveStorageConfigRequest,
+  StorageConfigResponse,
+  StorageTestResult,
+  StylePresetId
+} from "@gpt-image-canvas/shared";
 
 type AuthMode = "login" | "register";
-type AdminTab = "overview" | "models" | "billing" | "auth" | "plans" | "users" | "referral" | "ledger";
+type AdminTab = "overview" | "models" | "storage" | "billing" | "extension" | "auth" | "help" | "plans" | "users" | "referral" | "demoCanvas" | "gallery" | "ledger";
 
 const adminTabs: Array<{ id: AdminTab; label: string }> = [
   { id: "overview", label: "概览" },
   { id: "models", label: "模型" },
+  { id: "storage", label: "云存储" },
   { id: "billing", label: "计费支付" },
+  { id: "extension", label: "插件发布" },
   { id: "auth", label: "登录" },
+  { id: "help", label: "帮助中心" },
   { id: "plans", label: "套餐" },
   { id: "users", label: "用户" },
   { id: "referral", label: "邀请激励" },
+  { id: "demoCanvas", label: "画布案例" },
+  { id: "gallery", label: "公开案例" },
   { id: "ledger", label: "流水" }
 ];
 
@@ -120,6 +149,17 @@ const modelChips = [
   "Seedream",
   "Kling",
   "Runway"
+] as const;
+
+const authCarouselImages = [
+  {
+    src: "/images/auth-carousel-clothes.png",
+    alt: "服装商品图一键生成模特上身照和营销海报图"
+  },
+  {
+    src: "/images/auth-carousel-product.png",
+    alt: "商品原图一键生成电商主图和营销海报图"
+  }
 ] as const;
 
 export function HomePage({
@@ -357,11 +397,11 @@ export function AuthScreen({
   mode: AuthMode;
   onModeChange: (mode: AuthMode) => void;
   onAuthenticated: (session: AuthSession) => void;
-  onLogin: (email: string, password: string) => Promise<AuthSession>;
+  onLogin: (account: string, password: string) => Promise<AuthSession>;
   onRegister: (phone: string, password: string, displayName: string, smsCode: string, inviteCode?: string) => Promise<AuthSession>;
   onSendSmsCode: (phone: string) => Promise<void>;
 }) {
-  const [email, setEmail] = useState("");
+  const [account, setAccount] = useState("");
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -371,6 +411,7 @@ export function AuthScreen({
   const [notice, setNotice] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSendingCode, setIsSendingCode] = useState(false);
+  const [carouselIndex, setCarouselIndex] = useState(0);
   const isRegister = mode === "register";
 
   useEffect(() => {
@@ -381,6 +422,13 @@ export function AuthScreen({
     }
   }, []);
 
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setCarouselIndex((current) => (current + 1) % authCarouselImages.length);
+    }, 4200);
+    return () => window.clearInterval(timer);
+  }, []);
+
   async function submitForm(event: React.FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     setError("");
@@ -389,8 +437,8 @@ export function AuthScreen({
       setError("请输入手机号。");
       return;
     }
-    if (!isRegister && !email.trim()) {
-      setError("请输入邮箱。");
+    if (!isRegister && !account.trim()) {
+      setError("请输入手机号或邮箱。");
       return;
     }
     if (!password) {
@@ -408,7 +456,7 @@ export function AuthScreen({
 
     setIsSubmitting(true);
     try {
-      const session = isRegister ? await onRegister(phone, password, displayName, smsCode, inviteCode) : await onLogin(email, password);
+      const session = isRegister ? await onRegister(phone, password, displayName, smsCode, inviteCode) : await onLogin(account, password);
       onAuthenticated(session);
     } catch (authError) {
       setError(authError instanceof Error ? authError.message : isRegister ? "注册失败。" : "登录失败。");
@@ -447,13 +495,26 @@ export function AuthScreen({
               <p className="brand-tagline">{BRAND_TAGLINE}</p>
             </div>
           </div>
+          <figure className="auth-panel__visual" aria-label="电商商品图生成示意轮播">
+            {authCarouselImages.map((image, index) => (
+              <img
+                aria-hidden={index !== carouselIndex}
+                className="auth-panel__visual-image"
+                data-active={index === carouselIndex}
+                key={image.src}
+                src={image.src}
+                alt={image.alt}
+                loading={index === 0 ? "eager" : "lazy"}
+              />
+            ))}
+          </figure>
           <div className="auth-panel__summary">
             <p className="auth-eyebrow">
               <Sparkles className="size-3.5" aria-hidden="true" />
               Workspace
             </p>
             <h1 id="auth-title">{isRegister ? "创建账户后进入工作台" : "登录后继续创作"}</h1>
-            <p>画布、图库、生成记录和云存储设置会绑定到你的账户。</p>
+            <p>画布、图库和生成记录会绑定到你的账户，云存储由后台统一配置。</p>
           </div>
         </div>
 
@@ -522,16 +583,15 @@ export function AuthScreen({
             </label>
           ) : (
             <label className="auth-field">
-              <span>邮箱</span>
+              <span>手机号/邮箱</span>
               <div className="auth-input">
-                <Mail className="size-4" aria-hidden="true" />
+                <User className="size-4" aria-hidden="true" />
                 <input
-                  autoComplete="email"
-                  name="email"
-                  placeholder="you@example.com"
-                  type="email"
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
+                  autoComplete="username"
+                  name="account"
+                  placeholder="手机号或邮箱"
+                  value={account}
+                  onChange={(event) => setAccount(event.target.value)}
                 />
               </div>
             </label>
@@ -616,11 +676,17 @@ export function AuthScreen({
 
 export function AccountPage({
   user,
+  mobile = false,
+  onLogout,
+  onNavigate,
   onUserUpdated,
   onSendPhoneCode,
   onBindPhone
 }: {
   user: AuthUser;
+  mobile?: boolean;
+  onLogout?: () => void;
+  onNavigate?: (route: "canvas" | "gallery" | "account" | "help" | "admin") => void;
   onUserUpdated?: (user: AuthUser) => void;
   onSendPhoneCode?: (phone: string) => Promise<void>;
   onBindPhone?: (phone: string, smsCode: string) => Promise<AuthSession>;
@@ -644,6 +710,13 @@ export function AccountPage({
   const [billingAction, setBillingAction] = useState("");
   const [billingActionLoading, setBillingActionLoading] = useState("");
   const [billingError, setBillingError] = useState("");
+  const [invoice, setInvoice] = useState<InvoiceApplicationsState>(createInvoiceApplicationsState());
+  const [invoiceForm, setInvoiceForm] = useState<InvoiceFormState>(createInvoiceFormState(user));
+  const [invoiceLoading, setInvoiceLoading] = useState(true);
+  const [invoiceSaving, setInvoiceSaving] = useState(false);
+  const [invoiceNotice, setInvoiceNotice] = useState("");
+  const [invoiceError, setInvoiceError] = useState("");
+  const invoiceRequestableAmount = invoice.summary.requestableAmountCents;
   const quotaTotal = billing.summary.quotaTotal ?? user.quotaTotal ?? 0;
   const quotaUsed = billing.summary.quotaUsed ?? user.quotaUsed ?? 0;
   const quotaRemaining = billing.summary.packageRemaining ?? Math.max(0, quotaTotal - quotaUsed);
@@ -728,6 +801,100 @@ export function AccountPage({
     }
   }
 
+  async function loadInvoiceApplications({ signal }: { signal?: AbortSignal } = {}): Promise<void> {
+    setInvoiceLoading(true);
+    setInvoiceError("");
+    try {
+      const response = await authFetch("/api/billing/invoice/applications", { signal });
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "开票信息加载失败。"));
+      }
+      const parsed = parseInvoiceApplications(await response.json());
+      if (signal?.aborted) {
+        return;
+      }
+      setInvoice(parsed);
+      if (parsed.profile) {
+        setInvoiceForm(invoiceRecordToForm(parsed.profile));
+      } else {
+        setInvoiceForm((current) => ({
+          ...current,
+          email: current.email || user.email || ""
+        }));
+      }
+    } catch (error) {
+      if (!signal?.aborted) {
+        setInvoice(createInvoiceApplicationsState());
+        setInvoiceError(error instanceof Error ? error.message : "开票信息加载失败。");
+      }
+    } finally {
+      if (!signal?.aborted) {
+        setInvoiceLoading(false);
+      }
+    }
+  }
+
+  async function submitInvoiceApplication(event: React.FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    const amountCents = moneyToCents(invoiceForm.amount);
+    if (!invoiceForm.title.trim()) {
+      setInvoiceError("请填写发票抬头。");
+      return;
+    }
+    if (invoiceForm.headerType === "company" && !invoiceForm.taxNumber.trim()) {
+      setInvoiceError("企业抬头需要填写纳税人识别号。");
+      return;
+    }
+    if (!amountCents || amountCents <= 0) {
+      setInvoiceError("请填写有效的开票金额。");
+      return;
+    }
+    if (amountCents > invoiceRequestableAmount) {
+      setInvoiceError(`开票金额不能超过可申请金额 ${formatMoney(invoiceRequestableAmount, invoice.summary.currency)}。`);
+      return;
+    }
+    if (!invoiceForm.email.trim()) {
+      setInvoiceError("请填写接收邮箱。");
+      return;
+    }
+
+    setInvoiceSaving(true);
+    setInvoiceNotice("");
+    setInvoiceError("");
+    try {
+      const response = await authFetch("/api/billing/invoice/applications", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          headerType: invoiceForm.headerType,
+          title: invoiceForm.title.trim(),
+          taxNumber: invoiceForm.taxNumber.trim() || undefined,
+          invoiceContent: invoiceForm.invoiceContent.trim() || "商品图生成服务",
+          amountCents,
+          email: invoiceForm.email.trim(),
+          phone: invoiceForm.phone.trim() || undefined,
+          companyAddress: invoiceForm.companyAddress.trim() || undefined,
+          bankName: invoiceForm.bankName.trim() || undefined,
+          bankAccount: invoiceForm.bankAccount.trim() || undefined,
+          remark: invoiceForm.remark.trim() || undefined
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "开票申请提交失败。"));
+      }
+      const parsed = parseInvoiceApplications(await response.json());
+      setInvoice(parsed);
+      if (parsed.profile) {
+        setInvoiceForm(invoiceRecordToForm(parsed.profile));
+      }
+      setInvoiceNotice("开票申请已提交，信息已保存备用。");
+    } catch (error) {
+      setInvoiceError(error instanceof Error ? error.message : "开票申请提交失败。");
+    } finally {
+      setInvoiceSaving(false);
+    }
+  }
+
   useEffect(() => {
     const controller = new AbortController();
     const returnedFromPayment = new URLSearchParams(window.location.search).has("billingReturn");
@@ -735,6 +902,7 @@ export function AccountPage({
       setBillingAction("已从支付页面返回，正在刷新余额和订单状态。若订单仍显示待支付，请稍后再刷新。");
     }
     void loadBilling({ preserveNotice: returnedFromPayment, signal: controller.signal });
+    void loadInvoiceApplications({ signal: controller.signal });
     return () => controller.abort();
   }, [user.id]);
 
@@ -1013,6 +1181,130 @@ export function AccountPage({
     }
   }
 
+  if (mobile) {
+    return (
+      <main className="mobile-account app-view">
+        <header className="mobile-app-header">
+          <div className="mobile-app-header__side">
+            <button aria-label="返回首页" type="button" onClick={() => onNavigate?.("canvas")}>
+              <ChevronLeft className="size-5" aria-hidden="true" />
+            </button>
+            <button aria-label="首页" type="button" onClick={() => onNavigate?.("canvas")}>
+              <HomeIconFallback />
+            </button>
+          </div>
+          <div className="mobile-app-header__title">
+            <strong>我的</strong>
+            <span>个人中心</span>
+          </div>
+          <button className="mobile-app-header__icon" aria-label="账户设置" type="button">
+            <Pencil className="size-5" aria-hidden="true" />
+          </button>
+        </header>
+
+        <div className="mobile-account__content">
+          <section className="mobile-account-hero">
+            <div className="mobile-account-hero__profile">
+              <div className="mobile-account-avatar" aria-hidden="true">
+                <User className="size-10" />
+              </div>
+              <div>
+                <h1>{user.displayName || "创作者"}</h1>
+                <span>{roleLabel(user.role)}</span>
+                <p>欢迎使用 商图 AI 助手</p>
+              </div>
+            </div>
+            <div className="mobile-account-hero__contact">
+              <span><Phone className="size-4" aria-hidden="true" />{maskPhone(user.phone)}</span>
+              <span><Mail className="size-4" aria-hidden="true" />{user.email || "-"}</span>
+            </div>
+            <div className="mobile-account-wallet">
+              <div>
+                <span>剩余额度</span>
+                <strong>{quotaRemaining.toLocaleString("zh-CN")}<small> 张</small></strong>
+                <button type="button" onClick={() => setRechargeAmount(rechargeAmount || "50")}>充值额度</button>
+              </div>
+              <div>
+                <span>当前套餐</span>
+                <strong>{currentPlanName}</strong>
+                <em>{currentPlanExpiresAt ? `有效期至 ${formatDate(currentPlanExpiresAt)}` : "长期有效"}</em>
+                <p>已使用 {quotaUsed.toLocaleString("zh-CN")} / {quotaTotal.toLocaleString("zh-CN")} 张</p>
+                <div className="mobile-account-meter"><span style={{ width: `${quotaPercent}%` }} /></div>
+              </div>
+            </div>
+          </section>
+
+          <section className="mobile-account-actions" aria-label="快捷入口">
+            <button type="button"><Wallet className="size-7" aria-hidden="true" /><strong>充值额度</strong><span>快速到账</span></button>
+            <button type="button"><Receipt className="size-7" aria-hidden="true" /><strong>订单记录</strong><span>消费明细</span></button>
+            <button type="button" onClick={() => onNavigate?.("help")}><HelpIconFallback /><strong>帮助中心</strong><span>使用指南</span></button>
+            <button type="button" onClick={() => setIsInviteDialogOpen(true)}><Gift className="size-7" aria-hidden="true" /><strong>邀请奖励</strong><span>得免费额度</span></button>
+          </section>
+
+          <section className="mobile-account-list" aria-label="账户信息">
+            <MobileAccountRow icon={<Phone className="size-5" aria-hidden="true" />} label="手机号" value={maskPhone(user.phone)} />
+            <MobileAccountRow icon={<Mail className="size-5" aria-hidden="true" />} label="邮箱" value={user.email || "-"} />
+            <MobileAccountRow icon={<User className="size-5" aria-hidden="true" />} label="显示名" value={user.displayName || "-"} />
+            <MobileAccountRow icon={<ShieldCheck className="size-5" aria-hidden="true" />} label="角色" value={roleLabel(user.role)} />
+            <MobileAccountRow icon={<Package className="size-5" aria-hidden="true" />} label="当前套餐" value={currentPlanName} />
+          </section>
+
+          {user.role === "admin" ? (
+            <button className="mobile-account-admin" type="button" onClick={() => onNavigate?.("admin")}>
+              <Database className="size-5" aria-hidden="true" />
+              <span><strong>管理后台</strong><small>仅管理员可访问</small></span>
+              <ChevronRight className="size-5" aria-hidden="true" />
+            </button>
+          ) : null}
+
+          <button className="mobile-account-logout" type="button" onClick={onLogout}>
+            <LogOutIconFallback />
+            退出登录
+          </button>
+        </div>
+
+        <nav className="mobile-bottom-nav" aria-label="手机底部导航">
+          <button className="mobile-workbench__tab" type="button" onClick={() => onNavigate?.("canvas")}>
+            <HomeIconFallback />
+            <span>首页</span>
+          </button>
+          <button className="mobile-workbench__tab" type="button" onClick={() => onNavigate?.("canvas")}>
+            <Sparkles className="size-5" aria-hidden="true" />
+            <span>生图</span>
+          </button>
+          <button className="mobile-workbench__tab" type="button" onClick={() => onNavigate?.("gallery")}>
+            <ImageIcon className="size-5" aria-hidden="true" />
+            <span>图库</span>
+          </button>
+          <button className="mobile-workbench__tab" data-active="true" type="button">
+            <User className="size-5" aria-hidden="true" />
+            <span>我的</span>
+          </button>
+        </nav>
+
+        {isInviteDialogOpen ? (
+          <InviteCampaignDialog
+            inviteCode={referral.inviteCode}
+            inviteUrl={inviteUrl}
+            inviteeRegisterCredits={inviteeRegisterCredits}
+            invitedUserCount={referral.invitedUserCount}
+            inviterRegisterCredits={inviterRegisterCredits}
+            loading={referralLoading}
+            planCashbackRate={planCashbackRate}
+            rechargeCashbackRate={rechargeCashbackRate}
+            inviteQrDataUrl={inviteQrDataUrl}
+            error={referralError}
+            notice={referralAction}
+            onClose={closeInviteDialog}
+            onCopy={() => void copyInviteUrl()}
+            onDownload={() => void downloadInvitePoster()}
+            onRefresh={() => void loadReferral()}
+          />
+        ) : null}
+      </main>
+    );
+  }
+
   return (
     <main className="account-page app-view">
       <section className="settings-panel" aria-labelledby="account-title">
@@ -1142,6 +1434,113 @@ export function AccountPage({
           </div>
         </section>
 
+        <section className="billing-panel invoice-panel" aria-labelledby="invoice-title">
+          <div className="billing-panel__header">
+            <div>
+              <p className="settings-eyebrow">Invoice</p>
+              <h2 id="invoice-title">开票申请</h2>
+            </div>
+            <button className="secondary-action h-10" disabled={invoiceLoading} type="button" onClick={() => void loadInvoiceApplications()}>
+              {invoiceLoading ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <RefreshCw className="size-4" aria-hidden="true" />}
+              刷新
+            </button>
+          </div>
+
+          {invoiceError ? <p className="billing-alert billing-alert--warning" role="alert">{invoiceError}</p> : null}
+          {invoiceNotice ? <p className="billing-alert billing-alert--success" role="status">{invoiceNotice}</p> : null}
+          <div className="account-billing-overview">
+            <div className="billing-stat-card">
+              <span>实际支付</span>
+              <strong>{formatMoney(invoice.summary.paidAmountCents, invoice.summary.currency)}</strong>
+            </div>
+            <div className="billing-stat-card">
+              <span>已开票</span>
+              <strong>{formatMoney(invoice.summary.issuedAmountCents, invoice.summary.currency)}</strong>
+            </div>
+            <div className="billing-stat-card">
+              <span>可申请金额</span>
+              <strong>{formatMoney(invoiceRequestableAmount, invoice.summary.currency)}</strong>
+            </div>
+          </div>
+          {invoice.profile ? (
+            <div className="invoice-latest-card">
+              <div>
+                <span>最近保存</span>
+                <strong>{invoice.profile.title}</strong>
+                <p>{invoice.profile.headerType === "personal" ? "个人/其他" : "企业抬头"} · {formatDateTime(invoice.profile.createdAt)}</p>
+              </div>
+              <em>{formatMoney(invoice.profile.amountCents, "CNY")}</em>
+            </div>
+          ) : null}
+
+          <form className="invoice-form" onSubmit={(event) => void submitInvoiceApplication(event)}>
+            <label>
+              <span>抬头类型</span>
+              <select value={invoiceForm.headerType} onChange={(event) => setInvoiceForm((current) => ({ ...current, headerType: event.target.value as InvoiceHeaderType }))}>
+                <option value="company">企业抬头</option>
+                <option value="personal">个人/其他</option>
+              </select>
+            </label>
+            <label>
+              <span>发票抬头</span>
+              <input value={invoiceForm.title} onChange={(event) => setInvoiceForm((current) => ({ ...current, title: event.target.value }))} />
+            </label>
+            <label>
+              <span>纳税人识别号</span>
+              <input disabled={invoiceForm.headerType === "personal"} value={invoiceForm.taxNumber} onChange={(event) => setInvoiceForm((current) => ({ ...current, taxNumber: event.target.value }))} />
+            </label>
+            <label>
+              <span>开票内容</span>
+              <input value={invoiceForm.invoiceContent} onChange={(event) => setInvoiceForm((current) => ({ ...current, invoiceContent: event.target.value }))} />
+            </label>
+            <label>
+              <span>开票金额</span>
+              <input inputMode="decimal" value={invoiceForm.amount} onChange={(event) => setInvoiceForm((current) => ({ ...current, amount: event.target.value }))} />
+            </label>
+            <label>
+              <span>接收邮箱</span>
+              <input value={invoiceForm.email} onChange={(event) => setInvoiceForm((current) => ({ ...current, email: event.target.value }))} />
+            </label>
+            <label>
+              <span>联系电话</span>
+              <input value={invoiceForm.phone} onChange={(event) => setInvoiceForm((current) => ({ ...current, phone: event.target.value }))} />
+            </label>
+            <label>
+              <span>公司地址</span>
+              <input value={invoiceForm.companyAddress} onChange={(event) => setInvoiceForm((current) => ({ ...current, companyAddress: event.target.value }))} />
+            </label>
+            <label>
+              <span>开户行</span>
+              <input value={invoiceForm.bankName} onChange={(event) => setInvoiceForm((current) => ({ ...current, bankName: event.target.value }))} />
+            </label>
+            <label>
+              <span>银行账号</span>
+              <input value={invoiceForm.bankAccount} onChange={(event) => setInvoiceForm((current) => ({ ...current, bankAccount: event.target.value }))} />
+            </label>
+            <label className="invoice-form__wide">
+              <span>备注</span>
+              <textarea value={invoiceForm.remark} onChange={(event) => setInvoiceForm((current) => ({ ...current, remark: event.target.value }))} />
+            </label>
+            <button className="primary-action h-10" disabled={invoiceSaving || invoiceRequestableAmount <= 0} type="submit">
+              {invoiceSaving ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Receipt className="size-4" aria-hidden="true" />}
+              保存并申请开票
+            </button>
+          </form>
+
+          {invoice.applications.length > 0 ? (
+            <CompactLedger
+              emptyLabel="暂无开票申请"
+              items={invoice.applications.slice(0, 6).map((item) => ({
+                id: item.id,
+                title: item.title,
+                meta: `${invoiceStatusLabel(item.status)} · ${formatDateTime(item.createdAt)}`,
+                amount: formatMoney(item.amountCents, "CNY")
+              }))}
+              title="最近申请"
+            />
+          ) : null}
+        </section>
+
         <section className="quota-panel" aria-labelledby="quota-title">
           <div>
             <p className="settings-eyebrow">Quota</p>
@@ -1232,6 +1631,7 @@ export function AccountPage({
           onSendCode={sendBindCode}
           onSmsCodeChange={setBindSmsCode}
           onSubmit={submitBindPhone}
+          onClose={() => setIsPhoneDialogOpen(false)}
         />
       ) : null}
     </main>
@@ -1245,15 +1645,26 @@ export function AdminPage() {
   const [plans, setPlans] = useState<AdminPlanRow[]>([]);
   const [jobs, setJobs] = useState<AdminJobRow[]>([]);
   const [assets, setAssets] = useState<AdminAssetRow[]>([]);
+  const [galleryItems, setGalleryItems] = useState<GalleryImageItem[]>([]);
+  const [demoCanvasExamples, setDemoCanvasExamples] = useState<DemoCanvasExampleForm[]>([]);
   const [billingSettings, setBillingSettings] = useState<BillingSettingsFormState>(createBillingSettingsForm());
+  const [storageSettings, setStorageSettings] = useState<StorageConfigFormState>(createStorageConfigForm());
   const [referralSettings, setReferralSettings] = useState<ReferralSettingsFormState>(createReferralSettingsForm());
   const [imageModels, setImageModels] = useState<ImageModelFormState[]>([]);
+  const [categoryKitPlannerModels, setCategoryKitPlannerModels] = useState<CategoryKitPlannerModelFormState[]>([createCategoryKitPlannerForm("primary", 1)]);
+  const [ecommerceGenerationConcurrency, setEcommerceGenerationConcurrency] = useState<EcommerceGenerationConcurrencyFormState>(
+    createEcommerceGenerationConcurrencyForm()
+  );
+  const [extensionRelease, setExtensionRelease] = useState<ExtensionReleaseFormState>(createExtensionReleaseForm());
   const [alipaySettings, setAlipaySettings] = useState<AlipayFormState>(createAlipayForm());
   const [wechatMiniAppSettings, setWechatMiniAppSettings] = useState<WechatMiniAppFormState>(createWechatMiniAppForm());
   const [smtpSettings, setSmtpSettings] = useState<SmtpFormState>(createSmtpForm());
   const [aliyunSmsSettings, setAliyunSmsSettings] = useState<AliyunSmsFormState>(createAliyunSmsForm());
   const [transactions, setTransactions] = useState<BillingTransactionRow[]>([]);
   const [referralTransactions, setReferralTransactions] = useState<BillingTransactionRow[]>([]);
+  const [invoiceApplications, setInvoiceApplications] = useState<InvoiceRecord[]>([]);
+  const [invoiceAdminSummary, setInvoiceAdminSummary] = useState<InvoiceSummaryState>(createInvoiceSummaryState());
+  const [savingInvoiceId, setSavingInvoiceId] = useState("");
   const [planDrafts, setPlanDrafts] = useState<Record<string, PlanFormState>>({});
   const [newPlan, setNewPlan] = useState<PlanFormState>(createEmptyPlanForm());
   const [newAdmin, setNewAdmin] = useState<AdminUserFormState>(createEmptyAdminForm());
@@ -1264,6 +1675,9 @@ export function AdminPage() {
   const [savingUserId, setSavingUserId] = useState("");
   const [savingAdmin, setSavingAdmin] = useState(false);
   const [savingBilling, setSavingBilling] = useState("");
+  const [savingGalleryOutputId, setSavingGalleryOutputId] = useState("");
+  const [savingDemoCanvas, setSavingDemoCanvas] = useState(false);
+  const [uploadingDemoCanvasField, setUploadingDemoCanvasField] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
@@ -1279,40 +1693,54 @@ export function AdminPage() {
         usersResponse,
         jobsResponse,
         assetsResponse,
+        galleryResponse,
+        demoCanvasResponse,
         plansResponse,
         billingResponse,
+        storageResponse,
         referralSettingsResponse,
         imageModelsResponse,
+        categoryKitPlannerResponse,
+        ecommerceConcurrencyResponse,
+        extensionReleaseResponse,
         alipayResponse,
         wechatResponse,
         smtpResponse,
         smsResponse,
         transactionsResponse,
-        referralTransactionsResponse
+        referralTransactionsResponse,
+        invoiceApplicationsResponse
       ] = await Promise.all([
         authFetch("/api/admin/stats"),
         authFetch("/api/admin/users"),
         authFetch("/api/admin/ecommerce/jobs"),
         authFetch("/api/admin/assets"),
+        authFetch("/api/gallery"),
+        authFetch("/api/admin/demo-canvas"),
         authFetch("/api/admin/plans"),
         authFetch("/api/admin/billing/settings"),
+        authFetch("/api/admin/storage/config"),
         authFetch("/api/admin/referral/settings"),
         authFetch("/api/admin/image-models"),
+        authFetch("/api/admin/ecommerce/category-kit-planner"),
+        authFetch("/api/admin/image-generation/concurrency"),
+        authFetch("/api/admin/extension-release"),
         authFetch("/api/admin/payment/alipay"),
         authFetch("/api/admin/auth/wechat/miniapp"),
         authFetch("/api/admin/email/smtp"),
         authFetch("/api/admin/sms/aliyun"),
         authFetch("/api/admin/billing/transactions?limit=50"),
-        authFetch("/api/admin/referral/transactions?limit=100")
+        authFetch("/api/admin/referral/transactions?limit=100"),
+        authFetch("/api/admin/billing/invoice/applications?limit=100")
       ]);
 
-      const responses = [statsResponse, usersResponse, jobsResponse, assetsResponse];
+      const responses = [statsResponse, usersResponse, jobsResponse, assetsResponse, galleryResponse, demoCanvasResponse];
       const failedResponse = responses.find((response) => !response.ok);
       if (failedResponse) {
         throw new Error(await readApiError(failedResponse, "管理员数据加载失败。"));
       }
 
-      const [statsBody, usersBody, jobsBody, assetsBody] = await Promise.all(responses.map((response) => response.json()));
+      const [statsBody, usersBody, jobsBody, assetsBody, galleryBody, demoCanvasBody] = await Promise.all(responses.map((response) => response.json()));
       if (signal?.aborted) {
         return;
       }
@@ -1323,12 +1751,25 @@ export function AdminPage() {
       if (billingResponse.ok) {
         setBillingSettings(parseBillingSettingsForm(await billingResponse.json()));
       }
+      if (storageResponse.ok) {
+        setStorageSettings(parseStorageConfigForm(await storageResponse.json()));
+      }
       if (referralSettingsResponse.ok) {
         setReferralSettings(parseReferralSettingsForm(await referralSettingsResponse.json()));
       }
       if (imageModelsResponse.ok) {
         const parsedModels = parseImageModelForms(await imageModelsResponse.json());
         setImageModels(parsedModels.length > 0 ? parsedModels : [createImageModelForm("gemini", 1)]);
+      }
+      if (categoryKitPlannerResponse.ok) {
+        const parsedCategoryKitPlannerModels = parseCategoryKitPlannerForms(await categoryKitPlannerResponse.json());
+        setCategoryKitPlannerModels(parsedCategoryKitPlannerModels);
+      }
+      if (ecommerceConcurrencyResponse.ok) {
+        setEcommerceGenerationConcurrency(parseEcommerceGenerationConcurrencyForm(await ecommerceConcurrencyResponse.json()));
+      }
+      if (extensionReleaseResponse.ok) {
+        setExtensionRelease(parseExtensionReleaseForm(await extensionReleaseResponse.json()));
       }
       if (alipayResponse.ok) {
         setAlipaySettings(parseAlipayForm(await alipayResponse.json()));
@@ -1348,12 +1789,19 @@ export function AdminPage() {
       if (referralTransactionsResponse.ok) {
         setReferralTransactions(parseBillingTransactions(await referralTransactionsResponse.json()));
       }
+      if (invoiceApplicationsResponse.ok) {
+        const parsedInvoices = parseInvoiceApplications(await invoiceApplicationsResponse.json());
+        setInvoiceApplications(parsedInvoices.applications);
+        setInvoiceAdminSummary(parsedInvoices.summary);
+      }
       setUsers(parsedUsers);
       setPlans(parsedPlans);
       setPlanDrafts(Object.fromEntries(parsedPlans.map((plan) => [plan.id, planToForm(plan)])));
       setUserDrafts(Object.fromEntries(parsedUsers.map((user) => [user.id, userToQuotaForm(user)])));
       setJobs(parseJobs(jobsBody));
       setAssets(parseAssets(assetsBody));
+      setGalleryItems(parseGalleryItems(galleryBody));
+      setDemoCanvasExamples(parseDemoCanvasExampleForms(demoCanvasBody));
     } catch (loadError) {
       if (!signal?.aborted) {
         setError(loadError instanceof Error ? loadError.message : "管理员数据加载失败。");
@@ -1473,7 +1921,7 @@ export function AdminPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          email: newAdmin.email,
+          phone: newAdmin.phone,
           displayName: newAdmin.displayName,
           password: newAdmin.password
         })
@@ -1489,6 +1937,114 @@ export function AdminPage() {
       setError(saveError instanceof Error ? saveError.message : "管理员保存失败。");
     } finally {
       setSavingAdmin(false);
+    }
+  }
+
+  async function updateInvoiceStatus(application: InvoiceRecord, status: InvoiceStatus): Promise<void> {
+    setSavingInvoiceId(application.id);
+    setError("");
+    setNotice("");
+    try {
+      const response = await authFetch(`/api/admin/billing/invoice/applications/${encodeURIComponent(application.id)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status })
+      });
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "开票状态更新失败。"));
+      }
+      setNotice(status === "issued" ? "已标记为开票完成，并扣减可开票金额。" : status === "rejected" ? "已驳回申请，释放占用金额。" : "开票状态已更新。");
+      await loadAdminData({ preserveNotice: true });
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "开票状态更新失败。");
+    } finally {
+      setSavingInvoiceId("");
+    }
+  }
+
+  async function saveGalleryPublicStatus(item: GalleryImageItem, enabled: boolean): Promise<void> {
+    setSavingGalleryOutputId(item.outputId);
+    setError("");
+    setNotice("");
+    try {
+      const response = await authFetch(`/api/admin/gallery/${encodeURIComponent(item.outputId)}/public`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          enabled,
+          sortOrder: item.publicGallerySortOrder ?? 0
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "公开案例设置保存失败。"));
+      }
+
+      const updatedItem = parseGalleryItemFromValue(firstRecord(await response.json(), "item"));
+      setGalleryItems((current) =>
+        current.map((galleryItem) =>
+          galleryItem.outputId === item.outputId
+            ? updatedItem ?? {
+                ...galleryItem,
+                publicGalleryEnabled: enabled,
+                publicGalleryUpdatedAt: enabled ? new Date().toISOString() : undefined
+              }
+            : galleryItem
+        )
+      );
+      setNotice(enabled ? "已加入游客公开案例库。" : "已取消游客公开展示。");
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "公开案例设置保存失败。");
+    } finally {
+      setSavingGalleryOutputId("");
+    }
+  }
+
+  async function saveDemoCanvasExamples(): Promise<void> {
+    setSavingDemoCanvas(true);
+    setError("");
+    setNotice("");
+    try {
+      const response = await authFetch("/api/admin/demo-canvas", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(demoCanvasExamplesToPayload(demoCanvasExamples))
+      });
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "画布案例保存失败。"));
+      }
+      setDemoCanvasExamples(parseDemoCanvasExampleForms(await response.json()));
+      setNotice("游客画布案例已保存。");
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "画布案例保存失败。");
+    } finally {
+      setSavingDemoCanvas(false);
+    }
+  }
+
+  async function uploadDemoCanvasImage(exampleId: string, field: "beforeUrl" | "afterUrl", file: File): Promise<void> {
+    const uploadKey = `${exampleId}:${field}`;
+    setUploadingDemoCanvasField(uploadKey);
+    setError("");
+    setNotice("");
+    try {
+      const formData = new FormData();
+      formData.append("file", file, file.name || "demo-canvas-image.png");
+      const response = await authFetch("/api/admin/demo-canvas/assets", {
+        method: "POST",
+        body: formData
+      });
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "游客画布图片上传失败。"));
+      }
+      const upload = (await response.json()) as DemoCanvasAssetUploadResponse;
+      setDemoCanvasExamples((current) =>
+        current.map((example) => (example.id === exampleId ? { ...example, [field]: upload.url } : example))
+      );
+      setNotice(`图片已上传到 ${upload.objectKey}。`);
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : "游客画布图片上传失败。");
+    } finally {
+      setUploadingDemoCanvasField("");
     }
   }
 
@@ -1512,6 +2068,53 @@ export function AdminPage() {
       await loadAdminData({ preserveNotice: true });
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "计费设置保存失败。");
+    } finally {
+      setSavingBilling("");
+    }
+  }
+
+  async function testStorageSettings(): Promise<void> {
+    setSavingBilling("storage-test");
+    setError("");
+    setNotice("");
+    try {
+      const response = await authFetch("/api/admin/storage/config/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(storageSettingsToPayload(storageSettings, { forceEnabled: true }))
+      });
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "云存储测试失败。"));
+      }
+      const result = (await response.json()) as StorageTestResult;
+      if (!result.ok) {
+        throw new Error(result.message || "云存储测试失败。");
+      }
+      setNotice(result.message || "云存储测试通过。");
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "云存储测试失败。");
+    } finally {
+      setSavingBilling("");
+    }
+  }
+
+  async function saveStorageSettings(): Promise<void> {
+    setSavingBilling("storage");
+    setError("");
+    setNotice("");
+    try {
+      const response = await authFetch("/api/admin/storage/config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(storageSettingsToPayload(storageSettings))
+      });
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "云存储配置保存失败。"));
+      }
+      setStorageSettings(parseStorageConfigForm(await response.json()));
+      setNotice(storageSettings.enabled ? "云存储配置已保存，所有用户将统一使用这套配置。" : "云存储已关闭。");
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "云存储配置保存失败。");
     } finally {
       setSavingBilling("");
     }
@@ -1576,6 +2179,82 @@ export function AdminPage() {
     }
   }
 
+  async function saveCategoryKitPlanner(): Promise<void> {
+    setSavingBilling("category-kit-planner");
+    setError("");
+    setNotice("");
+    try {
+      const response = await authFetch("/api/admin/ecommerce/category-kit-planner", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(categoryKitPlannerToPayload(categoryKitPlannerModels))
+      });
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "品类套图文本模型配置保存失败。"));
+      }
+      setNotice("品类套图文本模型配置已保存，主模型失败时会自动尝试备用模型。");
+      setCategoryKitPlannerModels(parseCategoryKitPlannerForms(await response.json()));
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "品类套图文本模型配置保存失败。");
+    } finally {
+      setSavingBilling("");
+    }
+  }
+
+  async function saveEcommerceGenerationConcurrency(): Promise<void> {
+    setSavingBilling("ecommerce-concurrency");
+    setError("");
+    setNotice("");
+    try {
+      const response = await authFetch("/api/admin/image-generation/concurrency", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(ecommerceGenerationConcurrencyToPayload(ecommerceGenerationConcurrency))
+      });
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "图片生成并发配置保存失败。"));
+      }
+      setNotice("图片生成并发配置已保存，满载时会自动排队，不会丢单。");
+      setEcommerceGenerationConcurrency(parseEcommerceGenerationConcurrencyForm(await response.json()));
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "图片生成并发配置保存失败。");
+    } finally {
+      setSavingBilling("");
+    }
+  }
+
+  async function saveExtensionRelease(): Promise<void> {
+    setSavingBilling("extension-release");
+    setError("");
+    setNotice("");
+    try {
+      const response = await authFetch("/api/admin/extension-release", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(extensionReleaseToPayload(extensionRelease))
+      });
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "插件发布配置保存失败。"));
+      }
+      setNotice("插件发布配置已保存。");
+      setExtensionRelease(parseExtensionReleaseForm(await response.json()));
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "插件发布配置保存失败。");
+    } finally {
+      setSavingBilling("");
+    }
+  }
+
+  function updateExtensionReleaseTarget(target: keyof ExtensionReleaseFormState, patch: Partial<ExtensionReleaseTargetFormState>): void {
+    setExtensionRelease((current) => ({
+      ...current,
+      [target]: {
+        ...current[target],
+        ...patch
+      }
+    }));
+  }
+
   function addImageModel(provider: ImageModelProvider = "gemini"): void {
     setImageModels((models) => [...models, createImageModelForm(provider, models.length + 1)]);
   }
@@ -1586,6 +2265,37 @@ export function AdminPage() {
 
   function removeImageModel(id: string): void {
     setImageModels((models) => models.filter((model) => model.id !== id));
+  }
+
+  function addCategoryKitPlannerModel(role: CategoryKitPlannerModelRole = "fallback"): void {
+    setCategoryKitPlannerModels((models) => [...models, createCategoryKitPlannerForm(role, models.length + 1)]);
+  }
+
+  function updateCategoryKitPlannerModel(id: string, patch: Partial<CategoryKitPlannerModelFormState>): void {
+    setCategoryKitPlannerModels((models) => models.map((model) => (model.id === id ? { ...model, ...patch } : model)));
+  }
+
+  function removeCategoryKitPlannerModel(id: string): void {
+    setCategoryKitPlannerModels((models) => {
+      const next = models.filter((model) => model.id !== id);
+      if (next.length === 0) {
+        return [createCategoryKitPlannerForm("primary", 1)];
+      }
+      if (!next.some((model) => model.role === "primary")) {
+        next[0] = { ...next[0], role: "primary", name: "品类套图共享文本模型" };
+      }
+      return next.map((model, index) => ({
+        ...model,
+        priority: String(index + 1)
+      }));
+    });
+  }
+
+  function updateEcommerceGenerationConcurrency(patch: Partial<EcommerceGenerationConcurrencyFormState>): void {
+    setEcommerceGenerationConcurrency((current) => ({
+      ...current,
+      ...patch
+    }));
   }
 
   async function saveAlipaySettings(): Promise<void> {
@@ -1774,6 +2484,7 @@ export function AdminPage() {
         </div>
 
         {activeTab === "models" ? (
+          <>
         <section className="admin-table-card admin-billing-card" aria-labelledby="image-models-title">
           <div className="admin-table-card__title">
             <Layers3 className="size-4" aria-hidden="true" />
@@ -1833,6 +2544,168 @@ export function AdminPage() {
               {savingBilling === "image-models" ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Save className="size-4" aria-hidden="true" />}
               保存模型
             </button>
+          </div>
+        </section>
+        <section className="admin-table-card admin-billing-card" aria-labelledby="category-kit-planner-title">
+          <div className="admin-table-card__title">
+            <Sparkles className="size-4" aria-hidden="true" />
+            <h2 id="category-kit-planner-title">品类套图文本模型</h2>
+          </div>
+          <p className="admin-panel-note">这里配置的是服务端共用的文本模型。主模型失败时会自动尝试备用模型，扩展和网页端都会读取这份配置。</p>
+          <div className="admin-model-list">
+            {categoryKitPlannerModels.map((model, index) => (
+              <div className="admin-form-panel admin-model-panel" key={model.id}>
+                <div className="admin-form-panel__title-row">
+                  <div>
+                    <p className="settings-eyebrow">{model.role === "primary" ? "Primary" : "Fallback"}</p>
+                    <h3>{model.name || `文本模型 ${index + 1}`}</h3>
+                  </div>
+                  <label className="admin-switch">
+                    <input checked={model.enabled} type="checkbox" onChange={(event) => updateCategoryKitPlannerModel(model.id, { enabled: event.target.checked })} />
+                    <span>{model.enabled ? "启用" : "关闭"}</span>
+                  </label>
+                </div>
+                <div className="admin-form-grid admin-form-grid--model">
+                  <label><span>名称</span><input className="admin-input" value={model.name} onChange={(event) => updateCategoryKitPlannerModel(model.id, { name: event.target.value })} /></label>
+                  <label>
+                    <span>角色</span>
+                    <select className="admin-input" value={model.role} onChange={(event) => updateCategoryKitPlannerModel(model.id, { role: event.target.value as CategoryKitPlannerModelRole })}>
+                      <option value="primary">主模型</option>
+                      <option value="fallback">备用模型</option>
+                    </select>
+                  </label>
+                  <label><span>优先级</span><input className="admin-input" inputMode="numeric" value={model.priority} onChange={(event) => updateCategoryKitPlannerModel(model.id, { priority: event.target.value })} /></label>
+                  <label><span>Base URL</span><input className="admin-input" value={model.baseUrl} onChange={(event) => updateCategoryKitPlannerModel(model.id, { baseUrl: event.target.value })} placeholder="https://api.openai.com/v1" /></label>
+                  <label><span>模型 ID</span><input className="admin-input" value={model.model} onChange={(event) => updateCategoryKitPlannerModel(model.id, { model: event.target.value })} /></label>
+                  <label><span>超时秒数</span><input className="admin-input" inputMode="numeric" value={model.timeoutSeconds} onChange={(event) => updateCategoryKitPlannerModel(model.id, { timeoutSeconds: event.target.value })} /></label>
+                  <label style={{ gridColumn: "1 / -1" }}>
+                    <span>API Key {model.apiKeySaved ? "（已保存，留空不覆盖）" : ""}</span>
+                    <input className="admin-input" type="password" value={model.apiKey} onChange={(event) => updateCategoryKitPlannerModel(model.id, { apiKey: event.target.value })} />
+                  </label>
+                </div>
+                <button className="secondary-action h-10" type="button" onClick={() => removeCategoryKitPlannerModel(model.id)}>
+                  移除模型
+                </button>
+              </div>
+            ))}
+          </div>
+          <div className="admin-model-actions">
+            <button className="secondary-action h-10" type="button" onClick={() => addCategoryKitPlannerModel("fallback")}>
+              <Plus className="size-4" aria-hidden="true" />
+              添加备用模型
+            </button>
+            <button className="primary-action h-10" disabled={savingBilling === "category-kit-planner"} type="button" onClick={() => void saveCategoryKitPlanner()}>
+              {savingBilling === "category-kit-planner" ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Save className="size-4" aria-hidden="true" />}
+              保存共享文本模型
+            </button>
+          </div>
+        </section>
+        <section className="admin-table-card admin-billing-card" aria-labelledby="ecommerce-concurrency-title">
+          <div className="admin-table-card__title">
+            <Clock className="size-4" aria-hidden="true" />
+            <h2 id="ecommerce-concurrency-title">图片生成并发队列</h2>
+          </div>
+          <div className="admin-form-panel">
+            <div className="admin-form-panel__title-row">
+              <div>
+                <p className="settings-eyebrow">Queue Control</p>
+                <h3>所有生图任务统一排队</h3>
+              </div>
+            </div>
+            <p className="admin-panel-note">全局并发控制整个系统同时跑的图片线程数，单任务并发控制单个生图任务同时跑的图片张数。达到上限后会自动排队等待，不会直接丢任务。</p>
+            <div className="admin-form-grid admin-form-grid--two">
+              <label>
+                <span>全局并发线程</span>
+                <input
+                  className="admin-input"
+                  inputMode="numeric"
+                  value={ecommerceGenerationConcurrency.globalConcurrency}
+                  onChange={(event) => updateEcommerceGenerationConcurrency({ globalConcurrency: event.target.value })}
+                />
+              </label>
+              <label>
+                <span>单任务并发线程</span>
+                <input
+                  className="admin-input"
+                  inputMode="numeric"
+                  value={ecommerceGenerationConcurrency.jobConcurrency}
+                  onChange={(event) => updateEcommerceGenerationConcurrency({ jobConcurrency: event.target.value })}
+                />
+              </label>
+            </div>
+            <div className="admin-model-actions">
+              <button
+                className="primary-action h-10"
+                disabled={savingBilling === "ecommerce-concurrency"}
+                type="button"
+                onClick={() => void saveEcommerceGenerationConcurrency()}
+              >
+                {savingBilling === "ecommerce-concurrency" ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Save className="size-4" aria-hidden="true" />}
+                保存队列配置
+              </button>
+            </div>
+          </div>
+        </section>
+          </>
+        ) : null}
+
+        {activeTab === "storage" ? (
+        <section className="admin-table-card admin-billing-card" aria-labelledby="storage-config-title">
+          <div className="admin-table-card__title">
+            <HardDrive className="size-4" aria-hidden="true" />
+            <h2 id="storage-config-title">统一云存储配置</h2>
+          </div>
+          <div className="admin-form-panel">
+            <div className="admin-form-panel__title-row">
+              <div>
+                <p className="settings-eyebrow">Global Storage</p>
+                <h3>所有用户共用同一套 OSS / COS</h3>
+              </div>
+              <label className="admin-switch">
+                <input
+                  checked={storageSettings.enabled}
+                  type="checkbox"
+                  onChange={(event) => setStorageSettings({ ...storageSettings, enabled: event.target.checked })}
+                />
+                <span>{storageSettings.enabled ? "启用" : "关闭"}</span>
+              </label>
+            </div>
+            <p className="admin-panel-note">开启后，新生成图片会优先上传到这里配置的云存储。上传成功后不保留本地原图或预览缓存；上传失败才回落本地副本。</p>
+            <div className="admin-form-grid admin-form-grid--two">
+              <label>
+                <span>存储服务</span>
+                <select
+                  className="admin-input"
+                  value={storageSettings.provider}
+                  onChange={(event) => {
+                    const provider = event.target.value === "cos" ? "cos" : "oss";
+                    const defaults = createStorageConfigForm(provider);
+                    setStorageSettings({ ...defaults, enabled: storageSettings.enabled });
+                  }}
+                >
+                  <option value="oss">阿里云 OSS</option>
+                  <option value="cos">腾讯云 COS</option>
+                </select>
+              </label>
+              <label><span>{storageSettings.provider === "oss" ? "AccessKey ID" : "SecretId"}</span><input className="admin-input" value={storageSettings.secretId} onChange={(event) => setStorageSettings({ ...storageSettings, secretId: event.target.value })} /></label>
+              <label>
+                <span>{storageSettings.provider === "oss" ? "AccessKey Secret" : "SecretKey"} {storageSettings.secretSaved ? "（已保存，留空不覆盖）" : ""}</span>
+                <input className="admin-input" type="password" value={storageSettings.secretKey} onChange={(event) => setStorageSettings({ ...storageSettings, secretKey: event.target.value, secretSaved: false })} />
+              </label>
+              <label><span>Bucket</span><input className="admin-input" value={storageSettings.bucket} onChange={(event) => setStorageSettings({ ...storageSettings, bucket: event.target.value })} /></label>
+              <label><span>Region</span><input className="admin-input" value={storageSettings.region} onChange={(event) => setStorageSettings({ ...storageSettings, region: event.target.value })} /></label>
+              <label><span>Key Prefix</span><input className="admin-input" value={storageSettings.keyPrefix} onChange={(event) => setStorageSettings({ ...storageSettings, keyPrefix: event.target.value })} /></label>
+            </div>
+            <div className="admin-model-actions">
+              <button className="secondary-action h-10" disabled={savingBilling === "storage-test" || savingBilling === "storage"} type="button" onClick={() => void testStorageSettings()}>
+                {savingBilling === "storage-test" ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <HardDrive className="size-4" aria-hidden="true" />}
+                测试连接
+              </button>
+              <button className="primary-action h-10" disabled={savingBilling === "storage" || savingBilling === "storage-test"} type="button" onClick={() => void saveStorageSettings()}>
+                {savingBilling === "storage" ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Save className="size-4" aria-hidden="true" />}
+                保存云存储
+              </button>
+            </div>
           </div>
         </section>
         ) : null}
@@ -1978,6 +2851,48 @@ export function AdminPage() {
         </section>
         ) : null}
 
+        {activeTab === "extension" ? (
+        <section className="admin-table-card admin-billing-card" aria-labelledby="extension-release-title">
+          <div className="admin-table-card__title">
+            <Package className="size-4" aria-hidden="true" />
+            <h2 id="extension-release-title">插件发布配置</h2>
+          </div>
+          <div className="admin-billing-grid">
+            {(["dev", "prod"] as const).map((target) => {
+              const form = extensionRelease[target];
+              return (
+                <div className="admin-form-panel" key={target}>
+                  <div>
+                    <p className="settings-eyebrow">{target === "dev" ? "Dev" : "Prod"}</p>
+                    <h3>{target === "dev" ? "开发版插件" : "生产版插件"}</h3>
+                  </div>
+                  <div className="admin-form-grid admin-form-grid--two">
+                    <label><span>API 地址</span><input className="admin-input" value={form.apiBaseUrl} onChange={(event) => updateExtensionReleaseTarget(target, { apiBaseUrl: event.target.value })} /></label>
+                    <label><span>版本号</span><input className="admin-input" value={form.version} onChange={(event) => updateExtensionReleaseTarget(target, { version: event.target.value })} /></label>
+                    <label><span>下载地址</span><input className="admin-input" value={form.downloadUrl} onChange={(event) => updateExtensionReleaseTarget(target, { downloadUrl: event.target.value })} /></label>
+                    <label><span>Latest 下载地址</span><input className="admin-input" value={form.latestDownloadUrl} onChange={(event) => updateExtensionReleaseTarget(target, { latestDownloadUrl: event.target.value })} /></label>
+                    <label><span>安装帮助 URL</span><input className="admin-input" value={form.installHelpUrl} onChange={(event) => updateExtensionReleaseTarget(target, { installHelpUrl: event.target.value })} /></label>
+                    <label><span>文件名</span><input className="admin-input" value={form.fileName} onChange={(event) => updateExtensionReleaseTarget(target, { fileName: event.target.value })} /></label>
+                    <label><span>文件大小 Bytes</span><input className="admin-input" inputMode="numeric" value={form.sizeBytes} onChange={(event) => updateExtensionReleaseTarget(target, { sizeBytes: event.target.value })} /></label>
+                    <label><span>SHA256</span><input className="admin-input" value={form.sha256} onChange={(event) => updateExtensionReleaseTarget(target, { sha256: event.target.value })} /></label>
+                  </div>
+                  <label>
+                    <span>发布说明</span>
+                    <textarea className="admin-textarea" rows={4} value={form.releaseNotesText} onChange={(event) => updateExtensionReleaseTarget(target, { releaseNotesText: event.target.value })} />
+                  </label>
+                </div>
+              );
+            })}
+          </div>
+          <div className="admin-model-actions">
+            <button className="primary-action h-10" disabled={savingBilling === "extension-release"} type="button" onClick={() => void saveExtensionRelease()}>
+              {savingBilling === "extension-release" ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Save className="size-4" aria-hidden="true" />}
+              保存插件发布配置
+            </button>
+          </div>
+        </section>
+        ) : null}
+
         {activeTab === "auth" ? (
         <section className="admin-table-card admin-billing-card" aria-labelledby="wechat-config-title">
           <div className="admin-table-card__title">
@@ -2040,6 +2955,8 @@ export function AdminPage() {
           </div>
         </section>
         ) : null}
+
+        {activeTab === "help" ? <AdminHelpPanel /> : null}
 
         {activeTab === "plans" ? (
         <section className="admin-table-card" aria-labelledby="plans-table-title">
@@ -2180,13 +3097,13 @@ export function AdminPage() {
             </div>
             <div className="admin-form-grid admin-form-grid--four">
               <label>
-                <span>邮箱</span>
+                <span>手机号</span>
                 <input
                   className="admin-input"
-                  inputMode="email"
-                  placeholder="admin@example.com"
-                  value={newAdmin.email}
-                  onChange={(event) => setNewAdmin({ ...newAdmin, email: event.target.value })}
+                  inputMode="tel"
+                  placeholder="13800000000"
+                  value={newAdmin.phone}
+                  onChange={(event) => setNewAdmin({ ...newAdmin, phone: event.target.value })}
                 />
               </label>
               <label>
@@ -2218,7 +3135,7 @@ export function AdminPage() {
             <table className="admin-table">
               <thead>
                 <tr>
-                  <th>邮箱</th>
+                  <th>手机号</th>
                   <th>显示名</th>
                   <th>角色</th>
                   <th>套餐</th>
@@ -2247,7 +3164,7 @@ export function AdminPage() {
                       return (
                         <Fragment key={user.id}>
                           <tr>
-                            <td>{user.email || "-"}</td>
+                            <td>{user.phone || "-"}</td>
                             <td>{user.displayName || "-"}</td>
                             <td>{roleLabel(user.role)}</td>
                             <td>{user.planName || user.planId || "未设置"}{user.planExpiresAt ? ` · ${formatDateTime(user.planExpiresAt)}` : ""}</td>
@@ -2463,6 +3380,29 @@ export function AdminPage() {
           </section>
         ) : null}
 
+        {activeTab === "demoCanvas" ? (
+          <AdminDemoCanvasPanel
+            examples={demoCanvasExamples}
+            saving={savingDemoCanvas}
+            uploadingField={uploadingDemoCanvasField}
+            onAdd={() => setDemoCanvasExamples((current) => [...current, createDemoCanvasExampleForm(current.length)])}
+            onChange={(exampleId, patch) =>
+              setDemoCanvasExamples((current) => current.map((example) => (example.id === exampleId ? { ...example, ...patch } : example)))
+            }
+            onRemove={(exampleId) => setDemoCanvasExamples((current) => current.filter((example) => example.id !== exampleId))}
+            onSave={() => void saveDemoCanvasExamples()}
+            onUpload={(exampleId, field, file) => void uploadDemoCanvasImage(exampleId, field, file)}
+          />
+        ) : null}
+
+        {activeTab === "gallery" ? (
+          <AdminPublicGalleryPanel
+            items={galleryItems}
+            savingOutputId={savingGalleryOutputId}
+            onToggle={(item, enabled) => void saveGalleryPublicStatus(item, enabled)}
+          />
+        ) : null}
+
         {activeTab === "ledger" ? (
           <>
         <DataTable
@@ -2480,6 +3420,57 @@ export function AdminPage() {
           ])}
           title="生图 / 扣费明细"
         />
+        <section className="admin-table-card" aria-labelledby="invoice-admin-title">
+          <div className="admin-table-card__title">
+            <Receipt className="size-4" aria-hidden="true" />
+            <h2 id="invoice-admin-title">开票申请</h2>
+          </div>
+          <div className="account-billing-overview">
+            <div className="billing-stat-card"><span>实际支付</span><strong>{formatMoney(invoiceAdminSummary.paidAmountCents, invoiceAdminSummary.currency)}</strong></div>
+            <div className="billing-stat-card"><span>已开票</span><strong>{formatMoney(invoiceAdminSummary.issuedAmountCents, invoiceAdminSummary.currency)}</strong></div>
+            <div className="billing-stat-card"><span>待处理占用</span><strong>{formatMoney(invoiceAdminSummary.reservedAmountCents, invoiceAdminSummary.currency)}</strong></div>
+          </div>
+          <div className="admin-table-wrap">
+            <table className="admin-table">
+              <thead>
+                <tr>
+                  <th>提交时间</th>
+                  <th>用户</th>
+                  <th>抬头</th>
+                  <th>金额</th>
+                  <th>状态</th>
+                  <th>接收邮箱</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {invoiceApplications.length > 0 ? (
+                  invoiceApplications.map((item) => (
+                    <tr key={item.id}>
+                      <td>{formatDateTime(item.createdAt)}</td>
+                      <td>{item.userEmail || item.userDisplayName || item.userId || "-"}</td>
+                      <td>{item.title}</td>
+                      <td>{formatMoney(item.amountCents, invoiceAdminSummary.currency)}</td>
+                      <td>{invoiceStatusLabel(item.status)}</td>
+                      <td>{item.email || "-"}</td>
+                      <td>
+                        <div className="admin-row-actions">
+                          <button className="secondary-action h-9" disabled={savingInvoiceId === item.id || item.status === "issued" || item.status === "rejected"} type="button" onClick={() => void updateInvoiceStatus(item, "processing")}>处理中</button>
+                          <button className="primary-action h-9" disabled={savingInvoiceId === item.id || item.status === "issued" || item.status === "rejected"} type="button" onClick={() => void updateInvoiceStatus(item, "issued")}>已开票</button>
+                          <button className="secondary-action h-9" disabled={savingInvoiceId === item.id || item.status === "issued" || item.status === "rejected"} type="button" onClick={() => void updateInvoiceStatus(item, "rejected")}>驳回</button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={7}>暂无开票申请</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
         <DataTable
           columns={["任务", "状态", "归属人", "商品", "进度", "更新时间"]}
           emptyLabel="暂无任务"
@@ -2515,6 +3506,37 @@ function InfoTile({ icon, label, value }: { icon: React.ReactNode; label: string
       <strong>{value}</strong>
     </div>
   );
+}
+
+function MobileAccountRow({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+  return (
+    <div className="mobile-account-row">
+      <span>{icon}</span>
+      <strong>{label}</strong>
+      <em>{value}</em>
+      <ChevronRight className="size-5" aria-hidden="true" />
+    </div>
+  );
+}
+
+function HomeIconFallback() {
+  return <Package className="size-5" aria-hidden="true" />;
+}
+
+function HelpIconFallback() {
+  return <ShieldCheck className="size-7" aria-hidden="true" />;
+}
+
+function LogOutIconFallback() {
+  return <ArrowRight className="size-5" aria-hidden="true" />;
+}
+
+function maskPhone(value: string | undefined): string {
+  const phone = value?.trim();
+  if (!phone) {
+    return "未验证";
+  }
+  return phone.length >= 7 ? `${phone.slice(0, 3)}****${phone.slice(-4)}` : phone;
 }
 
 function CompactLedger({
@@ -2592,6 +3614,296 @@ function DataTable({
             ) : (
               <tr>
                 <td colSpan={columns.length}>{emptyLabel}</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function AdminDemoCanvasPanel({
+  examples,
+  saving,
+  uploadingField,
+  onAdd,
+  onChange,
+  onRemove,
+  onSave,
+  onUpload
+}: {
+  examples: DemoCanvasExampleForm[];
+  saving: boolean;
+  uploadingField: string;
+  onAdd: () => void;
+  onChange: (exampleId: string, patch: Partial<DemoCanvasExampleForm>) => void;
+  onRemove: (exampleId: string) => void;
+  onSave: () => void;
+  onUpload: (exampleId: string, field: "beforeUrl" | "afterUrl", file: File) => void;
+}) {
+  return (
+    <section className="admin-table-card admin-demo-canvas-panel" aria-labelledby="demo-canvas-title">
+      <div className="admin-table-card__title admin-demo-canvas-panel__title">
+        <div>
+          <ImageIcon className="size-4" aria-hidden="true" />
+          <h2 id="demo-canvas-title">游客画布案例</h2>
+        </div>
+        <div className="admin-demo-canvas-panel__actions">
+          <button className="secondary-action h-10" type="button" onClick={onAdd}>
+            <Plus className="size-4" aria-hidden="true" />
+            新增一组
+          </button>
+          <button className="primary-action h-10" disabled={saving} type="button" onClick={onSave}>
+            {saving ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Save className="size-4" aria-hidden="true" />}
+            保存画布案例
+          </button>
+        </div>
+      </div>
+
+      {examples.length > 0 ? (
+        <div className="admin-demo-canvas-list">
+          {examples.map((example, index) => (
+            <article className="admin-demo-canvas-item" key={example.id}>
+              <div className="admin-demo-canvas-item__head">
+                <div>
+                  <p className="settings-eyebrow">Canvas Group {index + 1}</p>
+                  <h3>{example.title || `画布案例 ${index + 1}`}</h3>
+                </div>
+                <div className="admin-demo-canvas-item__tools">
+                  <label className="admin-switch">
+                    <input checked={example.enabled} type="checkbox" onChange={(event) => onChange(example.id, { enabled: event.target.checked })} />
+                    <span>{example.enabled ? "展示" : "隐藏"}</span>
+                  </label>
+                  <button className="secondary-action h-10" type="button" onClick={() => onRemove(example.id)}>
+                    <X className="size-4" aria-hidden="true" />
+                    删除
+                  </button>
+                </div>
+              </div>
+
+              <div className="admin-demo-canvas-preview">
+                <DemoCanvasUploadPreview
+                  exampleId={example.id}
+                  field="beforeUrl"
+                  label={example.beforeLabel || "修改前"}
+                  uploading={uploadingField === `${example.id}:beforeUrl`}
+                  url={example.beforeUrl}
+                  onUpload={onUpload}
+                />
+                <DemoCanvasUploadPreview
+                  exampleId={example.id}
+                  field="afterUrl"
+                  label={example.afterLabel || "修改后"}
+                  uploading={uploadingField === `${example.id}:afterUrl`}
+                  url={example.afterUrl}
+                  onUpload={onUpload}
+                />
+              </div>
+
+              <div className="admin-form-grid admin-form-grid--two">
+                <label><span>标题</span><input className="admin-input" value={example.title} onChange={(event) => onChange(example.id, { title: event.target.value })} /></label>
+                <label><span>分类</span><input className="admin-input" value={example.category} onChange={(event) => onChange(example.id, { category: event.target.value })} /></label>
+                <label><span>修改前标签</span><input className="admin-input" value={example.beforeLabel} onChange={(event) => onChange(example.id, { beforeLabel: event.target.value })} /></label>
+                <label><span>修改后标签</span><input className="admin-input" value={example.afterLabel} onChange={(event) => onChange(example.id, { afterLabel: event.target.value })} /></label>
+                <label><span>修改前图片 URL</span><input className="admin-input" value={example.beforeUrl} onChange={(event) => onChange(example.id, { beforeUrl: event.target.value })} /></label>
+                <label><span>修改后图片 URL</span><input className="admin-input" value={example.afterUrl} onChange={(event) => onChange(example.id, { afterUrl: event.target.value })} /></label>
+                <label><span>宽度</span><input className="admin-input" inputMode="numeric" value={example.width} onChange={(event) => onChange(example.id, { width: event.target.value })} /></label>
+                <label><span>高度</span><input className="admin-input" inputMode="numeric" value={example.height} onChange={(event) => onChange(example.id, { height: event.target.value })} /></label>
+                <label><span>风格</span><select className="admin-input" value={example.presetId} onChange={(event) => onChange(example.id, { presetId: event.target.value as StylePresetId })}>{demoStylePresetOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+                <label><span>质量</span><select className="admin-input" value={example.quality} onChange={(event) => onChange(example.id, { quality: event.target.value as ImageQuality })}>{demoQualityOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+                <label><span>格式</span><select className="admin-input" value={example.outputFormat} onChange={(event) => onChange(example.id, { outputFormat: event.target.value as OutputFormat })}>{demoOutputFormatOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+                <label><span>排序</span><input className="admin-input" inputMode="numeric" value={example.sortOrder} onChange={(event) => onChange(example.id, { sortOrder: event.target.value })} /></label>
+              </div>
+              <label className="admin-demo-canvas-wide">
+                <span>说明</span>
+                <textarea className="admin-textarea" value={example.brief} onChange={(event) => onChange(example.id, { brief: event.target.value })} />
+              </label>
+              <label className="admin-demo-canvas-wide">
+                <span>演示提示词</span>
+                <textarea className="admin-textarea" value={example.prompt} onChange={(event) => onChange(example.id, { prompt: event.target.value })} />
+              </label>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <div className="gallery-empty-state">
+          <ImageIcon className="size-7" aria-hidden="true" />
+          <p>暂无画布案例</p>
+          <button className="primary-action h-10" type="button" onClick={onAdd}>
+            <Plus className="size-4" aria-hidden="true" />
+            新增第一组
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function DemoCanvasUploadPreview({
+  exampleId,
+  field,
+  label,
+  uploading,
+  url,
+  onUpload
+}: {
+  exampleId: string;
+  field: "beforeUrl" | "afterUrl";
+  label: string;
+  uploading: boolean;
+  url: string;
+  onUpload: (exampleId: string, field: "beforeUrl" | "afterUrl", file: File) => void;
+}) {
+  const inputId = `demo-canvas-upload-${exampleId}-${field}`;
+  const handleFile = (file: File | undefined): void => {
+    if (file && file.type.startsWith("image/")) {
+      onUpload(exampleId, field, file);
+    }
+  };
+  const handlePaste = (event: React.ClipboardEvent<HTMLLabelElement>): void => {
+    const fileFromItems = Array.from(event.clipboardData.items)
+      .find((item) => item.kind === "file" && item.type.startsWith("image/"))
+      ?.getAsFile();
+    const fileFromList = Array.from(event.clipboardData.files).find((file) => file.type.startsWith("image/"));
+    const pastedFile = fileFromItems ?? fileFromList;
+    if (!pastedFile) {
+      return;
+    }
+
+    event.preventDefault();
+    handleFile(pastedFile);
+  };
+
+  return (
+    <figure>
+      <label
+        aria-label={`${label}图片，点击上传或粘贴图片`}
+        className="admin-demo-canvas-preview__media"
+        data-has-image={url ? "true" : "false"}
+        data-uploading={uploading}
+        htmlFor={inputId}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter" && event.key !== " ") {
+            return;
+          }
+          event.preventDefault();
+          document.getElementById(inputId)?.click();
+        }}
+        onPaste={handlePaste}
+      >
+        {url ? <img alt="" src={adminPreviewImageUrl(url)} /> : <span className="admin-demo-canvas-placeholder">{label}图片</span>}
+        {url && !uploading ? null : (
+          <span className="admin-demo-canvas-upload">
+            {uploading ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : <Upload className="size-3.5" aria-hidden="true" />}
+            {uploading ? "上传中" : "上传"}
+          </span>
+        )}
+        {url ? null : <span className="admin-demo-canvas-paste-hint">点击上传 / 粘贴图片</span>}
+        <input
+          accept="image/png,image/jpeg,image/webp,image/gif"
+          disabled={uploading}
+          id={inputId}
+          type="file"
+          onChange={(event) => {
+            handleFile(event.target.files?.[0]);
+            event.target.value = "";
+          }}
+        />
+      </label>
+      <figcaption>
+        <span>{label}</span>
+      </figcaption>
+    </figure>
+  );
+}
+
+function AdminPublicGalleryPanel({
+  items,
+  savingOutputId,
+  onToggle
+}: {
+  items: GalleryImageItem[];
+  savingOutputId: string;
+  onToggle: (item: GalleryImageItem, enabled: boolean) => void;
+}) {
+  const publicCount = items.filter((item) => item.publicGalleryEnabled).length;
+
+  return (
+    <section className="admin-table-card admin-public-gallery-panel" aria-labelledby="public-gallery-title">
+      <div className="admin-table-card__title admin-public-gallery-panel__title">
+        <div>
+          <ImageIcon className="size-4" aria-hidden="true" />
+          <h2 id="public-gallery-title">游客公开案例库</h2>
+        </div>
+        <div className="admin-public-gallery-panel__actions">
+          <span>{publicCount.toLocaleString("zh-CN")} / {items.length.toLocaleString("zh-CN")} 已公开</span>
+          <a className="secondary-action h-10" href="/gallery" target="_blank" rel="noreferrer">
+            <ExternalLink className="size-4" aria-hidden="true" />
+            预览游客图库
+          </a>
+        </div>
+      </div>
+      <div className="admin-table-wrap">
+        <table className="admin-table admin-public-gallery-table">
+          <thead>
+            <tr>
+              <th>作品</th>
+              <th>游客展示</th>
+              <th>创建时间</th>
+              <th>公开时间</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.length > 0 ? (
+              items.map((item) => {
+                const isPublic = Boolean(item.publicGalleryEnabled);
+                const isSaving = savingOutputId === item.outputId;
+
+                return (
+                  <tr key={item.outputId}>
+                    <td>
+                      <div className="admin-public-gallery-work">
+                        <img alt="" src={galleryAssetPreviewUrl(item)} />
+                        <div>
+                          <strong>{galleryPromptExcerpt(item.prompt)}</strong>
+                          <span>{galleryOwnerLabel(item)}</span>
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      <span className="admin-public-gallery-status" data-enabled={isPublic}>
+                        {isPublic ? "已展示" : "未展示"}
+                      </span>
+                    </td>
+                    <td>{formatDateTime(item.createdAt)}</td>
+                    <td>{item.publicGalleryUpdatedAt ? formatDateTime(item.publicGalleryUpdatedAt) : "-"}</td>
+                    <td>
+                      <button
+                        className={`${isPublic ? "secondary-action" : "primary-action"} h-10 admin-public-gallery-toggle`}
+                        disabled={isSaving}
+                        type="button"
+                        onClick={() => onToggle(item, !isPublic)}
+                      >
+                        {isSaving ? (
+                          <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                        ) : isPublic ? (
+                          <X className="size-4" aria-hidden="true" />
+                        ) : (
+                          <CheckCircle2 className="size-4" aria-hidden="true" />
+                        )}
+                        {isPublic ? "取消展示" : "展示给游客"}
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })
+            ) : (
+              <tr>
+                <td colSpan={5}>暂无可筛选作品，生成成功的图片会出现在这里。</td>
               </tr>
             )}
           </tbody>
@@ -2724,7 +4036,8 @@ function PhoneVerificationDialog({
   onPhoneChange,
   onSendCode,
   onSmsCodeChange,
-  onSubmit
+  onSubmit,
+  onClose
 }: {
   error: string;
   isBinding: boolean;
@@ -2736,10 +4049,14 @@ function PhoneVerificationDialog({
   onSendCode: () => void;
   onSmsCodeChange: (value: string) => void;
   onSubmit: () => void;
+  onClose: () => void;
 }) {
   return (
     <div className="invite-dialog-backdrop phone-verification-backdrop" role="presentation">
       <section aria-labelledby="phone-verification-title" aria-modal="true" className="phone-verification-dialog" role="dialog">
+        <button aria-label="关闭完善手机号弹窗" className="phone-verification-dialog__close" type="button" onClick={onClose}>
+          <X className="size-5" aria-hidden="true" />
+        </button>
         <div className="phone-verification-dialog__icon">
           <Phone className="size-5" aria-hidden="true" />
         </div>
@@ -2804,6 +4121,59 @@ interface AccountBillingState {
   orders: BillingOrderRow[];
 }
 
+type InvoiceHeaderType = "company" | "personal";
+type InvoiceStatus = "pending" | "processing" | "issued" | "rejected";
+
+interface InvoiceRecord {
+  id: string;
+  userId?: string;
+  userEmail?: string;
+  userDisplayName?: string;
+  headerType: InvoiceHeaderType;
+  title: string;
+  taxNumber?: string;
+  invoiceContent: string;
+  amountCents: number;
+  email: string;
+  phone?: string;
+  companyAddress?: string;
+  bankName?: string;
+  bankAccount?: string;
+  remark?: string;
+  status: InvoiceStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface InvoiceApplicationsState {
+  summary: InvoiceSummaryState;
+  profile?: InvoiceRecord;
+  applications: InvoiceRecord[];
+}
+
+interface InvoiceSummaryState {
+  currency: string;
+  paidAmountCents: number;
+  issuedAmountCents: number;
+  reservedAmountCents: number;
+  availableAmountCents: number;
+  requestableAmountCents: number;
+}
+
+interface InvoiceFormState {
+  headerType: InvoiceHeaderType;
+  title: string;
+  taxNumber: string;
+  invoiceContent: string;
+  amount: string;
+  email: string;
+  phone: string;
+  companyAddress: string;
+  bankName: string;
+  bankAccount: string;
+  remark: string;
+}
+
 interface InviteSummaryState {
   inviteCode: string;
   inviteUrl?: string;
@@ -2844,6 +4214,7 @@ interface AdminUserRow {
   id: string;
   numericId?: number;
   email: string;
+  phone?: string;
   displayName: string;
   role: string;
   planId?: string;
@@ -2890,7 +4261,7 @@ interface UserQuotaFormState {
 }
 
 interface AdminUserFormState {
-  email: string;
+  phone: string;
   displayName: string;
   password: string;
 }
@@ -2898,6 +4269,17 @@ interface AdminUserFormState {
 interface BillingSettingsFormState {
   imageUnitPrice: string;
   currency: string;
+}
+
+interface StorageConfigFormState {
+  enabled: boolean;
+  provider: CloudStorageProvider;
+  secretId: string;
+  secretKey: string;
+  secretSaved: boolean;
+  bucket: string;
+  region: string;
+  keyPrefix: string;
 }
 
 interface ReferralSettingsFormState {
@@ -2926,6 +4308,41 @@ interface ImageModelFormState {
   baseUrl: string;
   model: string;
   timeoutSeconds: string;
+}
+
+interface CategoryKitPlannerModelFormState {
+  id: string;
+  enabled: boolean;
+  name: string;
+  role: CategoryKitPlannerModelRole;
+  priority: string;
+  apiKey: string;
+  apiKeySaved: boolean;
+  baseUrl: string;
+  model: string;
+  timeoutSeconds: string;
+}
+
+interface EcommerceGenerationConcurrencyFormState {
+  globalConcurrency: string;
+  jobConcurrency: string;
+}
+
+interface ExtensionReleaseTargetFormState {
+  apiBaseUrl: string;
+  version: string;
+  downloadUrl: string;
+  latestDownloadUrl: string;
+  installHelpUrl: string;
+  fileName: string;
+  sizeBytes: string;
+  sha256: string;
+  releaseNotesText: string;
+}
+
+interface ExtensionReleaseFormState {
+  dev: ExtensionReleaseTargetFormState;
+  prod: ExtensionReleaseTargetFormState;
 }
 
 interface AlipayFormState {
@@ -3025,6 +4442,48 @@ interface AdminAssetRow {
   userEmail: string;
   createdAt: string;
 }
+
+interface DemoCanvasExampleForm {
+  id: string;
+  title: string;
+  category: string;
+  beforeLabel: string;
+  afterLabel: string;
+  brief: string;
+  prompt: string;
+  presetId: StylePresetId;
+  width: string;
+  height: string;
+  quality: ImageQuality;
+  outputFormat: OutputFormat;
+  beforeUrl: string;
+  afterUrl: string;
+  enabled: boolean;
+  sortOrder: string;
+  createdAt: string;
+}
+
+const demoStylePresetOptions: Array<{ value: StylePresetId; label: string }> = [
+  { value: "none", label: "无风格" },
+  { value: "photoreal", label: "真实摄影" },
+  { value: "product", label: "商业产品" },
+  { value: "illustration", label: "精致插画" },
+  { value: "poster", label: "海报视觉" },
+  { value: "avatar", label: "头像角色" }
+];
+
+const demoQualityOptions: Array<{ value: ImageQuality; label: string }> = [
+  { value: "auto", label: "自动" },
+  { value: "low", label: "快速草稿" },
+  { value: "medium", label: "标准" },
+  { value: "high", label: "高质量" }
+];
+
+const demoOutputFormatOptions: Array<{ value: OutputFormat; label: string }> = [
+  { value: "png", label: "PNG" },
+  { value: "jpeg", label: "JPEG" },
+  { value: "webp", label: "WEBP" }
+];
 
 function parseAdminStats(value: unknown): AdminStats {
   const body = firstRecord(value, "stats") ?? {};
@@ -3145,6 +4604,122 @@ function createAccountBillingState(user: AuthUser): AccountBillingState {
   };
 }
 
+function createInvoiceApplicationsState(): InvoiceApplicationsState {
+  return {
+    summary: createInvoiceSummaryState(),
+    applications: []
+  };
+}
+
+function createInvoiceSummaryState(): InvoiceSummaryState {
+  return {
+    currency: "CNY",
+    paidAmountCents: 0,
+    issuedAmountCents: 0,
+    reservedAmountCents: 0,
+    availableAmountCents: 0,
+    requestableAmountCents: 0
+  };
+}
+
+function createInvoiceFormState(user?: AuthUser): InvoiceFormState {
+  return {
+    headerType: "company",
+    title: "",
+    taxNumber: "",
+    invoiceContent: "商品图生成服务",
+    amount: "",
+    email: user?.email || "",
+    phone: user?.phone || "",
+    companyAddress: "",
+    bankName: "",
+    bankAccount: "",
+    remark: ""
+  };
+}
+
+function invoiceRecordToForm(record: InvoiceRecord): InvoiceFormState {
+  return {
+    headerType: record.headerType,
+    title: record.title,
+    taxNumber: record.taxNumber || "",
+    invoiceContent: record.invoiceContent || "商品图生成服务",
+    amount: centsToMoneyInput(record.amountCents),
+    email: record.email || "",
+    phone: record.phone || "",
+    companyAddress: record.companyAddress || "",
+    bankName: record.bankName || "",
+    bankAccount: record.bankAccount || "",
+    remark: record.remark || ""
+  };
+}
+
+function parseInvoiceApplications(value: unknown): InvoiceApplicationsState {
+  const root = isRecord(value) ? value : {};
+  const applications = Array.isArray(root.applications) ? root.applications.map(parseInvoiceRecord).filter((item): item is InvoiceRecord => Boolean(item)) : [];
+  const profile = parseInvoiceRecord(root.profile) ?? applications[0];
+  return {
+    summary: parseInvoiceSummary(root.summary),
+    profile,
+    applications
+  };
+}
+
+function parseInvoiceSummary(value: unknown): InvoiceSummaryState {
+  const source = isRecord(value) ? value : {};
+  return {
+    currency: stringFrom(source.currency) || "CNY",
+    paidAmountCents: numberFrom(source.paidAmountCents) ?? 0,
+    issuedAmountCents: numberFrom(source.issuedAmountCents) ?? 0,
+    reservedAmountCents: numberFrom(source.reservedAmountCents) ?? 0,
+    availableAmountCents: numberFrom(source.availableAmountCents) ?? 0,
+    requestableAmountCents: numberFrom(source.requestableAmountCents) ?? 0
+  };
+}
+
+function parseInvoiceRecord(value: unknown): InvoiceRecord | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const id = stringFrom(value.id);
+  const title = stringFrom(value.title);
+  if (!id || !title) {
+    return undefined;
+  }
+  const headerType: InvoiceHeaderType = value.headerType === "personal" ? "personal" : "company";
+  return {
+    id,
+    userId: stringFrom(value.userId),
+    userEmail: stringFrom(value.userEmail),
+    userDisplayName: stringFrom(value.userDisplayName),
+    headerType,
+    title,
+    taxNumber: stringFrom(value.taxNumber),
+    invoiceContent: stringFrom(value.invoiceContent) || "商品图生成服务",
+    amountCents: numberFrom(value.amountCents) ?? 0,
+    email: stringFrom(value.email),
+    phone: stringFrom(value.phone),
+    companyAddress: stringFrom(value.companyAddress),
+    bankName: stringFrom(value.bankName),
+    bankAccount: stringFrom(value.bankAccount),
+    remark: stringFrom(value.remark),
+    status: invoiceStatus(value.status),
+    createdAt: stringFrom(value.createdAt) || "",
+    updatedAt: stringFrom(value.updatedAt) || ""
+  };
+}
+
+function invoiceStatus(value: unknown): InvoiceStatus {
+  return value === "processing" || value === "issued" || value === "rejected" ? value : "pending";
+}
+
+function invoiceStatusLabel(value: InvoiceStatus): string {
+  if (value === "processing") return "处理中";
+  if (value === "issued") return "已开具";
+  if (value === "rejected") return "已驳回";
+  return "待处理";
+}
+
 function parseInviteSummary(value: unknown, user: AuthUser): InviteSummaryState {
   const root = isRecord(value) ? value : {};
   const invite = isRecord(root.invite) ? root.invite : isRecord(root.data) ? root.data : root;
@@ -3225,6 +4800,7 @@ function parseUsers(value: unknown): AdminUserRow[] {
     id: stringFrom(item.id) || stringFrom(item.userId) || `user-${index}`,
     numericId: numberFrom(item.numericId ?? item.numeric_id),
     email: stringFrom(item.email),
+    phone: stringFrom(item.phone ?? item.mobile),
     displayName: stringFrom(item.displayName) || stringFrom(item.name),
     role: stringFrom(item.role) || "user",
     planId: stringFrom(item.planId ?? item.plan_id),
@@ -3282,11 +4858,236 @@ function parseAssets(value: unknown): AdminAssetRow[] {
   }));
 }
 
+function parseGalleryItems(value: unknown): GalleryImageItem[] {
+  return arrayFrom(value, ["items"]).flatMap((item) => {
+    const parsed = parseGalleryItemFromValue(item);
+    return parsed ? [parsed] : [];
+  });
+}
+
+function parseDemoCanvasExampleForms(value: unknown): DemoCanvasExampleForm[] {
+  const body = isRecord(value) ? value : {};
+  return arrayFrom(body, ["examples"]).map((item, index) => demoCanvasExampleToForm(parseDemoCanvasExample(item, index), index));
+}
+
+function parseDemoCanvasExample(value: Record<string, unknown>, index: number): DemoCanvasExample {
+  const size = isRecord(value.size) ? value.size : {};
+  return {
+    id: stringFrom(value.id) || crypto.randomUUID(),
+    title: stringFrom(value.title) || `画布案例 ${index + 1}`,
+    category: stringFrom(value.category) || "演示案例",
+    beforeLabel: stringFrom(value.beforeLabel) || "修改前",
+    afterLabel: stringFrom(value.afterLabel) || "修改后",
+    brief: stringFrom(value.brief) || "展示修改前后的效果对比。",
+    prompt: stringFrom(value.prompt) || "根据参考图生成适合电商展示的图片。",
+    presetId: demoStylePresetValue(value.presetId),
+    size: {
+      width: numberFrom(size.width) ?? 1024,
+      height: numberFrom(size.height) ?? 1024
+    },
+    quality: demoQualityValue(value.quality),
+    outputFormat: demoOutputFormatValue(value.outputFormat),
+    createdAt: stringFrom(value.createdAt) || new Date().toISOString(),
+    beforeUrl: stringFrom(value.beforeUrl),
+    afterUrl: stringFrom(value.afterUrl),
+    enabled: booleanFrom(value.enabled, true),
+    sortOrder: numberFrom(value.sortOrder) ?? index * 10
+  };
+}
+
+function demoCanvasExampleToForm(example: DemoCanvasExample, index: number): DemoCanvasExampleForm {
+  return {
+    id: example.id || crypto.randomUUID(),
+    title: example.title,
+    category: example.category,
+    beforeLabel: example.beforeLabel,
+    afterLabel: example.afterLabel,
+    brief: example.brief,
+    prompt: example.prompt,
+    presetId: example.presetId,
+    width: stringFromNumber(example.size.width),
+    height: stringFromNumber(example.size.height),
+    quality: example.quality,
+    outputFormat: example.outputFormat,
+    beforeUrl: example.beforeUrl,
+    afterUrl: example.afterUrl,
+    enabled: example.enabled !== false,
+    sortOrder: stringFromNumber(example.sortOrder ?? index * 10),
+    createdAt: example.createdAt
+  };
+}
+
+function createDemoCanvasExampleForm(index: number): DemoCanvasExampleForm {
+  return {
+    id: crypto.randomUUID(),
+    title: `画布案例 ${index + 1}`,
+    category: "演示案例",
+    beforeLabel: "修改前",
+    afterLabel: "修改后",
+    brief: "展示修改前后的效果对比。",
+    prompt: "根据参考图生成适合电商展示的图片。",
+    presetId: "product",
+    width: "1024",
+    height: "1024",
+    quality: "auto",
+    outputFormat: "png",
+    beforeUrl: "",
+    afterUrl: "",
+    enabled: true,
+    sortOrder: String(index * 10),
+    createdAt: new Date().toISOString()
+  };
+}
+
+function demoCanvasExamplesToPayload(forms: DemoCanvasExampleForm[]): SaveDemoCanvasConfigRequest {
+  return {
+    examples: forms.map((form, index) => ({
+      id: form.id,
+      title: form.title,
+      category: form.category,
+      beforeLabel: form.beforeLabel,
+      afterLabel: form.afterLabel,
+      brief: form.brief,
+      prompt: form.prompt,
+      presetId: form.presetId,
+      size: {
+        width: nullableNumber(form.width) ?? 1024,
+        height: nullableNumber(form.height) ?? 1024
+      },
+      quality: form.quality,
+      outputFormat: form.outputFormat,
+      createdAt: form.createdAt,
+      beforeUrl: form.beforeUrl,
+      afterUrl: form.afterUrl,
+      enabled: form.enabled,
+      sortOrder: nullableNumber(form.sortOrder) ?? index * 10
+    }))
+  };
+}
+
+function parseGalleryItemFromValue(value: unknown): GalleryImageItem | undefined {
+  if (!isRecord(value) || !isRecord(value.asset)) {
+    return undefined;
+  }
+
+  const asset = value.asset;
+  const outputId = stringFrom(value.outputId ?? value.output_id);
+  const generationId = stringFrom(value.generationId ?? value.generation_id);
+  const assetId = stringFrom(asset.id ?? asset.assetId ?? asset.asset_id);
+  if (!outputId || !generationId || !assetId) {
+    return undefined;
+  }
+
+  const size = isRecord(value.size) ? value.size : {};
+
+  return {
+    outputId,
+    generationId,
+    userId: stringFrom(value.userId ?? value.user_id) || undefined,
+    userEmail: stringFrom(value.userEmail ?? value.user_email) || undefined,
+    userDisplayName: stringFrom(value.userDisplayName ?? value.user_display_name) || undefined,
+    workspaceId: stringFrom(value.workspaceId ?? value.workspace_id) || undefined,
+    publicGalleryEnabled: booleanFrom(value.publicGalleryEnabled ?? value.public_gallery_enabled, false),
+    publicGallerySortOrder: numberFrom(value.publicGallerySortOrder ?? value.public_gallery_sort_order),
+    publicGalleryUpdatedAt: stringFrom(value.publicGalleryUpdatedAt ?? value.public_gallery_updated_at) || undefined,
+    mode: stringFrom(value.mode) === "edit" ? "edit" : "generate",
+    prompt: stringFrom(value.prompt),
+    effectivePrompt: stringFrom(value.effectivePrompt ?? value.effective_prompt) || stringFrom(value.prompt),
+    presetId: stringFrom(value.presetId ?? value.preset_id) || "none",
+    size: {
+      width: numberFrom(size.width) ?? numberFrom(value.width) ?? numberFrom(asset.width) ?? 1024,
+      height: numberFrom(size.height) ?? numberFrom(value.height) ?? numberFrom(asset.height) ?? 1024
+    },
+    quality: galleryQualityFrom(value.quality),
+    outputFormat: galleryOutputFormatFrom(value.outputFormat ?? value.output_format),
+    model: stringFrom(value.model) || undefined,
+    modelConfigId: stringFrom(value.modelConfigId ?? value.model_config_id) || undefined,
+    modelProvider: stringFrom(value.modelProvider ?? value.model_provider) || undefined,
+    modelDisplayName: stringFrom(value.modelDisplayName ?? value.model_display_name) || undefined,
+    createdAt: stringFrom(value.createdAt ?? value.created_at),
+    asset: {
+      id: assetId,
+      url: stringFrom(asset.url) || `/api/assets/${encodeURIComponent(assetId)}`,
+      cdnUrl: stringFrom(asset.cdnUrl ?? asset.cdn_url) || undefined,
+      cdnPreviewUrls: stringRecordFrom(asset.cdnPreviewUrls ?? asset.cdn_preview_urls),
+      fileName: stringFrom(asset.fileName ?? asset.file_name) || assetId,
+      mimeType: stringFrom(asset.mimeType ?? asset.mime_type) || "image/png",
+      width: numberFrom(asset.width) ?? 1024,
+      height: numberFrom(asset.height) ?? 1024
+    }
+  };
+}
+
 function parseBillingSettingsForm(value: unknown): BillingSettingsFormState {
   const settings = firstRecord(value, "settings") ?? (isRecord(value) ? value : {});
   return {
     imageUnitPrice: centsToMoneyInput(numberFrom(settings.imageUnitPriceCents ?? settings.singleImagePriceCents) ?? 0),
     currency: stringFrom(settings.currency) || "CNY"
+  };
+}
+
+function parseStorageConfigForm(value: unknown): StorageConfigFormState {
+  const config = isRecord(value) ? value : {};
+  const provider: CloudStorageProvider = config.provider === "cos" ? "cos" : "oss";
+  if (provider === "cos") {
+    const cos = isRecord(config.cos) ? config.cos : {};
+    const secret = isRecord(cos.secretKey) ? cos.secretKey : {};
+    const hasSecret = booleanFrom(secret.hasSecret, false);
+    return {
+      enabled: booleanFrom(config.enabled, false),
+      provider,
+      secretId: stringFrom(cos.secretId),
+      secretKey: "",
+      secretSaved: hasSecret,
+      bucket: stringFrom(cos.bucket) || "source-1253253332",
+      region: stringFrom(cos.region) || "ap-nanjing",
+      keyPrefix: stringFrom(cos.keyPrefix) || "gpt-image-canvas/assets"
+    };
+  }
+
+  const oss = isRecord(config.oss) ? config.oss : {};
+  const secret = isRecord(oss.accessKeySecret) ? oss.accessKeySecret : {};
+  const hasSecret = booleanFrom(secret.hasSecret, false);
+  return {
+    enabled: booleanFrom(config.enabled, false),
+    provider,
+    secretId: stringFrom(oss.accessKeyId),
+    secretKey: "",
+    secretSaved: hasSecret,
+    bucket: stringFrom(oss.bucket),
+    region: stringFrom(oss.region) || "oss-cn-hangzhou",
+    keyPrefix: stringFrom(oss.keyPrefix) || "gpt-image-canvas/assets"
+  };
+}
+
+function storageSettingsToPayload(form: StorageConfigFormState, options: { forceEnabled?: boolean } = {}): SaveStorageConfigRequest {
+  const preserveSecret = form.secretSaved && !form.secretKey.trim();
+  if (form.provider === "cos") {
+    return {
+      enabled: options.forceEnabled ?? form.enabled,
+      provider: "cos",
+      cos: {
+        secretId: form.secretId.trim(),
+        secretKey: preserveSecret ? undefined : form.secretKey,
+        preserveSecret,
+        bucket: form.bucket.trim(),
+        region: form.region.trim(),
+        keyPrefix: form.keyPrefix.trim()
+      }
+    };
+  }
+
+  return {
+    enabled: options.forceEnabled ?? form.enabled,
+    provider: "oss",
+    oss: {
+      accessKeyId: form.secretId.trim(),
+      accessKeySecret: preserveSecret ? undefined : form.secretKey,
+      preserveSecret,
+      bucket: form.bucket.trim(),
+      region: form.region.trim(),
+      keyPrefix: form.keyPrefix.trim()
+    }
   };
 }
 
@@ -3335,6 +5136,128 @@ function parseImageModelForms(value: unknown): ImageModelFormState[] {
       timeoutSeconds: String(Math.max(1, Math.round((numberFrom(item.timeoutMs ?? item.timeout_ms) ?? 1200000) / 1000)))
     };
   });
+}
+
+function parseCategoryKitPlannerForms(value: unknown): CategoryKitPlannerModelFormState[] {
+  const root = isRecord(value) ? value : {};
+  const rawModels = Array.isArray(root.models)
+    ? root.models
+    : root.config
+      ? [root.config]
+      : [root];
+
+  const models = rawModels
+    .map((item, index) => parseCategoryKitPlannerFormItem(item, index))
+    .filter((item): item is CategoryKitPlannerModelFormState => Boolean(item));
+
+  return models.length > 0 ? models : [createCategoryKitPlannerForm("primary", 1)];
+}
+
+function parseCategoryKitPlannerFormItem(value: unknown, index: number): CategoryKitPlannerModelFormState | undefined {
+  const planner = isRecord(value) ? value : {};
+  const enabled = booleanFrom(planner.enabled, true);
+  const name = stringFrom(planner.name) || (index === 0 ? "品类套图共享文本模型" : "品类套图备用文本模型");
+  const role = stringFrom(planner.role) === "fallback" ? "fallback" : "primary";
+  const priority = String(Math.max(1, Math.round(numberFrom(planner.priority) ?? index + 1)));
+  const model = stringFrom(planner.model) || "gpt-5.5";
+  if (!name || !model) {
+    return undefined;
+  }
+
+  return {
+    id: stringFrom(planner.id) || `category-kit-planner-${index + 1}`,
+    enabled,
+    name,
+    role,
+    priority,
+    apiKey: "",
+    apiKeySaved: booleanFrom(planner.apiKeySaved, false),
+    baseUrl: stringFrom(planner.baseUrl) || "https://api.openai.com/v1",
+    model,
+    timeoutSeconds: String(Math.max(1, Math.round((numberFrom(planner.timeoutMs) ?? 1200000) / 1000)))
+  };
+}
+
+function categoryKitPlannerToPayload(forms: CategoryKitPlannerModelFormState[]): SaveCategoryKitPlannerConfigRequest {
+  return {
+    models: forms.map((form, index) => {
+      const timeoutSeconds = nullableNumber(form.timeoutSeconds);
+      return {
+        id: form.id.startsWith("new-") ? undefined : form.id,
+        enabled: form.enabled,
+        name: form.name,
+        role: form.role,
+        priority: nullableNumber(form.priority) ?? index + 1,
+        apiKey: form.apiKey,
+        preserveApiKey: !form.apiKey.trim() && form.apiKeySaved,
+        baseUrl: form.baseUrl,
+        model: form.model,
+        timeoutMs: timeoutSeconds !== null && timeoutSeconds > 0 ? Math.round(timeoutSeconds * 1000) : undefined
+      };
+    })
+  };
+}
+
+function parseEcommerceGenerationConcurrencyForm(value: unknown): EcommerceGenerationConcurrencyFormState {
+  const root = (firstRecord(value, "config") ?? (isRecord(value) ? value : {})) as Partial<EcommerceGenerationConcurrencyConfigResponse>;
+  return {
+    globalConcurrency: stringFromNumber(numberFrom(root.globalConcurrency) ?? 6),
+    jobConcurrency: stringFromNumber(numberFrom(root.jobConcurrency) ?? 3)
+  };
+}
+
+function ecommerceGenerationConcurrencyToPayload(
+  form: EcommerceGenerationConcurrencyFormState
+): SaveEcommerceGenerationConcurrencyConfigRequest {
+  return {
+    globalConcurrency: Math.max(1, Math.round(nullableNumber(form.globalConcurrency) ?? 6)),
+    jobConcurrency: Math.max(1, Math.round(nullableNumber(form.jobConcurrency) ?? 3))
+  };
+}
+
+function parseExtensionReleaseForm(value: unknown): ExtensionReleaseFormState {
+  const root = isRecord(value) ? value : {};
+  return {
+    dev: parseExtensionReleaseTargetForm(root.dev, "dev"),
+    prod: parseExtensionReleaseTargetForm(root.prod, "prod")
+  };
+}
+
+function parseExtensionReleaseTargetForm(value: unknown, target: "dev" | "prod"): ExtensionReleaseTargetFormState {
+  const release = isRecord(value) ? value : {};
+  const releaseNotes = Array.isArray(release.releaseNotes) ? release.releaseNotes.filter((item): item is string => typeof item === "string") : [];
+  return {
+    apiBaseUrl: stringFrom(release.apiBaseUrl) || (target === "dev" ? "https://dev.neimou.com" : "https://ai.neimou.com"),
+    version: stringFrom(release.version),
+    downloadUrl: stringFrom(release.downloadUrl),
+    latestDownloadUrl: stringFrom(release.latestDownloadUrl),
+    installHelpUrl: stringFrom(release.installHelpUrl) || "/install-help.html",
+    fileName: stringFrom(release.fileName),
+    sizeBytes: stringFromNumber(numberFrom(release.sizeBytes)),
+    sha256: stringFrom(release.sha256),
+    releaseNotesText: releaseNotes.join("\n")
+  };
+}
+
+function extensionReleaseToPayload(form: ExtensionReleaseFormState): Record<string, unknown> {
+  return {
+    dev: extensionReleaseTargetToPayload(form.dev),
+    prod: extensionReleaseTargetToPayload(form.prod)
+  };
+}
+
+function extensionReleaseTargetToPayload(form: ExtensionReleaseTargetFormState): Record<string, unknown> {
+  return {
+    apiBaseUrl: form.apiBaseUrl,
+    version: form.version,
+    downloadUrl: form.downloadUrl,
+    latestDownloadUrl: form.latestDownloadUrl,
+    installHelpUrl: form.installHelpUrl,
+    fileName: form.fileName,
+    sizeBytes: nullableNumber(form.sizeBytes) ?? undefined,
+    sha256: form.sha256,
+    releaseNotes: splitLines(form.releaseNotesText)
+  };
 }
 
 function providerDefaults(provider: ImageModelProvider): Partial<ImageModelFormState> {
@@ -3473,6 +5396,97 @@ function ownerLabel(item: Pick<AdminJobRow, "userDisplayName" | "userEmail" | "u
   return displayName || email || item.userId || "-";
 }
 
+function galleryOwnerLabel(item: Pick<GalleryImageItem, "userDisplayName" | "userEmail" | "userId">): string {
+  const displayName = item.userDisplayName?.trim();
+  const email = item.userEmail?.trim();
+  if (displayName && email && displayName !== email) {
+    return `${displayName} · ${email}`;
+  }
+  return displayName || email || item.userId || "-";
+}
+
+function galleryPromptExcerpt(prompt: string): string {
+  const compact = prompt.replace(/\s+/gu, " ").trim();
+  return compact.length > 96 ? `${compact.slice(0, 96)}...` : compact || "-";
+}
+
+function galleryAssetPreviewUrl(item: GalleryImageItem): string {
+  return (
+    previewUrlForWidth(item.asset.cdnPreviewUrls, 256) ||
+    item.asset.cdnUrl ||
+    (/^data:|^https?:\/\//iu.test(item.asset.url) || item.asset.url.startsWith("/api/public/")
+      ? item.asset.url
+      : authenticatedAssetUrl(`/api/assets/${encodeURIComponent(item.asset.id)}/preview?width=256`))
+  );
+}
+
+function adminPreviewImageUrl(url: string): string {
+  return url.startsWith("/api/assets/") ? authenticatedAssetUrl(url) : url;
+}
+
+function authenticatedAssetUrl(url: string): string {
+  if (/^data:|^https?:\/\//iu.test(url)) {
+    return url;
+  }
+
+  const token = getStoredAuthToken();
+  if (!token) {
+    return url;
+  }
+
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}token=${encodeURIComponent(token)}`;
+}
+
+function previewUrlForWidth(previewUrls: Record<string, string> | undefined, preferredWidth: number): string | undefined {
+  if (!previewUrls) {
+    return undefined;
+  }
+
+  const widths = Object.keys(previewUrls)
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value))
+    .sort((a, b) => a - b);
+  const selectedWidth = widths.find((width) => width >= preferredWidth) ?? widths[widths.length - 1];
+  return selectedWidth ? previewUrls[String(selectedWidth)] : undefined;
+}
+
+function stringRecordFrom(value: unknown): Record<string, string> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const entries = Object.entries(value)
+    .map(([key, item]) => [key, stringFrom(item)] as const)
+    .filter(([, item]) => Boolean(item));
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function galleryQualityFrom(value: unknown): GalleryImageItem["quality"] {
+  const quality = stringFrom(value);
+  return quality === "low" || quality === "medium" || quality === "high" || quality === "auto" ? quality : "auto";
+}
+
+function galleryOutputFormatFrom(value: unknown): GalleryImageItem["outputFormat"] {
+  const outputFormat = stringFrom(value);
+  return outputFormat === "jpeg" || outputFormat === "png" || outputFormat === "webp" ? outputFormat : "png";
+}
+
+function demoStylePresetValue(value: unknown): StylePresetId {
+  const presetId = stringFrom(value);
+  return demoStylePresetOptions.some((option) => option.value === presetId) ? (presetId as StylePresetId) : "product";
+}
+
+function demoQualityValue(value: unknown): ImageQuality {
+  const quality = stringFrom(value);
+  return demoQualityOptions.some((option) => option.value === quality) ? (quality as ImageQuality) : "auto";
+}
+
+function demoOutputFormatValue(value: unknown): OutputFormat {
+  const outputFormat = stringFrom(value);
+  return demoOutputFormatOptions.some((option) => option.value === outputFormat) ? (outputFormat as OutputFormat) : "png";
+}
+
 const NEW_PLAN_ID = "__new_plan__";
 
 function createBillingSettingsForm(): BillingSettingsFormState {
@@ -3480,6 +5494,30 @@ function createBillingSettingsForm(): BillingSettingsFormState {
     imageUnitPrice: "0",
     currency: "CNY"
   };
+}
+
+function createStorageConfigForm(provider: CloudStorageProvider = "oss"): StorageConfigFormState {
+  return provider === "cos"
+    ? {
+        enabled: false,
+        provider: "cos",
+        secretId: "",
+        secretKey: "",
+        secretSaved: false,
+        bucket: "source-1253253332",
+        region: "ap-nanjing",
+        keyPrefix: "gpt-image-canvas/assets"
+      }
+    : {
+        enabled: false,
+        provider: "oss",
+        secretId: "",
+        secretKey: "",
+        secretSaved: false,
+        bucket: "",
+        region: "oss-cn-hangzhou",
+        keyPrefix: "gpt-image-canvas/assets"
+      };
 }
 
 function createReferralSettingsForm(): ReferralSettingsFormState {
@@ -3492,6 +5530,28 @@ function createReferralSettingsForm(): ReferralSettingsFormState {
     planPurchaseCashbackRate: "5",
     minCashbackOrderAmount: "1",
     currency: "CNY"
+  };
+}
+
+function createEcommerceGenerationConcurrencyForm(): EcommerceGenerationConcurrencyFormState {
+  return {
+    globalConcurrency: "6",
+    jobConcurrency: "3"
+  };
+}
+
+function createCategoryKitPlannerForm(role: CategoryKitPlannerModelRole, index: number): CategoryKitPlannerModelFormState {
+  return {
+    id: `new-${Date.now()}-${index}`,
+    enabled: true,
+    name: role === "fallback" ? "品类套图备用文本模型" : "品类套图共享文本模型",
+    role,
+    priority: String(index),
+    apiKey: "",
+    apiKeySaved: false,
+    baseUrl: "https://api.openai.com/v1",
+    model: "gpt-5.5",
+    timeoutSeconds: "1200"
   };
 }
 
@@ -3509,6 +5569,33 @@ function createImageModelForm(provider: ImageModelProvider, index: number): Imag
     baseUrl: defaults.baseUrl ?? "",
     model: defaults.model ?? "",
     timeoutSeconds: "1200"
+  };
+}
+
+function createExtensionReleaseForm(): ExtensionReleaseFormState {
+  return {
+    dev: {
+      apiBaseUrl: "https://dev.neimou.com",
+      version: "",
+      downloadUrl: "",
+      latestDownloadUrl: "",
+      installHelpUrl: "/install-help.html",
+      fileName: "kuajing-image-extension-dev-latest.zip",
+      sizeBytes: "",
+      sha256: "",
+      releaseNotesText: "优化插件体验并修复已知问题。"
+    },
+    prod: {
+      apiBaseUrl: "https://ai.neimou.com",
+      version: "",
+      downloadUrl: "",
+      latestDownloadUrl: "",
+      installHelpUrl: "/install-help.html",
+      fileName: "kuajing-image-extension-prod-latest.zip",
+      sizeBytes: "",
+      sha256: "",
+      releaseNotesText: "优化插件体验并修复已知问题。"
+    }
   };
 }
 
@@ -3605,7 +5692,7 @@ function createEmptyPlanForm(): PlanFormState {
 
 function createEmptyAdminForm(): AdminUserFormState {
   return {
-    email: "",
+    phone: "",
     displayName: "",
     password: ""
   };
@@ -3727,6 +5814,18 @@ function formatDateTime(value: string): string {
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit"
+  }).format(date);
+}
+
+function formatDate(value: string): string {
+  const date = new Date(value);
+  if (!value || Number.isNaN(date.getTime())) {
+    return "-";
+  }
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
   }).format(date);
 }
 

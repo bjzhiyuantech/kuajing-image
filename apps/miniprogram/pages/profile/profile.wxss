@@ -31,6 +31,17 @@
   font-size: 28rpx;
 }
 
+.login-textarea {
+  width: 100%;
+  min-height: 160rpx;
+  border-radius: 16rpx;
+  background: #fff;
+  border: 1rpx solid #d0d5dd;
+  padding: 18rpx 22rpx;
+  box-sizing: border-box;
+  font-size: 28rpx;
+}
+
 .secondary-button {
   height: 90rpx;
   margin-top: 24rpx;
@@ -58,4 +69,117 @@
   font-size: 34rpx;
   font-weight: 800;
   color: #101828;
+}
+
+.two-fields {
+  display: flex;
+  gap: 18rpx;
+}
+
+.two-fields .field {
+  flex: 1;
+}
+
+.picker {
+  height: 90rpx;
+  line-height: 90rpx;
+  border-radius: 16rpx;
+  background: #fff;
+  border: 1rpx solid #d0d5dd;
+  padding: 0 22rpx;
+  box-sizing: border-box;
+  font-size: 28rpx;
+  color: #101828;
+}
+
+.invoice-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14rpx;
+  margin-top: 22rpx;
+}
+
+.invoice-stats view {
+  min-width: 0;
+  padding: 18rpx;
+  border-radius: 14rpx;
+  background: #f8fafc;
+  border: 1rpx solid #eaecf0;
+}
+
+.invoice-stats text {
+  display: block;
+  color: #667085;
+  font-size: 22rpx;
+}
+
+.invoice-stats strong {
+  display: block;
+  margin-top: 8rpx;
+  color: #101828;
+  font-size: 26rpx;
+  font-weight: 800;
+  word-break: break-all;
+}
+
+.invoice-summary {
+  margin-top: 22rpx;
+  padding: 22rpx;
+  border-radius: 16rpx;
+  background: #f8fafc;
+}
+
+.invoice-summary-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18rpx;
+  margin-bottom: 8rpx;
+}
+
+.invoice-summary-title {
+  font-size: 28rpx;
+  font-weight: 700;
+}
+
+.invoice-summary-amount {
+  font-size: 30rpx;
+  font-weight: 800;
+  color: #155eef;
+  white-space: nowrap;
+}
+
+.invoice-history {
+  margin-top: 18rpx;
+}
+
+.history-item {
+  padding: 20rpx 0;
+  border-top: 1rpx solid #eaecf0;
+}
+
+.history-item:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.history-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18rpx;
+  margin-bottom: 6rpx;
+}
+
+.history-title {
+  font-size: 28rpx;
+  font-weight: 700;
+  color: #101828;
+}
+
+.history-status {
+  color: #155eef;
+  font-size: 22rpx;
+  font-weight: 700;
+  white-space: nowrap;
 }

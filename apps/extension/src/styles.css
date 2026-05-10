@@ -5,6 +5,7 @@
 html,
 body,
 #root {
+  overflow-x: hidden;
   min-width: 0;
 }
 
@@ -23,9 +24,11 @@ textarea {
 }
 
 .app-shell {
+  max-width: 100%;
   min-height: 100vh;
   padding: 14px 132px 14px 14px;
   position: relative;
+  width: 100%;
 }
 
 .topbar,
@@ -774,6 +777,42 @@ textarea:focus {
   width: 100%;
 }
 
+.reference-image-hover-preview {
+  background: #ffffff;
+  border: 1px solid #c9d8d1;
+  border-radius: 8px;
+  box-shadow: 0 16px 38px rgb(23 32 28 / 22%);
+  left: 0;
+  max-width: calc(100vw - 24px);
+  padding: 8px;
+  pointer-events: none;
+  position: fixed;
+  top: 0;
+  width: 280px;
+  z-index: 10000;
+}
+
+.reference-image-hover-preview img {
+  aspect-ratio: 1;
+  background: #f7faf8;
+  border-radius: 6px;
+  display: block;
+  object-fit: contain;
+  width: 100%;
+}
+
+.reference-image-hover-preview span {
+  color: #26352e;
+  display: block;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+  margin-top: 7px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .reference-image-option svg {
   background: #18a678;
   border-radius: 999px;
@@ -819,6 +858,42 @@ textarea:focus {
 .sticky-actions span {
   color: #c8d4ce;
   font-size: 12px;
+}
+
+.ops-collage-toggle {
+  align-items: center;
+  background: #f7faf8;
+  border: 1px solid #d8e4de;
+  border-radius: 7px;
+  color: #26352e;
+  cursor: pointer;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-start;
+  margin-top: 10px;
+  max-width: 100%;
+  min-height: 36px;
+  padding: 8px 10px;
+  width: 100%;
+}
+
+.ops-collage-toggle input {
+  accent-color: #18a678;
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.ops-collage-toggle span {
+  color: #26352e;
+  display: inline-flex;
+  flex: 1 1 auto;
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.35;
+  margin-bottom: 0;
+  min-width: 0;
+  white-space: nowrap;
+  writing-mode: horizontal-tb;
 }
 
 .primary-button {
@@ -1640,7 +1715,29 @@ textarea:focus {
   gap: 10px;
   max-width: 360px;
   padding: 14px;
+  position: relative;
   width: 100%;
+}
+
+.phone-dialog__close {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: #607168;
+  cursor: pointer;
+  display: inline-flex;
+  height: 32px;
+  justify-content: center;
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  width: 32px;
+}
+
+.phone-dialog__close:hover {
+  background: #f1f5f3;
+  border-radius: 8px;
+  color: #17201c;
 }
 
 .phone-dialog-icon {
@@ -1739,6 +1836,118 @@ textarea:focus {
 .billing-usage-card {
   margin-bottom: 10px;
   padding: 10px;
+}
+
+.invoice-card {
+  display: grid;
+  gap: 10px;
+}
+
+.invoice-latest {
+  align-items: flex-start;
+  background: #ffffff;
+  border: 1px solid #dfe6e2;
+  border-radius: 7px;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  padding: 10px;
+}
+
+.invoice-summary-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.invoice-summary-grid div {
+  background: #ffffff;
+  border: 1px solid #dfe6e2;
+  border-radius: 7px;
+  padding: 9px;
+}
+
+.invoice-summary-grid span,
+.invoice-summary-grid strong {
+  display: block;
+}
+
+.invoice-summary-grid span {
+  color: #66766d;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.invoice-summary-grid strong {
+  color: #17201c;
+  font-size: 12px;
+  font-weight: 900;
+  margin-top: 4px;
+}
+
+.invoice-latest strong,
+.invoice-latest span,
+.invoice-latest em {
+  display: block;
+}
+
+.invoice-latest strong {
+  color: #17201c;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.invoice-latest span {
+  color: #66766d;
+  font-size: 11px;
+  margin-top: 4px;
+}
+
+.invoice-latest em {
+  color: #0d6b52;
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.invoice-form {
+  display: grid;
+  gap: 8px;
+}
+
+.invoice-form label {
+  margin: 0;
+}
+
+.invoice-form select,
+.invoice-form textarea {
+  background: #ffffff;
+  border: 1px solid #ccd7d1;
+  border-radius: 6px;
+  color: #17201c;
+  min-height: 36px;
+  padding: 0 9px;
+  width: 100%;
+}
+
+.invoice-form textarea {
+  min-height: 70px;
+  padding-top: 8px;
+  resize: vertical;
+}
+
+.invoice-form input:disabled {
+  background: #eef3f0;
+  color: #849189;
+}
+
+.invoice-submit {
+  min-height: 38px;
+}
+
+.invoice-history {
+  margin-top: 2px;
 }
 
 .billing-usage-card strong {
@@ -1861,9 +2070,14 @@ textarea:focus {
   justify-content: space-between;
 }
 
-.queued-job-dialog-card {
+.edit-modal-card.queued-job-dialog-card {
   display: grid;
   gap: 12px;
+  width: min(100%, 390px);
+}
+
+.edit-modal.queued-job-modal {
+  right: 112px;
 }
 
 .queued-job-summary {
@@ -2071,6 +2285,7 @@ textarea:focus {
 }
 
 .asset-thumb--placeholder {
+  background: linear-gradient(145deg, #f1f8f4 0%, #e7f3ed 100%);
   cursor: default;
 }
 
@@ -2088,8 +2303,135 @@ textarea:focus {
   width: 100%;
 }
 
-.asset-thumb--placeholder img {
-  filter: saturate(0.92) contrast(0.98);
+.asset-thumb--placeholder .history-placeholder-art {
+  display: block;
+  height: 100%;
+  pointer-events: none;
+  width: 100%;
+}
+
+.history-placeholder-art__flow,
+.history-placeholder-art__grid,
+.history-placeholder-art__orbit,
+.history-placeholder-art__panel,
+.history-placeholder-art__sparkles,
+.history-placeholder-art__core {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.history-placeholder-art__flow {
+  animation: history-placeholder-flow 2.6s cubic-bezier(0.44, 0, 0.2, 1) infinite;
+}
+
+.history-placeholder-art__grid {
+  animation: history-placeholder-grid 4.8s ease-in-out infinite;
+}
+
+.history-placeholder-art__panel {
+  animation: history-placeholder-panel 2.5s ease-in-out infinite;
+}
+
+.history-placeholder-art__orbit {
+  animation: history-placeholder-orbit 5.8s linear infinite;
+}
+
+.history-placeholder-art__orbit--inner {
+  animation-direction: reverse;
+  animation-duration: 3.9s;
+}
+
+.history-placeholder-art__sparkles {
+  animation: history-placeholder-sparkle 2.4s ease-in-out infinite;
+}
+
+.history-placeholder-art__core {
+  animation: history-placeholder-breathe 1.85s ease-in-out infinite;
+}
+
+@keyframes history-placeholder-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes history-placeholder-flow {
+  0% {
+    opacity: 0;
+    transform: translateX(0);
+  }
+
+  18% {
+    opacity: 0.96;
+  }
+
+  58% {
+    opacity: 0.74;
+  }
+
+  100% {
+    opacity: 0;
+    transform: translateX(300px);
+  }
+}
+
+@keyframes history-placeholder-grid {
+  0%,
+  100% {
+    opacity: 0.2;
+  }
+
+  50% {
+    opacity: 0.34;
+  }
+}
+
+@keyframes history-placeholder-panel {
+  0%,
+  100% {
+    filter: drop-shadow(0 12px 20px rgba(11, 81, 70, 0.16));
+    transform: scale(1);
+  }
+
+  50% {
+    filter: drop-shadow(0 16px 24px rgba(126, 230, 198, 0.26));
+    transform: scale(1.015);
+  }
+}
+
+@keyframes history-placeholder-sparkle {
+  0%,
+  100% {
+    opacity: 0.58;
+    transform: scale(0.98);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1.04);
+  }
+}
+
+@keyframes history-placeholder-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+
+  50% {
+    transform: scale(1.05);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .history-placeholder-art__flow,
+  .history-placeholder-art__grid,
+  .history-placeholder-art__orbit,
+  .history-placeholder-art__panel,
+  .history-placeholder-art__sparkles,
+  .history-placeholder-art__core {
+    animation: none;
+  }
 }
 
 .stats-grid {
@@ -2192,6 +2534,10 @@ textarea:focus {
 @media (max-width: 520px) {
   .app-shell {
     padding-right: 90px;
+  }
+
+  .edit-modal.queued-job-modal {
+    right: 80px;
   }
 
   .tool-dock {

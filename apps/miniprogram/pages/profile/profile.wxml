@@ -45,4 +45,100 @@
     <view class="muted">当前未登录。</view>
     <button class="primary-button" bindtap="goLogin">去登录</button>
   </view>
+
+  <view wx:if="{{user}}" class="section">
+    <view class="title">开票申请</view>
+    <view class="subtitle">提交后会保存常用开票信息，方便下次直接回填。</view>
+
+    <view class="invoice-stats">
+      <view>
+        <text>实际支付</text>
+        <strong>{{invoiceStats.paidAmount}} 元</strong>
+      </view>
+      <view>
+        <text>已开票</text>
+        <strong>{{invoiceStats.issuedAmount}} 元</strong>
+      </view>
+      <view>
+        <text>可申请</text>
+        <strong>{{invoiceStats.requestableAmount}} 元</strong>
+      </view>
+    </view>
+
+    <view wx:if="{{invoiceLatest}}" class="invoice-summary">
+      <view class="invoice-summary-head">
+        <view>
+          <view class="invoice-summary-title">最近一次保存</view>
+          <view class="muted">{{invoiceLatest.headerTypeText}} · {{invoiceLatest.title}}</view>
+        </view>
+        <view class="invoice-summary-amount">{{invoiceLatest.amountText}} 元</view>
+      </view>
+      <view class="muted">提交时间 {{invoiceLatest.createdAtText}}</view>
+    </view>
+
+    <view class="field">
+      <text class="field-label">抬头类型</text>
+      <picker range="{{invoiceHeaderTypeLabels}}" value="{{invoiceHeaderTypeIndex}}" bindchange="onInvoiceHeaderTypeChange">
+        <view class="picker">{{invoiceHeaderTypeLabels[invoiceHeaderTypeIndex]}}</view>
+      </picker>
+    </view>
+    <view class="field">
+      <text class="field-label">发票抬头</text>
+      <input class="login-input" value="{{invoiceTitle}}" data-field="invoiceTitle" bindinput="onInvoiceInput" placeholder="公司名称或个人抬头" />
+    </view>
+    <view class="field" wx:if="{{invoiceHeaderTypeIndex === 0}}">
+      <text class="field-label">纳税人识别号</text>
+      <input class="login-input" value="{{invoiceTaxNumber}}" data-field="invoiceTaxNumber" bindinput="onInvoiceInput" placeholder="企业抬头必填" />
+    </view>
+    <view class="field">
+      <text class="field-label">开票内容</text>
+      <input class="login-input" value="{{invoiceContent}}" data-field="invoiceContent" bindinput="onInvoiceInput" placeholder="商品图生成服务" />
+    </view>
+    <view class="field">
+      <text class="field-label">开票金额（元）</text>
+      <input class="login-input" value="{{invoiceAmount}}" data-field="invoiceAmount" bindinput="onInvoiceInput" type="digit" placeholder="例如 99.00" />
+    </view>
+    <view class="field">
+      <text class="field-label">接收邮箱</text>
+      <input class="login-input" value="{{invoiceEmail}}" data-field="invoiceEmail" bindinput="onInvoiceInput" type="text" placeholder="用于接收电子发票" />
+    </view>
+    <view class="two-fields">
+      <view class="field">
+        <text class="field-label">联系电话</text>
+        <input class="login-input" value="{{invoicePhone}}" data-field="invoicePhone" bindinput="onInvoiceInput" placeholder="可选" />
+      </view>
+      <view class="field">
+        <text class="field-label">公司地址</text>
+        <input class="login-input" value="{{invoiceCompanyAddress}}" data-field="invoiceCompanyAddress" bindinput="onInvoiceInput" placeholder="可选" />
+      </view>
+    </view>
+    <view class="two-fields">
+      <view class="field">
+        <text class="field-label">开户行</text>
+        <input class="login-input" value="{{invoiceBankName}}" data-field="invoiceBankName" bindinput="onInvoiceInput" placeholder="可选" />
+      </view>
+      <view class="field">
+        <text class="field-label">银行账号</text>
+        <input class="login-input" value="{{invoiceBankAccount}}" data-field="invoiceBankAccount" bindinput="onInvoiceInput" placeholder="可选" />
+      </view>
+    </view>
+    <view class="field">
+      <text class="field-label">备注</text>
+      <textarea class="login-textarea" value="{{invoiceRemark}}" data-field="invoiceRemark" bindinput="onInvoiceInput" placeholder="补充开票要求、联系信息或说明" />
+    </view>
+    <button class="primary-button" disabled="{{invoiceStats.requestableAmountCents <= 0}}" loading="{{invoiceSaving}}" bindtap="submitInvoiceApplication">保存并申请开票</button>
+  </view>
+
+  <view wx:if="{{user && invoiceApplications.length}}" class="section">
+    <view class="title">最近申请</view>
+    <view class="invoice-history">
+      <view wx:for="{{invoiceApplications}}" wx:key="id" class="history-item">
+        <view class="history-top">
+          <view class="history-title">{{item.title}}</view>
+          <view class="history-status">{{item.statusText}}</view>
+        </view>
+        <view class="muted">{{item.amountText}} 元 · {{item.createdAtText}}</view>
+      </view>
+    </view>
+  </view>
 </view>

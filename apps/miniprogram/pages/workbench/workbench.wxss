@@ -227,6 +227,11 @@
   align-items: center;
 }
 
+.select-box.disabled {
+  color: #98a2b3;
+  background: #f2f4f7;
+}
+
 .form-textarea {
   height: 150rpx;
   padding: 20rpx 22rpx;
