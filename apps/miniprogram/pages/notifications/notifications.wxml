@@ -1,0 +1,25 @@
+<view class="page">
+  <view class="hero">
+    <view>
+      <view class="eyebrow">MESSAGES</view>
+      <view class="page-title">消息中心</view>
+      <view class="page-copy">{{unreadCount > 0 ? unreadCount + ' 条未读消息' : '暂无未读消息'}}</view>
+    </view>
+    <button class="read-button" disabled="{{unreadCount === 0}}" bindtap="markAllRead">全部已读</button>
+  </view>
+
+  <view wx:if="{{!notifications.length && !loading}}" class="empty-card">
+    <view class="empty-title">还没有消息</view>
+    <view class="empty-copy">任务完成后会在这里提醒你。</view>
+  </view>
+
+  <view wx:for="{{notifications}}" wx:key="id" class="message-card {{item.unread ? 'unread' : ''}}" bindtap="openNotification" data-id="{{item.id}}">
+    <view class="message-dot {{item.severityClass}}"></view>
+    <view class="message-copy">
+      <view class="message-title">{{item.title}}</view>
+      <view class="message-body">{{item.body}}</view>
+      <view class="message-time">{{item.timeText}}</view>
+    </view>
+    <view class="message-arrow">›</view>
+  </view>
+</view>
