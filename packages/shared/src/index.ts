@@ -3,7 +3,7 @@ export const IMAGE_MODEL = "gpt-image-2" as const;
 export type ImageModel = string;
 export type ImageMode = "generate" | "edit";
 export type ImageQuality = "auto" | "low" | "medium" | "high";
-export type OutputFormat = "png" | "jpeg" | "webp";
+export type OutputFormat = "png" | "jpeg" | "webp" | "mp4";
 export type GenerationStatus = "pending" | "running" | "succeeded" | "partial" | "failed" | "cancelled";
 export type OutputStatus = "succeeded" | "failed";
 export type CloudStorageProvider = "cos" | "oss";
@@ -11,6 +11,7 @@ export type AssetCloudUploadStatus = "uploaded" | "failed";
 export type EcommercePlatform =
   | "amazon"
   | "allegro"
+  | "ozon"
   | "shopify"
   | "tiktok-shop"
   | "temu"
@@ -28,13 +29,14 @@ export type EcommercePlatform =
   | "weidian"
   | "dewu"
   | "other";
-export type EcommerceMarket = "cn" | "us" | "uk" | "pl" | "eu" | "ca" | "au" | "jp" | "kr" | "sg" | "mx" | "br" | "global";
+export type EcommerceMarket = "cn" | "us" | "uk" | "pl" | "ru" | "eu" | "ca" | "au" | "jp" | "kr" | "sg" | "mx" | "br" | "global";
 export type EcommerceGenerationMode =
   | "enhance"
   | "creative"
   | "category-kit"
   | "marketing-main"
   | "single-poster"
+  | "one-click-replace"
   | "text-translation";
 export type BrandOverlayPlacement = "top-left" | "top-right" | "bottom-left" | "bottom-right";
 export type EcommerceTextLanguage =
@@ -64,6 +66,7 @@ export interface SizePreset {
 
 export const SIZE_PRESETS: SizePreset[] = [
   { id: "square-1k", label: "方图 1K", width: 1024, height: 1024, description: "头像和社交图片" },
+  { id: "ozon-3-4", label: "Ozon 3:4", width: 1536, height: 2048, description: "Ozon 商品图推荐比例" },
   { id: "poster-portrait", label: "竖版海报", width: 1024, height: 1536, description: "海报、封面和移动端竖图" },
   { id: "poster-landscape", label: "横版海报", width: 1536, height: 1024, description: "横版封面和桌面图片" },
   { id: "story-9-16", label: "故事图 9:16", width: 1088, height: 1920, description: "短视频封面和故事图片" },
@@ -118,6 +121,7 @@ export type GenerationCount = (typeof GENERATION_COUNTS)[number];
 export const ECOMMERCE_PLATFORMS = [
   { id: "amazon", label: "Amazon" },
   { id: "allegro", label: "Allegro" },
+  { id: "ozon", label: "Ozon" },
   { id: "shopify", label: "Shopify" },
   { id: "tiktok-shop", label: "TikTok Shop" },
   { id: "temu", label: "Temu" },
@@ -142,6 +146,7 @@ export const ECOMMERCE_MARKETS = [
   { id: "us", label: "United States" },
   { id: "uk", label: "United Kingdom" },
   { id: "pl", label: "Poland" },
+  { id: "ru", label: "Russia" },
   { id: "eu", label: "European Union" },
   { id: "ca", label: "Canada" },
   { id: "au", label: "Australia" },
@@ -212,6 +217,10 @@ const MARKET_TEXT_LOCALIZATION = {
     promptLabel: "Polish",
     instruction: "Use concise natural Polish copy suitable for the Poland market."
   },
+  ru: {
+    promptLabel: "Russian",
+    instruction: "Use concise natural Russian copy suitable for Ozon and the Russia market."
+  },
   eu: {
     promptLabel: "English",
     instruction: "Use concise natural English copy for EU-wide listings unless the product brief explicitly names a different EU country or language."
@@ -262,6 +271,25 @@ const CHINESE_ECOMMERCE_PLATFORM_IDS = new Set<EcommercePlatform>([
   "weidian",
   "dewu"
 ]);
+
+const PLATFORM_TEXT_LOCALIZATION: Partial<Record<EcommercePlatform, { promptLabel: string; instruction: string }>> = {
+  ozon: {
+    promptLabel: "Russian",
+    instruction: "Use concise natural Russian copy suitable for Ozon listings by default."
+  }
+} as const;
+
+const PLATFORM_COMPLIANCE_RULES: Partial<Record<EcommercePlatform, string>> = {
+  ozon: [
+    "Ozon image compliance:",
+    "For Ozon, prefer Russian listing text by default and keep the first/main listing image clean, truthful, and easy to inspect.",
+    "Ozon product images should use JPEG/JPG, PNG, HEIC, or WEBP and stay within 10 MB; design generated outputs so they can be exported within that limit.",
+    "Resolution guidance: for Clothing, Footwear, and Accessories, use at least 900 x 1200 px; for other categories, stay within 200 x 200 to 4320 x 7680 px unless the user provides a newer category-specific requirement.",
+    "Use an Ozon-friendly vertical 3:4 composition by default, with the product occupying most of the frame without being cropped.",
+    "Keep the product complete, sharp, well lit, and visually dominant. For a main image, use a white or light neutral background and avoid promotional text, logos, watermarks, frames, collages, unrelated props, contact details, QR codes, external links, fake platform badges, or unsupported certification marks.",
+    "Secondary images may use concise Russian callouts, dimensions, usage scenes, set contents, or detail highlights only when supported by the product brief or visible reference."
+  ].join(" ")
+} as const;
 
 export const ECOMMERCE_SCENE_TEMPLATES = [
   {
@@ -343,6 +371,14 @@ export const ECOMMERCE_SCENE_TEMPLATES = [
     defaultSizePresetId: "ecommerce-long-poster",
     prompt:
       "Create one complete tall e-commerce product poster from 1 to 3 source product reference images. If multiple references are provided, treat the first as the main product identity and use the others only as detail, texture, packaging, angle, scale, or usage evidence. First internally analyze the visible product and the provided product brief, then summarize the strongest credible selling points before composing the image. Do not show the analysis, raw prompt, or planning text. Build a polished vertical poster with a strong hero product area, concise headline, 3 to 5 readable benefit sections, feature/detail callouts, usage or lifestyle context when credible, and a clean closing purchase-value area. Keep all claims supported by the reference images or user-provided brief. Preserve the real product identity, shape, color, material, proportions, packaging, and labels. Use a high vertical e-commerce detail-page layout, clear typography hierarchy, generous spacing, and mobile-readable copy. No fake certifications, fake platform badges, fake brand logos, unsupported promises, watermark, clutter, or unreadable text."
+  },
+  {
+    id: "one-click-replace",
+    mode: "one-click-replace",
+    label: "一键换装/换品",
+    defaultSizePresetId: "square-1k",
+    prompt:
+      "Create one realistic commercial edit by placing the replacement garment or product from the additional reference image(s) into the target model or scene from the first reference image. The first reference image is the target person, model, room, tabletop, shelf, package scene, or lifestyle scene. Preserve the target image's camera angle, pose, body proportions, background, lighting, shadows, crop, and overall composition. Use the replacement reference only for the exact garment or product identity: color, material, pattern, silhouette, logo-free visible details, proportions, and packaging if present. If the target is a model and the replacement is clothing, make the garment naturally worn on the body with realistic drape, fit, folds, occlusion, and contact shadows; preserve face, hands, hair, skin tone, body shape, and pose. If the target is a scene, place the product naturally into the scene at credible scale with matching perspective, lighting, reflections, and shadows. Remove the original garment or object being replaced only where necessary. Do not create side-by-side comparisons, floating product cutouts, collages, extra duplicate products, fake labels, watermarks, or unsupported text. The output must look like a single finished product photo."
   },
   {
     id: "category-kit-auto-main",
@@ -642,6 +678,8 @@ export type ImageSizeValidationResult =
       apiValue: string;
       source: "preset" | "custom";
       presetId?: ImageSizePresetId;
+      requestedSize?: ImageSize;
+      normalized: boolean;
     }
   | {
       ok: false;
@@ -681,6 +719,70 @@ export function validateImageSize(size: ImageSize): ValidationResult {
   return { ok: true };
 }
 
+function validateImageSizeWithoutMultiple(size: ImageSize): ValidationResult {
+  if (!Number.isInteger(size.width) || !Number.isInteger(size.height)) {
+    return { ok: false, code: "invalid_size", message: "宽度和高度必须是整数。" };
+  }
+  if (size.width < MIN_IMAGE_DIMENSION || size.height < MIN_IMAGE_DIMENSION) {
+    return { ok: false, code: "invalid_size", message: `宽度和高度不能小于 ${MIN_IMAGE_DIMENSION}px。` };
+  }
+  if (size.width > MAX_IMAGE_DIMENSION || size.height > MAX_IMAGE_DIMENSION) {
+    return { ok: false, code: "invalid_size", message: `宽度和高度不能大于 ${MAX_IMAGE_DIMENSION}px。` };
+  }
+  if (Math.max(size.width, size.height) / Math.min(size.width, size.height) > MAX_IMAGE_ASPECT_RATIO) {
+    return { ok: false, code: "invalid_size", message: `长边和短边比例不能超过 ${MAX_IMAGE_ASPECT_RATIO}:1。` };
+  }
+  return { ok: true };
+}
+
+export function nearestImageSizeMultiple(value: number): number {
+  return Math.round(value / IMAGE_SIZE_MULTIPLE) * IMAGE_SIZE_MULTIPLE;
+}
+
+export function normalizeImageSizeToMultiple(size: ImageSize): ImageSize {
+  return {
+    width: nearestImageSizeMultiple(size.width),
+    height: nearestImageSizeMultiple(size.height)
+  };
+}
+
+const VALID_IMAGE_SIZE_MULTIPLES = Array.from(
+  { length: Math.floor((MAX_IMAGE_DIMENSION - MIN_IMAGE_DIMENSION) / IMAGE_SIZE_MULTIPLE) + 1 },
+  (_, index) => MIN_IMAGE_DIMENSION + index * IMAGE_SIZE_MULTIPLE
+);
+
+function imageSizeMultipleCandidates(value: number): number[] {
+  return [...VALID_IMAGE_SIZE_MULTIPLES].sort((left, right) => Math.abs(left - value) - Math.abs(right - value) || right - left);
+}
+
+export function resolveNearestValidImageSize(size: ImageSize): ImageSize | undefined {
+  if (validateImageSizeWithoutMultiple(size).ok === false) {
+    return undefined;
+  }
+
+  const candidates = imageSizeMultipleCandidates(size.width).flatMap((width) =>
+    imageSizeMultipleCandidates(size.height).map((height) => ({ width, height }))
+  );
+  const validCandidates = candidates.filter((candidate) => validateImageSize(candidate).ok);
+  const requestedArea = size.width * size.height;
+
+  return validCandidates.sort((left, right) => {
+    const leftDistance = (left.width - size.width) ** 2 + (left.height - size.height) ** 2;
+    const rightDistance = (right.width - size.width) ** 2 + (right.height - size.height) ** 2;
+    if (leftDistance !== rightDistance) {
+      return leftDistance - rightDistance;
+    }
+
+    const leftAreaDelta = Math.abs(left.width * left.height - requestedArea);
+    const rightAreaDelta = Math.abs(right.width * right.height - requestedArea);
+    if (leftAreaDelta !== rightAreaDelta) {
+      return leftAreaDelta - rightAreaDelta;
+    }
+
+    return right.width * right.height - left.width * left.height;
+  })[0];
+}
+
 export function sizeToApiValue(size: ImageSize): string {
   return `${size.width}x${size.height}`;
 }
@@ -703,25 +805,34 @@ export function validateSceneImageSize(input: {
     };
   }
 
-  const sizeValidation = validateImageSize(input.size);
+  const normalizedSize = resolveNearestValidImageSize(input.size);
+  const shouldUseNormalizedSize =
+    Number.isInteger(input.size.width) &&
+    Number.isInteger(input.size.height) &&
+    (input.size.width % IMAGE_SIZE_MULTIPLE !== 0 || input.size.height % IMAGE_SIZE_MULTIPLE !== 0) &&
+    normalizedSize !== undefined;
+  const resolvedInputSize = shouldUseNormalizedSize && normalizedSize ? normalizedSize : input.size;
+  const sizeValidation = validateImageSize(resolvedInputSize);
   if (!sizeValidation.ok) {
     return {
       ok: false,
       code: "invalid_size",
-      message: sizeValidation.message
+      message: "message" in sizeValidation ? sizeValidation.message : "尺寸不符合要求。"
     };
   }
 
   const matchingPreset = SIZE_PRESETS.find(
-    (preset) => preset.width === input.size.width && preset.height === input.size.height
+    (preset) => preset.width === resolvedInputSize.width && preset.height === resolvedInputSize.height
   );
 
   return {
     ok: true,
-    size: input.size,
-    apiValue: sizeToApiValue(input.size),
+    size: resolvedInputSize,
+    apiValue: sizeToApiValue(resolvedInputSize),
     source: matchingPreset ? "preset" : "custom",
-    presetId: matchingPreset?.id ?? CUSTOM_SIZE_PRESET_ID
+    presetId: matchingPreset?.id ?? CUSTOM_SIZE_PRESET_ID,
+    requestedSize: shouldUseNormalizedSize ? input.size : undefined,
+    normalized: shouldUseNormalizedSize
   };
 }
 
@@ -731,6 +842,7 @@ export interface ReferenceImageInput {
   maskDataUrl?: string;
   maskedDataUrl?: string;
   annotatedDataUrl?: string;
+  additionalReferenceImages?: ReferenceImageInput[];
 }
 
 export interface GenerateImageRequest {
@@ -747,6 +859,24 @@ export interface GenerateImageRequest {
 export interface EditImageRequest extends GenerateImageRequest {
   referenceImage: ReferenceImageInput;
   referenceAssetId?: string;
+}
+
+export type PromptOptimizeMode = "text" | "reference";
+
+export interface PromptOptimizeRequest {
+  prompt: string;
+  mode?: PromptOptimizeMode;
+  stylePresetId?: StylePresetId;
+  size?: ImageSize;
+  sizePresetId?: string;
+  hasReferenceImage?: boolean;
+}
+
+export interface PromptOptimizeResponse {
+  originalPrompt: string;
+  optimizedPrompt: string;
+  changes?: string[];
+  model?: string;
 }
 
 export interface GeneratedAsset {
@@ -824,6 +954,8 @@ export interface GalleryImageItem {
   modelDisplayName?: string;
   createdAt: string;
   asset: GeneratedAsset;
+  referenceAssetId?: string;
+  referenceAsset?: GeneratedAsset;
 }
 
 export interface GalleryResponse {
@@ -874,6 +1006,62 @@ export interface AppConfig {
   qualities: ImageQuality[];
   outputFormats: OutputFormat[];
   counts: readonly GenerationCount[];
+  notifications?: NotificationClientConfig;
+}
+
+export type AppNotificationType = "ecommerce_job_finished" | "system";
+export type AppNotificationSeverity = "info" | "success" | "warning" | "error";
+export type NotificationChannel = "web" | "native" | "wechat_miniapp";
+export type NotificationDevicePlatform = "web" | "ios" | "android" | "wechat_miniapp" | "unknown";
+
+export interface NotificationClientConfig {
+  pollingIntervalMs: number;
+  wechatMiniAppTaskCompleteTemplateId?: string;
+}
+
+export interface NotificationPayload {
+  jobId?: string;
+  status?: EcommerceBatchJobStatus;
+  productTitle?: string;
+  totalScenes?: number;
+  completedScenes?: number;
+  succeededScenes?: number;
+  failedScenes?: number;
+  [key: string]: unknown;
+}
+
+export interface AppNotification {
+  id: string;
+  type: AppNotificationType;
+  severity: AppNotificationSeverity;
+  title: string;
+  body: string;
+  actionUrl?: string;
+  relatedType?: string;
+  relatedId?: string;
+  payload?: NotificationPayload;
+  createdAt: string;
+  readAt?: string;
+  deliveredAt?: string;
+  dismissedAt?: string;
+}
+
+export interface AppNotificationListResponse {
+  notifications: AppNotification[];
+  unreadCount: number;
+}
+
+export interface AppNotificationUnreadCountResponse {
+  unreadCount: number;
+}
+
+export interface NotificationDeviceRegisterRequest {
+  deviceId?: string;
+  channel: NotificationChannel;
+  platform?: NotificationDevicePlatform;
+  provider?: string;
+  pushToken?: string;
+  userAgent?: string;
 }
 
 export interface ExtensionReleaseTargetConfig {
@@ -1102,6 +1290,7 @@ export interface WechatMiniAppPublicConfig {
   enabled: boolean;
   allowBindExistingAccount: boolean;
   allowRegisterNewUser: boolean;
+  taskCompleteTemplateId?: string;
   updatedAt?: string;
 }
 
@@ -1118,6 +1307,7 @@ export interface SaveWechatMiniAppConfigRequest {
   enabled: boolean;
   appId?: string;
   appSecret?: string;
+  taskCompleteTemplateId?: string;
   preserveAppSecret?: boolean;
   allowBindExistingAccount?: boolean;
   allowRegisterNewUser?: boolean;
@@ -1128,6 +1318,7 @@ export interface WechatMiniAppConfigViewForm {
   appId: string;
   appSecret: MaskedSecret;
   appSecretSaved?: boolean;
+  taskCompleteTemplateId?: string;
   allowBindExistingAccount: boolean;
   allowRegisterNewUser: boolean;
   updatedAt?: string;
@@ -1353,6 +1544,58 @@ export interface PurchasePlanRequest {
   returnUrl?: string;
 }
 
+export type RedemptionCodeStatus = "active" | "disabled";
+
+export interface AdminRedemptionCode {
+  id: string;
+  code: string;
+  batchId?: string;
+  quota: number;
+  maxRedemptions: number;
+  usedCount: number;
+  redeemedUserCount: number;
+  remainingCount: number;
+  validDays: number;
+  status: RedemptionCodeStatus | string;
+  note?: string;
+  createdByUserId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdminRedemptionCodesResponse {
+  batchId?: string;
+  codes: AdminRedemptionCode[];
+}
+
+export interface AdminCreateRedemptionCodesRequest {
+  count?: number;
+  maxRedemptions: number;
+  quota: number;
+  validDays: number;
+  codes?: string[];
+  codePrefix?: string;
+  note?: string;
+}
+
+export interface RedemptionCodeRedeemRequest {
+  code: string;
+}
+
+export interface RedemptionCodeRedeemResponse {
+  redemption: {
+    code: string;
+    quotaGranted: number;
+    expiresAt: string;
+  };
+  user: {
+    quotaTotal: number;
+    quotaUsed: number;
+    packageRemaining: number;
+    planExpiresAt?: string;
+  };
+}
+
 export interface AdminAssetItem {
   id: string;
   userId: string;
@@ -1435,6 +1678,12 @@ export interface EcommerceBatchGenerateRequest {
   platform: EcommercePlatform;
   market: EcommerceMarket;
   textLanguage?: EcommerceTextLanguage;
+  categoryPath?: string[];
+  categoryName?: string;
+  strategyId?: string;
+  strategy?: EcommerceCategoryKitStrategy;
+  assets?: EcommerceCategoryKitAssetInput[];
+  missingInputs?: EcommerceCategoryKitMissingInput[];
   allowTextRecreation?: boolean;
   removeWatermarkAndLogo?: boolean;
   brandOverlayPlacement?: BrandOverlayPlacement;
@@ -1447,8 +1696,180 @@ export interface EcommerceBatchGenerateRequest {
   outputFormat?: OutputFormat;
   countPerScene?: GenerationCount;
   referenceImage?: ReferenceImageInput;
+  referenceImages?: EcommerceBatchReferenceImage[];
+  additionalReferenceImages?: ReferenceImageInput[];
   createComparisonCollage?: boolean;
   extraDirection?: string;
+}
+
+export interface EcommerceBatchReferenceImage {
+  referenceImage: ReferenceImageInput;
+  size?: ImageSize;
+  role?: EcommerceCategoryKitAssetRole;
+  referenceAssetId?: string;
+  additionalReferenceImages?: ReferenceImageInput[];
+  title?: string;
+  description?: string;
+  extraDirection?: string;
+  required?: boolean;
+  tags?: string[];
+}
+
+export type EcommerceCategoryKitStrategySource = "built-in" | "workspace" | "user" | "remote" | "manual" | string;
+
+export type EcommerceCategoryKitAssetRole =
+  | "main-product"
+  | "detail"
+  | "texture"
+  | "scale"
+  | "package"
+  | "certificate"
+  | "usage"
+  | "lifestyle"
+  | "model"
+  | "variant"
+  | "brand"
+  | "other"
+  | string;
+
+export interface EcommerceCategoryKitStrategyField {
+  id: string;
+  label?: string;
+  description?: string;
+  aliases?: string[];
+  examples?: string[];
+}
+
+export interface EcommerceCategoryKitImageRole {
+  id: string;
+  label?: string;
+  description?: string;
+  required?: boolean;
+  recommended?: boolean;
+  minCount?: number;
+  maxCount?: number;
+  acceptedAssetRoles?: EcommerceCategoryKitAssetRole[];
+  examples?: string[];
+}
+
+export interface EcommerceCategoryKitOutputScene {
+  id: string;
+  title: string;
+  purpose?: string;
+  imageRoleId?: string;
+  required?: boolean;
+  recommended?: boolean;
+  priority?: number;
+  sizePresetId?: ImageSizePresetId;
+  compositionRules?: string[];
+  copyRules?: string[];
+  safetyRules?: string[];
+  examples?: string[];
+}
+
+export interface EcommerceCategoryKitFallbackRule {
+  id?: string;
+  when: string;
+  use?: string;
+  avoid?: string;
+  notes?: string;
+}
+
+export interface EcommerceCategoryKitExample {
+  title?: string;
+  categoryPath?: string[];
+  productBrief?: Partial<EcommerceProductBrief>;
+  assetRoles?: EcommerceCategoryKitAssetRole[];
+  outputScenes?: string[];
+  notes?: string;
+}
+
+export interface EcommerceCategoryKitStrategy {
+  id: string;
+  categoryPath: string[];
+  categoryName: string;
+  aliases?: string[];
+  platform?: EcommercePlatform;
+  market?: EcommerceMarket;
+  enabled?: boolean;
+  priority?: number;
+  version?: string;
+  source?: EcommerceCategoryKitStrategySource;
+  visualStyle?: string[];
+  copyStyle?: string[];
+  sellingPointLogic?: string[];
+  compositionRules?: string[];
+  safetyRules?: string[];
+  requiredFields?: EcommerceCategoryKitStrategyField[];
+  recommendedFields?: EcommerceCategoryKitStrategyField[];
+  imageRoles?: EcommerceCategoryKitImageRole[];
+  outputScenes?: EcommerceCategoryKitOutputScene[];
+  fallbackRules?: EcommerceCategoryKitFallbackRule[];
+  examples?: EcommerceCategoryKitExample[];
+}
+
+export interface EcommerceCategoryKitStrategyListResponse {
+  strategies: EcommerceCategoryKitStrategy[];
+  total: number;
+}
+
+export interface EcommerceCategoryKitStrategyMutationResponse {
+  strategy: EcommerceCategoryKitStrategy;
+}
+
+export interface SaveEcommerceCategoryKitStrategyRequest {
+  strategy: EcommerceCategoryKitStrategy;
+}
+
+export interface EcommerceCategoryKitAssetInput {
+  id?: string;
+  role: EcommerceCategoryKitAssetRole;
+  referenceImage?: ReferenceImageInput;
+  referenceAssetId?: string;
+  url?: string;
+  fileName?: string;
+  title?: string;
+  description?: string;
+  required?: boolean;
+  tags?: string[];
+}
+
+export interface EcommerceCategoryKitMissingInput {
+  id: string;
+  label?: string;
+  description?: string;
+  role?: EcommerceCategoryKitAssetRole;
+  required?: boolean;
+  recommended?: boolean;
+  examples?: string[];
+}
+
+export interface EcommerceCategoryKitPreparationRequest {
+  product: EcommerceProductBrief;
+  platform: EcommercePlatform;
+  market: EcommerceMarket;
+  textLanguage?: EcommerceTextLanguage;
+  categoryPath?: string[];
+  categoryName?: string;
+  strategyId?: string;
+  strategy?: EcommerceCategoryKitStrategy;
+  assets?: EcommerceCategoryKitAssetInput[];
+  missingInputs?: EcommerceCategoryKitMissingInput[];
+  extraDirection?: string;
+}
+
+export interface EcommerceCategoryKitPreparationResponse {
+  prepared: boolean;
+  productSummary?: string;
+  categoryPath?: string[];
+  categoryName?: string;
+  strategy?: EcommerceCategoryKitStrategy;
+  assets?: EcommerceCategoryKitAssetInput[];
+  missingInputs?: EcommerceCategoryKitMissingInput[];
+  imageRoles?: EcommerceCategoryKitImageRole[];
+  outputScenes?: EcommerceCategoryKitOutputScene[];
+  warnings?: string[];
+  notes?: string;
 }
 
 export interface EcommerceCategoryKitPlanItem {
@@ -1456,6 +1877,7 @@ export interface EcommerceCategoryKitPlanItem {
   purpose: string;
   prompt: string;
   notes?: string;
+  sourceImageRoles?: EcommerceCategoryKitAssetRole[];
 }
 
 export interface EcommerceCategoryKitPlanRequest {
@@ -1463,21 +1885,40 @@ export interface EcommerceCategoryKitPlanRequest {
   platform: EcommercePlatform;
   market: EcommerceMarket;
   textLanguage?: EcommerceTextLanguage;
+  requestedImageCount?: number;
+  requestedSceneTemplateIds?: EcommerceSceneTemplateId[];
+  categoryPath?: string[];
+  categoryName?: string;
+  strategyId?: string;
+  strategy?: EcommerceCategoryKitStrategy;
+  assets?: EcommerceCategoryKitAssetInput[];
+  missingInputs?: EcommerceCategoryKitMissingInput[];
   referenceImage: ReferenceImageInput;
   extraDirection?: string;
 }
 
 export interface EcommerceCategoryKitPlanResponse {
   productSummary: string;
+  categoryPath?: string[];
+  categoryName?: string;
+  strategy?: EcommerceCategoryKitStrategy;
+  assets?: EcommerceCategoryKitAssetInput[];
+  missingInputs?: EcommerceCategoryKitMissingInput[];
+  warnings?: string[];
+  notes?: string;
   imagePlan: EcommerceCategoryKitPlanItem[];
   model?: string;
 }
 
 export type CategoryKitPlannerModelRole = "primary" | "fallback";
+export type CategoryKitPlannerProvider = "openai-responses" | "openai-compatible-chat" | "deepseek";
+export type CategoryKitPlannerModule = "prompt-optimizer" | "category-kit-planner" | "category-classifier";
 
 export interface CategoryKitPlannerConfigEntry {
   id: string;
   name: string;
+  provider: CategoryKitPlannerProvider;
+  modules: CategoryKitPlannerModule[];
   enabled: boolean;
   role: CategoryKitPlannerModelRole;
   priority: number;
@@ -1495,6 +1936,8 @@ export interface CategoryKitPlannerConfigResponse {
 export interface SaveCategoryKitPlannerConfigEntry {
   id?: string;
   name: string;
+  provider?: CategoryKitPlannerProvider;
+  modules?: CategoryKitPlannerModule[];
   enabled: boolean;
   role: CategoryKitPlannerModelRole;
   priority?: number;
@@ -1507,6 +1950,22 @@ export interface SaveCategoryKitPlannerConfigEntry {
 
 export interface SaveCategoryKitPlannerConfigRequest {
   models: SaveCategoryKitPlannerConfigEntry[];
+}
+
+export type SeedanceVideoConfigSource = "saved" | "env" | "default";
+
+export interface SeedanceVideoConfigResponse {
+  apiKeySaved: boolean;
+  baseUrl: string;
+  model: string;
+  source: SeedanceVideoConfigSource;
+}
+
+export interface SaveSeedanceVideoConfigRequest {
+  apiKey?: string;
+  preserveApiKey?: boolean;
+  baseUrl?: string;
+  model?: string;
 }
 
 export interface EcommerceGenerationConcurrencyConfigResponse {
@@ -1528,6 +1987,7 @@ export interface EcommerceBatchGenerateResponse {
   message: string;
   totalScenes: number;
   completedScenes: number;
+  categoryKitPreparation?: EcommerceCategoryKitPreparationResponse;
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
@@ -1588,7 +2048,7 @@ export function composeEcommercePrompt(context: EcommercePromptContext): string 
   const platform = ECOMMERCE_PLATFORMS.find((item) => item.id === context.platform)?.label ?? context.platform;
   const market = ECOMMERCE_MARKETS.find((item) => item.id === context.market)?.label ?? context.market;
   const textLanguage = ECOMMERCE_TEXT_LANGUAGES.find((item) => item.id === context.textLanguage);
-  const marketTextLocalization = MARKET_TEXT_LOCALIZATION[context.market];
+  const marketTextLocalization = PLATFORM_TEXT_LOCALIZATION[context.platform] ?? MARKET_TEXT_LOCALIZATION[context.market];
   const explicitTextLanguage = textLanguage && textLanguage.id !== "none" ? textLanguage : undefined;
   const shouldUseExplicitTextLanguage = isTextTranslationMode && explicitTextLanguage;
   const imageTextPromptLabel = shouldUseExplicitTextLanguage
@@ -1636,6 +2096,8 @@ export function composeEcommercePrompt(context: EcommercePromptContext): string 
         ? "Reference image rule: treat the source product image as the single source of truth. Preserve the original product exactly. Only improve lighting, background, layout, selling-point text, callouts, and marketplace composition. Do not generate logos or fake brand marks; brand marks are added later as a separate overlay. Do not redesign the product."
         : template?.mode === "single-poster"
           ? "Reference image rule: treat the source product image as the single source of truth for product appearance and visible evidence. You may infer only safe, visually supported selling points from the image and product brief; when uncertain, use generic visual benefits such as material, design, use scenario, color, portability, texture, package contents, or styling without making objective performance claims."
+          : template?.mode === "one-click-replace"
+            ? "Reference image rule: the first reference image is the target model or scene; any additional reference image is the user's own garment or product to place into that target. Preserve the target photo's identity, pose, perspective, lighting, background, crop, and composition. Preserve the replacement item's real appearance, color, material, pattern, silhouette, package, and scale. For clothing, make it naturally worn on the model; for objects, integrate it naturally into the scene. Do not generate a collage, before/after layout, floating cutout, duplicate product, unrelated props, new brand marks, or unsupported text."
           : template?.mode === "category-kit"
             ? "Reference image rule: treat the first source image as the main product identity and use any additional source images only as detail, texture, packaging, angle, scale, variant, or usage evidence. Internally identify the product category before composing this specific listing image role. Preserve the real product across the kit and do not reuse fixed assumptions from another category."
         : "Reference image rule: use the source product image to preserve the product's key identity, shape, color, material, and recognizable details while creating a new commercial scene.";
@@ -1686,6 +2148,7 @@ export function composeEcommercePrompt(context: EcommercePromptContext): string 
       : `Optimize for ${platform} in the ${market} market.`,
     ...details,
     modeGuard,
+    PLATFORM_COMPLIANCE_RULES[context.platform],
     cleanupGuard,
     brandOverlayGuard,
     chineseMarketplaceGuard,

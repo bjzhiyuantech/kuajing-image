@@ -97,8 +97,11 @@ type PersistedGenerationInput = ImageProviderInput & {
 const mimeTypes: Record<OutputFormat, string> = {
   jpeg: "image/jpeg",
   png: "image/png",
-  webp: "image/webp"
+  webp: "image/webp",
+  mp4: "video/mp4"
 };
+const referenceAssetMimeTypes = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp"]);
+const maxReferenceAssetBytes = 50 * 1024 * 1024;
 
 export async function runTextToImageGeneration(
   tenant: RequestTenant,
@@ -147,23 +150,24 @@ export async function runReferenceImageGeneration(
   signal?: AbortSignal,
   billing?: GenerationBillingOptions
 ): Promise<GenerationResponse> {
+  const persistedInput = await ensureReferenceAssetForEdit(tenant, input, signal);
   const charge = billing?.charge ?? (billing?.skipCharge ? undefined : await reserveGenerationCharge({ tenant, imageCount: input.count }));
   const taskConcurrency = await resolveTaskConcurrency();
   const outputs = await mapWithConcurrency(
     Array.from({ length: input.count }, (_, index) => index),
     taskConcurrency,
-    async () => editSingleOutput(tenant, input, provider, signal)
+    async () => editSingleOutput(tenant, persistedInput, provider, signal)
   );
   const persistedOutputs = billing?.createComparisonCollage
-    ? await appendComparisonCollageOutputs(tenant, input, outputs, signal)
+    ? await appendComparisonCollageOutputs(tenant, persistedInput, outputs, signal)
     : outputs;
 
   const record = await saveGenerationRecord(
     tenant,
     {
-      ...input,
+      ...persistedInput,
       mode: "edit",
-      referenceMaskDataUrl: input.referenceImage.maskDataUrl
+      referenceMaskDataUrl: persistedInput.referenceImage.maskDataUrl
     },
     persistedOutputs
   );
@@ -182,6 +186,77 @@ export async function runReferenceImageGenerationWithFallback(
   billing?: GenerationBillingOptions
 ): Promise<GenerationResponse> {
   return runReferenceImageGeneration(tenant, input, createFallbackImageProvider(providerConfigs), signal, billing);
+}
+
+async function ensureReferenceAssetForEdit(
+  tenant: RequestTenant,
+  input: EditImageProviderInput,
+  signal?: AbortSignal
+): Promise<EditImageProviderInput> {
+  if (input.referenceAssetId) {
+    return input;
+  }
+
+  throwIfAborted(signal);
+  const reference = referenceAssetFromDataUrl(input.referenceImage.dataUrl);
+  if (reference.bytes.length > maxReferenceAssetBytes) {
+    throw new ProviderError("unsupported_provider_behavior", "参考图像不能超过 50MB。", 400);
+  }
+
+  let metadata: sharp.Metadata;
+  try {
+    metadata = await sharp(reference.bytes).rotate().metadata();
+  } catch {
+    throw new ProviderError("unsupported_provider_behavior", "参考图像格式不受支持。", 400);
+  }
+
+  if (!metadata.width || !metadata.height) {
+    throw new ProviderError("unsupported_provider_behavior", "参考图像尺寸无法识别。", 400);
+  }
+
+  throwIfAborted(signal);
+  const asset = await saveCanvasAsset(tenant, {
+    bytes: reference.bytes,
+    fileName: referenceAssetFileName(input.referenceImage.fileName, reference.mimeType),
+    mimeType: reference.mimeType,
+    width: metadata.width,
+    height: metadata.height
+  });
+
+  return {
+    ...input,
+    referenceAssetId: asset.id
+  };
+}
+
+function referenceAssetFromDataUrl(dataUrl: string): { bytes: Buffer; mimeType: string } {
+  const match = /^data:([^;,]+)(;base64)?,(.*)$/su.exec(dataUrl);
+  if (!match) {
+    throw new ProviderError("unsupported_provider_behavior", "参考图像格式不受支持。", 400);
+  }
+
+  const mimeType = normalizeReferenceAssetMimeType(match[1]);
+  if (!referenceAssetMimeTypes.has(mimeType)) {
+    throw new ProviderError("unsupported_provider_behavior", "参考图像必须是 PNG、JPEG 或 WebP 格式。", 400);
+  }
+
+  return {
+    bytes: match[2] ? Buffer.from(match[3], "base64") : Buffer.from(decodeURIComponent(match[3])),
+    mimeType
+  };
+}
+
+function normalizeReferenceAssetMimeType(mimeType: string): string {
+  const normalized = mimeType.toLowerCase();
+  return normalized === "image/jpg" ? "image/jpeg" : normalized;
+}
+
+function referenceAssetFileName(fileName: string | undefined, mimeType: string): string {
+  if (fileName?.trim()) {
+    return fileName.trim();
+  }
+
+  return `reference.${mimeType === "image/jpeg" ? "jpg" : mimeType.split("/")[1] || "png"}`;
 }
 
 export async function getStoredAssetFile(tenant: RequestTenant, assetId: string): Promise<StoredAssetFile | undefined> {
@@ -288,7 +363,7 @@ export async function saveCanvasAsset(
     id: assetId,
     url: cdnUrl || `/api/assets/${assetId}`,
     cdnUrl,
-    cdnPreviewUrls: buildAssetCdnPreviewUrls(cloudStorage),
+    cdnPreviewUrls: input.mimeType.startsWith("image/") ? buildAssetCdnPreviewUrls(cloudStorage) : undefined,
     fileName,
     mimeType: input.mimeType,
     width: input.width,

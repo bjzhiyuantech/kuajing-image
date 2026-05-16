@@ -10,6 +10,8 @@ import {
 } from "./contracts.js";
 import type { ImageModelConfigEntry } from "./image-model-config.js";
 
+type RasterOutputFormat = "png" | "jpeg" | "webp";
+
 export interface ImageProviderInput {
   originalPrompt: string;
   presetId: string;
@@ -160,7 +162,7 @@ class OpenAIImageProvider implements ImageProvider {
           prompt: input.prompt,
           size: input.sizeApiValue,
           quality: input.quality,
-          output_format: input.outputFormat,
+          output_format: rasterOutputFormat(input.outputFormat),
           n: input.count
         }),
         { signal }
@@ -175,20 +177,40 @@ class OpenAIImageProvider implements ImageProvider {
   async edit(input: EditImageProviderInput, signal?: AbortSignal): Promise<ProviderResult> {
     try {
       const reference = await dataUrlToFile(input.referenceImage);
+      const additionalReferences = await Promise.all(
+        (input.referenceImage.additionalReferenceImages ?? []).slice(0, 4).map((referenceImage) => dataUrlToFile(referenceImage))
+      );
+
+      if (additionalReferences.length > 0 && !input.referenceImage.maskDataUrl) {
+        const response = await this.client.images.edit(
+          imageEditRequestBody({
+            model: this.config.model,
+            image: [reference, ...additionalReferences],
+            prompt: editPromptWithMultipleReferenceInstructions(input.prompt, input.referenceImage.additionalReferenceImages ?? []),
+            size: input.sizeApiValue,
+            quality: input.quality,
+            output_format: rasterOutputFormat(input.outputFormat),
+            n: input.count
+          }),
+          { signal }
+        );
+
+        return await normalizeProviderResponse(response, input.sizeApiValue, this.config.model, signal);
+      }
 
       if (this.config.baseURL && input.referenceImage.maskDataUrl) {
         const annotatedReference = await createAnnotatedReferenceFile(input.referenceImage, signal);
         const response = await this.client.images.edit(
           imageEditRequestBody({
             model: this.config.model,
-            image: [annotatedReference.file, reference],
+            image: [annotatedReference.file, reference, ...additionalReferences],
             prompt: editPromptWithMarkedReferenceInstructions(input.prompt, {
               ...input.referenceImage,
               annotatedDataUrl: annotatedReference.annotatedDataUrl
             }, { multipleReferenceImages: true }),
             size: input.sizeApiValue,
             quality: input.quality,
-            output_format: input.outputFormat,
+            output_format: rasterOutputFormat(input.outputFormat),
             n: input.count
           }),
           { signal }
@@ -201,12 +223,14 @@ class OpenAIImageProvider implements ImageProvider {
       const response = await this.client.images.edit(
         imageEditRequestBody({
           model: this.config.model,
-          image: [reference],
+          image: [reference, ...additionalReferences],
           mask,
-          prompt: editPromptWithMaskInstructions(input.prompt, input.referenceImage),
+          prompt: additionalReferences.length > 0
+            ? editPromptWithMultipleReferenceInstructions(editPromptWithMaskInstructions(input.prompt, input.referenceImage), input.referenceImage.additionalReferenceImages ?? [])
+            : editPromptWithMaskInstructions(input.prompt, input.referenceImage),
           size: input.sizeApiValue,
           quality: input.quality,
-          output_format: input.outputFormat,
+          output_format: rasterOutputFormat(input.outputFormat),
           n: input.count
         }),
         { signal }
@@ -219,6 +243,14 @@ class OpenAIImageProvider implements ImageProvider {
   }
 }
 
+function rasterOutputFormat(format: OutputFormat): RasterOutputFormat {
+  if (format === "png" || format === "jpeg" || format === "webp") {
+    return format;
+  }
+
+  throw new ProviderError("unsupported_provider_behavior", "图像生成不支持视频输出格式。", 400);
+}
+
 class GeminiImageProvider implements ImageProvider {
   constructor(private readonly config: GeminiImageProviderConfig) {}
 
@@ -227,26 +259,33 @@ class GeminiImageProvider implements ImageProvider {
   }
 
   async edit(input: EditImageProviderInput, signal?: AbortSignal): Promise<ProviderResult> {
-    return this.generateContent(input, await resolveGeminiReferenceImage(input.referenceImage, signal), signal);
+    return this.generateContent(
+      input,
+      await resolveGeminiReferenceImages([
+        input.referenceImage,
+        ...(input.referenceImage.additionalReferenceImages ?? []).slice(0, 4)
+      ], signal),
+      signal
+    );
   }
 
   private async generateContent(
     input: ImageProviderInput,
-    referenceImage: ReferenceImageInput | undefined,
+    referenceImages: ReferenceImageInput[] | undefined,
     signal?: AbortSignal
   ): Promise<ProviderResult> {
     try {
       const images: ProviderImage[] = [];
       for (let index = 0; index < input.count; index += 1) {
         const endpoint = this.endpointUrl();
-        const prompt = referenceImage ? editPromptWithMarkedReferenceInstructions(input.prompt, referenceImage) : input.prompt;
+        const prompt = referenceImages?.length ? editPromptWithMarkedReferenceInstructions(input.prompt, referenceImages[0]) : input.prompt;
         const response = await fetch(endpoint, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             "x-goog-api-key": this.config.apiKey
           },
-          body: JSON.stringify(geminiGenerateContentBody({ ...input, prompt }, referenceImage)),
+          body: JSON.stringify(geminiGenerateContentBody({ ...input, prompt }, referenceImages)),
           signal: timeoutSignal(signal, this.config.timeoutMs)
         });
 
@@ -312,6 +351,10 @@ async function resolveGeminiReferenceImage(referenceImage: ReferenceImageInput, 
     maskedDataUrl,
     annotatedDataUrl
   };
+}
+
+async function resolveGeminiReferenceImages(referenceImages: ReferenceImageInput[], signal?: AbortSignal): Promise<ReferenceImageInput[]> {
+  return Promise.all(referenceImages.map((referenceImage) => resolveGeminiReferenceImage(referenceImage, signal)));
 }
 
 async function composeReferenceImageVariants(
@@ -457,7 +500,7 @@ function providerHttpStatus(status: number | undefined): number {
   return typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 599 ? status : 502;
 }
 
-function geminiGenerateContentBody(input: ImageProviderInput, referenceImage: ReferenceImageInput | undefined): Record<string, unknown> {
+function geminiGenerateContentBody(input: ImageProviderInput, referenceImages: ReferenceImageInput[] | undefined): Record<string, unknown> {
   const parts: Array<Record<string, unknown>> = [
     {
       text: [
@@ -466,7 +509,7 @@ function geminiGenerateContentBody(input: ImageProviderInput, referenceImage: Re
       ].join("\n")
     }
   ];
-  if (referenceImage) {
+  for (const referenceImage of referenceImages ?? []) {
     const sourceImage = referenceImage.annotatedDataUrl
       ? { ...referenceImage, dataUrl: referenceImage.annotatedDataUrl, fileName: markedReferenceFileName(referenceImage.fileName) }
       : referenceImage.maskedDataUrl
@@ -532,6 +575,22 @@ function editPromptWithMarkedReferenceInstructions(
     return prompt;
   }
   return [prompt, "Reference editing instructions:", ...instructions].join("\n");
+}
+
+function editPromptWithMultipleReferenceInstructions(prompt: string, additionalReferenceImages: ReferenceImageInput[]): string {
+  const additionalCount = additionalReferenceImages.length;
+  if (additionalCount === 0) {
+    return prompt;
+  }
+  return [
+    prompt,
+    "Multiple reference image instructions:",
+    "The first reference image is the target person, model, or scene to edit. Preserve its identity, pose, camera angle, lighting, background, and composition unless the user explicitly asks otherwise.",
+    additionalCount === 1
+      ? "The second reference image is the replacement garment or product. Transfer that exact item into the target image."
+      : `Reference images 2 through ${additionalCount + 1} are replacement garment or product references. Use them only as evidence for the item to transfer into the target image.`,
+    "Do not create a collage and do not show the replacement product as a separate floating reference unless the user explicitly asks for that."
+  ].join("\n");
 }
 
 function markedReferenceFileName(fileName: string | undefined): string | undefined {

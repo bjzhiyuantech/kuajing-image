@@ -27,12 +27,15 @@ import {
   ShoppingBag,
   Sparkles,
   Square,
+  Video,
   Workflow,
   User,
   X,
   XCircle
 } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import type { DragEvent as ReactDragEvent } from "react";
+import type { ClipboardEvent as ReactClipboardEvent } from "react";
 import {
   DEFAULT_EMBED_DEFINITIONS,
   Box,
@@ -47,6 +50,7 @@ import {
   type TLAssetStore,
   type TLEditorSnapshot,
   type TLImageShape,
+  type TLVideoShape,
   type TLShapePartial,
   type TLShapeId,
   type TLShape,
@@ -69,6 +73,7 @@ import {
   OUTPUT_FORMATS,
   SIZE_PRESETS,
   STYLE_PRESETS,
+  resolveNearestValidImageSize,
   validateImageSize,
   type DemoCanvasConfigResponse,
   type DemoCanvasExample,
@@ -79,6 +84,8 @@ import {
   type EcommercePlatform,
   type EcommerceSceneTemplateId,
   type EcommerceStatsResponse,
+  type AppNotification,
+  type AppNotificationListResponse,
   type EcommerceTextLanguage,
   type GenerationCount,
   type GenerationRecord,
@@ -94,12 +101,14 @@ import {
   type ImageSize,
   type OutputFormat,
   type ProjectState,
+  type PromptOptimizeResponse,
   type ReferenceImageInput,
   type SizePreset,
   type StylePresetId
 } from "@gpt-image-canvas/shared";
 import { AccountPage, AdminPage, AuthScreen } from "./AuthViews";
 import { HelpCenterPage } from "./HelpCenter";
+import { SeedanceVideoPanel } from "./SeedanceVideoPanel";
 import {
   authFetch,
   clearStoredAuthToken,
@@ -121,6 +130,11 @@ import { BRAND_NAME, BRAND_TAGLINE, BrandMark, BrandName } from "./Brand";
 const AUTOSAVE_DEBOUNCE_MS = 1200;
 const HISTORY_COLLAPSED_LIMIT = 3;
 const MAX_REFERENCE_IMAGE_BYTES = 50 * 1024 * 1024;
+const MAX_ECOMMERCE_REFERENCE_IMAGES = 3;
+const MAX_ECOMMERCE_TRANSLATION_IMAGES = 24;
+const MAX_ECOMMERCE_DOCUMENTS = 5;
+const MAX_ECOMMERCE_DOCUMENT_BYTES = 15 * 1024 * 1024;
+const MAX_ONE_CLICK_TARGET_IMAGES = 48;
 const MOBILE_DRAWER_MEDIA_QUERY = "(max-width: 1023px)";
 const ASSET_PREVIEW_WIDTHS = [256, 512, 1024, 2048] as const;
 type AssetPreviewWidth = (typeof ASSET_PREVIEW_WIDTHS)[number];
@@ -128,7 +142,32 @@ type BrowserKind = "chrome" | "edge" | "firefox" | "other";
 type InstallHelpBrowser = "chrome" | "edge";
 const GENERATED_ASSET_INITIAL_PREVIEW_WIDTH: AssetPreviewWidth = 2048;
 const SUPPORTED_REFERENCE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp"]);
+const ECOMMERCE_DOCUMENT_ACCEPT = [
+  ".pdf",
+  ".doc",
+  ".docx",
+  ".xls",
+  ".xlsx",
+  ".csv",
+  ".tsv",
+  ".txt",
+  ".md",
+  ".json",
+  ".html",
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "text/csv",
+  "text/tab-separated-values",
+  "text/plain",
+  "text/markdown",
+  "application/json",
+  "text/html"
+].join(",");
 const EXTENSION_RELEASE_API_URL = "/api/extension-release";
+const NOTIFICATION_POLLING_INTERVAL_MS = 20_000;
 const defaultPluginGuideLinks = {
   downloadUrl: "/downloads/kuajing-image-extension-prod-latest.zip",
   installHelpUrl: "/install-help.html"
@@ -309,7 +348,8 @@ const ORIGINAL_SIZE_PRESET_ID = "original-size";
 const ORIGINAL_SIZE_PRESET_LABEL = "原图尺寸";
 const sidebarTabs: Array<{ id: SidebarTab; label: string; icon: typeof Package }> = [
   { id: "plugins", label: "插件能力", icon: Package },
-  { id: "creative", label: "自主生图", icon: Brush }
+  { id: "creative", label: "自主生图", icon: Brush },
+  { id: "video", label: "视频生成", icon: Video }
 ];
 const ecommerceModeCards = [
   {
@@ -343,6 +383,12 @@ const ecommerceModeCards = [
     desc: "依据产品图自动提炼卖点，生成一张高比例详情长海报。"
   },
   {
+    id: "one-click-replace",
+    icon: Sparkles,
+    title: "一键换装/换品",
+    desc: "上传模特或场景图，再上传自己的衣服或商品，一键自然替换。"
+  },
+  {
     id: "text-translation",
     icon: Globe2,
     title: "文字翻译",
@@ -355,6 +401,7 @@ const ecommerceModeLabels: Record<EcommerceGenerationMode, string> = {
   "category-kit": "品类套图",
   "marketing-main": "营销主图设计",
   "single-poster": "单品完整海报",
+  "one-click-replace": "一键换装/换品",
   "text-translation": "文字翻译"
 };
 const mobileScenePreviewById: Partial<Record<EcommerceSceneTemplateId, string>> = {
@@ -376,10 +423,106 @@ const ecommerceScenesByMode = {
   "category-kit": [...detailCategoryKitSceneIds],
   "marketing-main": ["marketing-main-hero", "marketing-main-people-scene", "marketing-main-benefit-hook", "marketing-main-trust-promo"],
   "single-poster": ["single-product-long-poster"],
+  "one-click-replace": ["one-click-replace"],
   "text-translation": ["text-translation"]
 } satisfies Record<EcommerceGenerationMode, EcommerceSceneTemplateId[]>;
-const ecommerceSizePresetIds = new Set(["square-1k", "poster-landscape", "poster-portrait", "story-9-16", "ecommerce-long-poster"]);
+const threeImageReferenceModes = new Set<EcommerceGenerationMode>(["enhance", "creative", "category-kit", "marketing-main", "single-poster"]);
+const ecommerceSizePresetIds = new Set(["square-1k", "ozon-3-4", "poster-landscape", "poster-portrait", "story-9-16", "ecommerce-long-poster"]);
 const ecommerceSizePresets = SIZE_PRESETS.filter((preset) => ecommerceSizePresetIds.has(preset.id));
+const OZON_SIZE_PRESET_ID = "ozon-3-4";
+const CHINESE_ECOMMERCE_PLATFORM_IDS = new Set<EcommercePlatform>([
+  "1688",
+  "taobao",
+  "tmall",
+  "jd",
+  "douyin",
+  "pinduoduo",
+  "xiaohongshu",
+  "kuaishou",
+  "weidian",
+  "dewu"
+]);
+const RUSSIAN_ECOMMERCE_PLATFORM_IDS = new Set<EcommercePlatform>(["ozon"]);
+
+function categoryKitTextLanguageForTarget(
+  platform: EcommercePlatform,
+  market: EcommerceMarket,
+  selectedLanguage: EcommerceTextLanguage
+): EcommerceTextLanguage {
+  if (selectedLanguage !== "none") {
+    return selectedLanguage;
+  }
+  if (CHINESE_ECOMMERCE_PLATFORM_IDS.has(platform) || market === "cn") {
+    return "zh-hans";
+  }
+  if (RUSSIAN_ECOMMERCE_PLATFORM_IDS.has(platform) || market === "ru") {
+    return "ru";
+  }
+  return "none";
+}
+
+function ecommerceReferenceUploadLimit(mode: EcommerceGenerationMode): number {
+  if (mode === "text-translation") {
+    return MAX_ECOMMERCE_TRANSLATION_IMAGES;
+  }
+  if (threeImageReferenceModes.has(mode)) {
+    return MAX_ECOMMERCE_REFERENCE_IMAGES;
+  }
+  return MAX_ECOMMERCE_REFERENCE_IMAGES;
+}
+
+function ecommerceReferenceUploadHint(mode: EcommerceGenerationMode): string {
+  if (mode === "enhance") {
+    return "最多上传 3 张图；建议 1 张完整全景图 + 1 张细节图，第三张可补包装或角度图。";
+  }
+  if (mode === "creative") {
+    return "最多上传 3 张图；第一张放商品主体，后续可补材质、包装、穿戴或使用角度。";
+  }
+  if (mode === "category-kit") {
+    return "最多上传 3 张图；第一张为主商品图，后续作为细节、包装、规格或场景证据。";
+  }
+  if (mode === "marketing-main") {
+    return "最多上传 3 张图；建议主图 + 使用状态/细节图，帮助判断点击理由和信任元素。";
+  }
+  if (mode === "single-poster") {
+    return "最多上传 3 张图；建议主图、细节图和包装/规格图，便于归纳完整海报卖点。";
+  }
+  if (mode === "text-translation") {
+    return `文字翻译走逐张处理逻辑，可上传多张待翻译图片，最多 ${MAX_ECOMMERCE_TRANSLATION_IMAGES} 张。`;
+  }
+  return "目标图可多选；换入的衣服或商品请在下方单独上传。";
+}
+
+function ecommerceReferenceRoleLabel(mode: EcommerceGenerationMode, index: number): string {
+  if (mode === "text-translation") {
+    return `待翻译 ${index + 1}`;
+  }
+  if (index === 0) {
+    return "主图";
+  }
+  if (index === 1) {
+    return "细节";
+  }
+  return "补充";
+}
+const categoryKitAssetRoles: Array<{ id: CategoryKitAssetRole; label: string }> = [
+  { id: "detail", label: "细节图" },
+  { id: "package", label: "包装图" },
+  { id: "texture", label: "材质图" },
+  { id: "size", label: "尺寸图" },
+  { id: "lifestyle", label: "场景参考" },
+  { id: "other", label: "其他" }
+];
+const emptyCategoryKitPrepare: CategoryKitPrepareState = {
+  status: "idle",
+  categoryPath: "",
+  categoryName: "",
+  strategyName: "",
+  strategySummary: "",
+  missingItems: [],
+  requiredAssets: [],
+  message: ""
+};
 const emptyEcommerceStats: EcommerceStatsResponse = {
   totalJobs: 0,
   pendingJobs: 0,
@@ -528,10 +671,40 @@ type SaveStatus = "loading" | "saved" | "pending" | "saving" | "error";
 type GenerationMode = "text" | "reference";
 type MobileCreateTab = "home" | "ecommerce" | "creative" | "history";
 type PanelStatusTone = "progress" | "success" | "warning" | "error";
-type SidebarTab = "plugins" | "creative";
+type SidebarTab = "plugins" | "creative" | "video";
 type EcommerceImageSource = { dataUrl: string; fileName: string; previewUrl: string };
+type EcommerceReferenceImageSource = EcommerceImageSource & { id: string };
+type EcommerceTargetImageSource = EcommerceImageSource & { id: string };
+type EcommerceUploadSlot = "target" | "replacement";
+type CategoryKitAssetRole = "detail" | "package" | "texture" | "size" | "lifestyle" | "other";
+type CategoryKitAssetSource = EcommerceImageSource & { id: string; role: CategoryKitAssetRole };
+type CategoryKitPrepareStatus = "idle" | "loading" | "ready" | "error";
 type MobileReferenceImageSource = EcommerceImageSource & { assetId?: string };
 type PluginGuideLinks = typeof defaultPluginGuideLinks;
+
+interface EcommerceDocumentSource {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  size: number;
+  text: string;
+  note: string;
+}
+
+interface NotificationCenterProps {
+  notifications: AppNotification[];
+  unreadCount: number;
+  isOpen: boolean;
+  onOpenChange: (open: boolean) => void;
+  onMarkAllRead: () => void;
+  onNotificationAction: (notification: AppNotification) => void;
+}
+
+interface NotificationToastProps {
+  notification: AppNotification;
+  onClose: () => void;
+  onView: () => void;
+}
 
 interface ExtensionReleaseTarget {
   version?: string;
@@ -542,6 +715,17 @@ interface ExtensionReleaseTarget {
 
 interface ExtensionReleaseResponse {
   prod?: ExtensionReleaseTarget;
+}
+
+interface CategoryKitPrepareState {
+  status: CategoryKitPrepareStatus;
+  categoryPath: string;
+  categoryName: string;
+  strategyName: string;
+  strategySummary: string;
+  missingItems: string[];
+  requiredAssets: string[];
+  message: string;
 }
 
 interface ExtensionProbeResponseMessage {
@@ -598,6 +782,10 @@ interface ActiveGenerationTask {
   placeholderSet: ActiveGenerationPlaceholders;
 }
 
+type GeneratedMediaShape =
+  | (Partial<TLImageShape> & { id: TLShapeId; type: "image" })
+  | (Partial<TLVideoShape> & { id: TLShapeId; type: "video" });
+
 type ReferenceSelection =
   | {
       status: "none" | "multiple" | "non-image" | "unreadable";
@@ -632,7 +820,8 @@ const qualityLabels: Record<ImageQuality, string> = {
 const formatLabels: Record<OutputFormat, string> = {
   png: "PNG",
   jpeg: "JPEG",
-  webp: "WebP"
+  webp: "WebP",
+  mp4: "MP4"
 };
 
 const stylePresetLabels: Record<StylePresetId, string> = {
@@ -748,6 +937,7 @@ function escapeDemoSvgText(value: string): string {
 }
 
 function createDemoGalleryItem(example: DemoCanvasExample): GalleryImageItem {
+  const referenceAssetId = `demo-reference-${example.id}`;
   return {
     outputId: `demo-output-${example.id}`,
     generationId: `demo-generation-${example.id}`,
@@ -763,6 +953,7 @@ function createDemoGalleryItem(example: DemoCanvasExample): GalleryImageItem {
     model: "demo-curated",
     modelDisplayName: "Demo Curated",
     createdAt: example.createdAt,
+    referenceAssetId,
     asset: {
       id: `demo-asset-${example.id}`,
       url: example.afterUrl,
@@ -772,6 +963,19 @@ function createDemoGalleryItem(example: DemoCanvasExample): GalleryImageItem {
         "1024": example.afterUrl
       },
       fileName: `${example.id}.svg`,
+      mimeType: "image/svg+xml",
+      width: example.size.width,
+      height: example.size.height
+    },
+    referenceAsset: {
+      id: referenceAssetId,
+      url: example.beforeUrl,
+      cdnUrl: example.beforeUrl,
+      cdnPreviewUrls: {
+        "512": example.beforeUrl,
+        "1024": example.beforeUrl
+      },
+      fileName: `${example.id}-before.svg`,
       mimeType: "image/svg+xml",
       width: example.size.width,
       height: example.size.height
@@ -799,25 +1003,44 @@ function sizePresetOptionLabel(preset: SizePreset): string {
 }
 
 function originalSizePresetOptionLabel(widthValue: number, heightValue: number): string {
-  return `${ORIGINAL_SIZE_PRESET_LABEL} - ${Math.round(widthValue)} x ${Math.round(heightValue)}`;
+  const originalWidth = Math.round(widthValue);
+  const originalHeight = Math.round(heightValue);
+  const resolvedSize = resolvedGenerationSize(originalWidth, originalHeight);
+  if (resolvedSize.width !== originalWidth || resolvedSize.height !== originalHeight) {
+    return `${ORIGINAL_SIZE_PRESET_LABEL} - ${resolvedSize.width} x ${resolvedSize.height}（接近 ${originalWidth} x ${originalHeight}）`;
+  }
+
+  return `${ORIGINAL_SIZE_PRESET_LABEL} - ${originalWidth} x ${originalHeight}`;
 }
 
 function normalizeDimension(value: string): number {
   return Number.parseInt(value, 10);
 }
 
-function sizeValidationMessage(width: number, height: number): string {
-  const result = validateImageSize({ width, height });
+function normalizedSizeNotice(width: number, height: number): string {
+  const normalizedSize = resolveNearestValidImageSize({ width, height });
+  if (!normalizedSize || (normalizedSize.width === width && normalizedSize.height === height)) {
+    return "";
+  }
 
+  return `当前尺寸 ${width} x ${height} 不是模型要求的 16px 倍数，将自动按最接近的 ${normalizedSize.width} x ${normalizedSize.height} 生成。`;
+}
+
+function blockingSizeValidationMessage(width: number, height: number): string {
+  const result = validateImageSize({ width, height });
   if (result.ok) {
     return "";
   }
 
-  return result.message;
+  return resolveNearestValidImageSize({ width, height }) ? "" : "message" in result ? result.message : "尺寸不符合要求。";
+}
+
+function resolvedGenerationSize(width: number, height: number): ImageSize {
+  return resolveNearestValidImageSize({ width, height }) ?? { width, height };
 }
 
 function generationValidationMessage(promptValue: string, widthValue: number, heightValue: number): string {
-  return promptValue.trim() ? sizeValidationMessage(widthValue, heightValue) : "请输入提示词。";
+  return promptValue.trim() ? blockingSizeValidationMessage(widthValue, heightValue) : "请输入提示词。";
 }
 
 function routeFromLocation(): AppRoute {
@@ -862,6 +1085,74 @@ function isGenerationResponse(value: unknown): value is GenerationResponse {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringFromUnknown(value: unknown): string {
+  return typeof value === "string" ? value : typeof value === "number" || typeof value === "boolean" ? String(value) : "";
+}
+
+function stringListFromUnknown(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map(stringFromUnknown).filter(Boolean);
+  }
+  const text = stringFromUnknown(value);
+  return text ? text.split(/[\n,，]/).map((item) => item.trim()).filter(Boolean) : [];
+}
+
+function firstRecordFrom(value: unknown, keys: string[]): Record<string, unknown> {
+  if (!isRecord(value)) {
+    return {};
+  }
+  for (const key of keys) {
+    if (isRecord(value[key])) {
+      return value[key];
+    }
+  }
+  return value;
+}
+
+function categoryPathFromUnknown(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value.map(stringFromUnknown).filter(Boolean).join(" > ");
+  }
+  return stringFromUnknown(value);
+}
+
+function labelListFromUnknown(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return stringListFromUnknown(value);
+  }
+  return value.flatMap((item) => {
+    if (isRecord(item)) {
+      const label = stringFromUnknown(item.label ?? item.title ?? item.name ?? item.id ?? item.role);
+      const required = item.required === true ? "必需" : item.recommended === true ? "建议" : "";
+      return label ? [`${label}${required ? `（${required}）` : ""}`] : [];
+    }
+    const text = stringFromUnknown(item);
+    return text ? [text] : [];
+  });
+}
+
+function parseCategoryKitPrepare(value: unknown): CategoryKitPrepareState {
+  const root = firstRecordFrom(value, ["prepare", "result", "data"]);
+  const strategy = firstRecordFrom(root.strategy ?? root.policy, ["strategy", "policy"]);
+  const category = firstRecordFrom(root.category, ["category"]);
+  const missingItems = labelListFromUnknown(
+    root.missingInputs ?? root.missing_inputs ?? root.missingItems ?? root.missing_assets ?? root.missingAssets ?? root.missing ?? strategy.missingItems ?? strategy.missingAssets
+  );
+  const requiredAssets = labelListFromUnknown(root.imageRoles ?? root.image_roles ?? root.requiredAssets ?? root.required_assets ?? strategy.imageRoles ?? strategy.image_roles ?? strategy.requiredAssets ?? strategy.required_assets);
+  const categoryPath = categoryPathFromUnknown(root.categoryPath ?? root.category_path ?? category.path ?? category.categoryPath);
+  const categoryName = stringFromUnknown(root.categoryName ?? root.category_name ?? category.name ?? category.categoryName);
+  return {
+    status: "ready",
+    categoryPath,
+    categoryName,
+    strategyName: stringFromUnknown(root.strategyName ?? root.strategy_name ?? strategy.name ?? strategy.title),
+    strategySummary: stringFromUnknown(root.strategySummary ?? root.strategy_summary ?? root.summary ?? strategy.summary ?? strategy.description),
+    missingItems,
+    requiredAssets,
+    message: stringFromUnknown(root.message) || (missingItems.length > 0 ? "策略已匹配，仍需补素材。" : "策略已匹配。")
+  };
 }
 
 function isLoadingGenerationPlaceholderRecord(value: unknown): boolean {
@@ -928,8 +1219,38 @@ function successfulOutputCount(record: GenerationRecord): number {
   return record.outputs.filter((output) => output.status === "succeeded" && output.asset).length;
 }
 
+function recordOutputUnitLabel(record: GenerationRecord): string {
+  return record.outputFormat === "mp4" || generatedAssetsForRecord(record).some(isVideoAsset) ? "个" : "张";
+}
+
 function cloudFailureCount(record: GenerationRecord): number {
   return record.outputs.filter((output) => output.asset?.cloud?.status === "failed").length;
+}
+
+function GeneratedAssetPreview({
+  asset,
+  alt,
+  controls = false
+}: {
+  asset: GeneratedAsset;
+  alt: string;
+  controls?: boolean;
+}) {
+  if (isVideoAsset(asset)) {
+    return (
+      <video
+        aria-label={alt}
+        controls={controls}
+        loop={!controls}
+        muted={!controls}
+        playsInline
+        preload="metadata"
+        src={assetDisplayUrl(asset)}
+      />
+    );
+  }
+
+  return <img alt={alt} src={assetDisplayUrl(asset, 512)} />;
 }
 
 function firstCloudFailureMessage(record: GenerationRecord): string | undefined {
@@ -1215,6 +1536,25 @@ function createEcommerceBatchPlaceholders(
   };
 }
 
+function trimGenerationPlaceholders(
+  editor: Editor,
+  placeholderSet: ActiveGenerationPlaceholders,
+  nextCount: number
+): ActiveGenerationPlaceholders {
+  const keepCount = Math.max(0, Math.min(nextCount, placeholderSet.placements.length));
+  const removedPlaceholderIds = placeholderSet.placements
+    .slice(keepCount)
+    .map((placement) => placement.id)
+    .filter((id): id is TLShapeId => isGenerationPlaceholderShape(editor.getShape(id)));
+  if (removedPlaceholderIds.length > 0) {
+    editor.deleteShapes(removedPlaceholderIds);
+  }
+  return {
+    ...placeholderSet,
+    placements: placeholderSet.placements.slice(0, keepCount)
+  };
+}
+
 function isGenerationPlaceholderShape(shape: unknown): shape is GenerationPlaceholderShape {
   return isRecord(shape) && shape.type === GENERATION_PLACEHOLDER_TYPE;
 }
@@ -1255,6 +1595,30 @@ function createImageAsset(asset: GeneratedAsset): TLAsset {
   };
 }
 
+function createVideoAsset(asset: GeneratedAsset): TLAsset {
+  const displayUrl = assetDisplayUrl(asset);
+  const meta = createImageAssetMeta(asset);
+
+  return {
+    id: createTldrawAssetId(asset.id),
+    typeName: "asset",
+    type: "video",
+    props: {
+      src: displayUrl,
+      w: asset.width,
+      h: asset.height,
+      name: asset.fileName,
+      mimeType: asset.mimeType,
+      isAnimated: true
+    },
+    meta
+  };
+}
+
+function createMediaAsset(asset: GeneratedAsset): TLAsset {
+  return isVideoAsset(asset) ? createVideoAsset(asset) : createImageAsset(asset);
+}
+
 function createImageAssetMeta(asset: GeneratedAsset): TLAsset["meta"] {
   const meta: Record<string, string | Record<string, string>> = {
     localAssetId: asset.id,
@@ -1280,6 +1644,10 @@ function sanitizeStringRecord(value: Record<string, string> | undefined): Record
 
   const entries = Object.entries(value).filter((entry): entry is [string, string] => entry[0].trim().length > 0 && typeof entry[1] === "string" && entry[1].trim().length > 0);
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function isVideoAsset(asset: GeneratedAsset): boolean {
+  return asset.mimeType.toLowerCase().startsWith("video/");
 }
 
 function createImageShape(
@@ -1309,10 +1677,39 @@ function createImageShape(
   };
 }
 
+function createVideoShape(
+  asset: GeneratedAsset,
+  placement: GenerationPlaceholderPlacement,
+  promptValue: string
+): Partial<TLVideoShape> & { id: TLShapeId; type: "video" } {
+  const assetId = createTldrawAssetId(asset.id);
+
+  return {
+    id: createTldrawShapeId(),
+    type: "video",
+    x: placement.x,
+    y: placement.y,
+    props: {
+      assetId,
+      w: placement.width,
+      h: placement.height,
+      time: 0,
+      playing: true,
+      autoplay: true,
+      url: "",
+      altText: promptValue
+    }
+  };
+}
+
+function createMediaShape(asset: GeneratedAsset, placement: GenerationPlaceholderPlacement, promptValue: string): GeneratedMediaShape {
+  return isVideoAsset(asset) ? createVideoShape(asset, placement, promptValue) : createImageShape(asset, placement, promptValue);
+}
+
 function isCanvasInsertableAsset(asset: GeneratedAsset): boolean {
   return (
     asset.id.trim().length > 0 &&
-    assetDisplayUrl(asset, GENERATED_ASSET_INITIAL_PREVIEW_WIDTH).trim().length > 0 &&
+    assetDisplayUrl(asset, isVideoAsset(asset) ? undefined : GENERATED_ASSET_INITIAL_PREVIEW_WIDTH).trim().length > 0 &&
     Number.isFinite(asset.width) &&
     Number.isFinite(asset.height) &&
     asset.width > 0 &&
@@ -1338,27 +1735,31 @@ function createCenteredImagePlacement(editor: Editor, asset: GeneratedAsset): Ge
   };
 }
 
-function insertGalleryImageOnCanvas(editor: Editor, item: GalleryImageItem): TLShapeId {
-  const assetId = createTldrawAssetId(item.asset.id);
-  const placement = createCenteredImagePlacement(editor, item.asset);
-  const imageShape = createImageShape(item.asset, placement, item.prompt);
+function insertGeneratedAssetOnCanvas(editor: Editor, asset: GeneratedAsset, promptValue: string): TLShapeId {
+  const assetId = createTldrawAssetId(asset.id);
+  const placement = createCenteredImagePlacement(editor, asset);
+  const mediaShape = createMediaShape(asset, placement, promptValue);
 
   editor.run(() => {
     if (!editor.getAsset(assetId)) {
-      editor.createAssets([createImageAsset(item.asset)]);
+      editor.createAssets([createMediaAsset(asset)]);
     }
-    editor.createShapes([imageShape]);
+    editor.createShapes([mediaShape]);
   });
-  editor.select(imageShape.id);
-  editor.bringToFront([imageShape.id]);
+  editor.select(mediaShape.id);
+  editor.bringToFront([mediaShape.id]);
 
-  return imageShape.id;
+  return mediaShape.id;
+}
+
+function insertGalleryImageOnCanvas(editor: Editor, item: GalleryImageItem): TLShapeId {
+  return insertGeneratedAssetOnCanvas(editor, item.asset, item.prompt);
 }
 
 function replaceGenerationPlaceholders(editor: Editor, placeholderSet: ActiveGenerationPlaceholders, record: GenerationRecord): number {
   const assets: TLAsset[] = [];
   const queuedAssetIds = new Set<TLAssetId>();
-  const imageShapes: Array<Partial<TLImageShape> & { id: TLShapeId; type: "image" }> = [];
+  const mediaShapes: GeneratedMediaShape[] = [];
   const replacedPlaceholderIds: TLShapeId[] = [];
   const failedUpdates: Array<TLShapePartial<GenerationPlaceholderShape>> = [];
 
@@ -1372,7 +1773,7 @@ function replaceGenerationPlaceholders(editor: Editor, placeholderSet: ActiveGen
             type: GENERATION_PLACEHOLDER_TYPE,
             props: {
               status: "failed",
-              error: "生成图片资源异常，无法插入画布。"
+              error: "生成资源异常，无法插入画布。"
             }
           });
         }
@@ -1383,9 +1784,9 @@ function replaceGenerationPlaceholders(editor: Editor, placeholderSet: ActiveGen
       const resolvedPlacement = livePlacement(editor, placement);
       if (!editor.getAsset(assetId) && !queuedAssetIds.has(assetId)) {
         queuedAssetIds.add(assetId);
-        assets.push(createImageAsset(output.asset));
+        assets.push(createMediaAsset(output.asset));
       }
-      imageShapes.push(createImageShape(output.asset, resolvedPlacement, record.prompt));
+      mediaShapes.push(createMediaShape(output.asset, resolvedPlacement, record.prompt));
       if (isGenerationPlaceholderShape(editor.getShape(placement.id))) {
         replacedPlaceholderIds.push(placement.id);
       }
@@ -1411,19 +1812,19 @@ function replaceGenerationPlaceholders(editor: Editor, placeholderSet: ActiveGen
     if (assets.length > 0) {
       editor.createAssets(assets);
     }
-    if (imageShapes.length > 0) {
-      editor.createShapes(imageShapes);
+    if (mediaShapes.length > 0) {
+      editor.createShapes(mediaShapes);
     }
     if (failedUpdates.length > 0) {
       editor.updateShapes<GenerationPlaceholderShape>(failedUpdates);
     }
   });
 
-  if (imageShapes.length > 0) {
-    editor.select(...imageShapes.map((shape) => shape.id));
+  if (mediaShapes.length > 0) {
+    editor.select(...mediaShapes.map((shape) => shape.id));
   }
 
-  return imageShapes.length;
+  return mediaShapes.length;
 }
 
 function generatedAssetsForRecord(record: GenerationRecord): GeneratedAsset[] {
@@ -1435,6 +1836,10 @@ async function preloadGenerationRecordPreviews(record: GenerationRecord, signal:
 }
 
 async function preloadGeneratedAssetPreview(asset: GeneratedAsset, signal: AbortSignal): Promise<void> {
+  if (isVideoAsset(asset)) {
+    return;
+  }
+
   try {
     await preloadImageUrl(assetDisplayUrl(asset, GENERATED_ASSET_INITIAL_PREVIEW_WIDTH), signal);
   } catch (error) {
@@ -1732,6 +2137,20 @@ function getImageSourceUrl(shape: TLImageShape, asset: TLAsset | undefined): str
   return shape.props.url || undefined;
 }
 
+function getVideoSourceUrl(shape: TLVideoShape, asset: TLAsset | undefined): string | undefined {
+  const assetSourceUrl = getCanvasAssetMetaString(asset, "sourceUrl");
+  if (assetSourceUrl) {
+    return assetSourceUrl;
+  }
+
+  const assetUrl = asset?.type === "video" && typeof asset.props.src === "string" ? asset.props.src : undefined;
+  if (assetUrl) {
+    return assetUrl;
+  }
+
+  return shape.props.url || undefined;
+}
+
 function getAssetMimeType(asset: TLAsset | undefined): string | undefined {
   return asset?.type === "image" && typeof asset.props.mimeType === "string" ? asset.props.mimeType : undefined;
 }
@@ -1795,6 +2214,10 @@ function getLocalAssetId(asset: TLAsset | undefined, sourceUrl?: string): string
 }
 
 function resolveCanvasAssetUrl(asset: TLAsset, context: TLAssetContext): string | null {
+  if (asset.type === "video") {
+    return resolveCanvasVideoAssetUrl(asset);
+  }
+
   if (asset.type !== "image") {
     return "src" in asset.props && typeof asset.props.src === "string" ? asset.props.src : null;
   }
@@ -1823,11 +2246,32 @@ function resolveCanvasAssetUrl(asset: TLAsset, context: TLAssetContext): string 
   return assetPreviewUrl(localAssetId, previewWidth);
 }
 
+function resolveCanvasVideoAssetUrl(asset: Extract<TLAsset, { type: "video" }>): string | null {
+  const sourceUrl = asset.props.src;
+  const localAssetId = getLocalAssetId(asset, sourceUrl || undefined);
+  const cdnUrl = getCanvasAssetMetaString(asset, "cdnUrl");
+  const originalUrl = getCanvasAssetMetaString(asset, "sourceUrl") || sourceUrl;
+
+  if (cdnUrl) {
+    return cdnUrl;
+  }
+
+  if (localAssetId) {
+    return authenticatedAssetUrl(`/api/assets/${encodeURIComponent(localAssetId)}`);
+  }
+
+  return originalUrl ? authenticatedAssetUrl(originalUrl) : null;
+}
+
 function assetPreviewUrl(assetId: string, width: number): string {
   return authenticatedAssetUrl(`/api/assets/${encodeURIComponent(assetId)}/preview?width=${width}`);
 }
 
 function assetDisplayUrl(asset: GeneratedAsset, preferredWidth?: number): string {
+  if (isVideoAsset(asset)) {
+    return asset.cdnUrl || authenticatedAssetUrl(asset.url);
+  }
+
   return previewUrlForWidth(asset.cdnPreviewUrls, preferredWidth) || asset.cdnUrl || authenticatedAssetUrl(asset.url);
 }
 
@@ -1908,17 +2352,17 @@ function findCanvasImageShape(editor: Editor, record: GenerationRecord): TLShape
   }
 
   for (const shape of editor.getCurrentPageShapes()) {
-    if (shape.type !== "image") {
+    if (shape.type !== "image" && shape.type !== "video") {
       continue;
     }
 
-    const imageShape = shape as TLImageShape;
-    const asset = imageShape.props.assetId ? editor.getAsset(imageShape.props.assetId) : undefined;
-    const sourceUrl = getImageSourceUrl(imageShape, asset);
+    const mediaShape = shape as TLImageShape | TLVideoShape;
+    const asset = mediaShape.props.assetId ? editor.getAsset(mediaShape.props.assetId) : undefined;
+    const sourceUrl = mediaShape.type === "video" ? getVideoSourceUrl(mediaShape, asset) : getImageSourceUrl(mediaShape, asset);
     const localAssetId = getLocalAssetId(asset, sourceUrl);
 
     if (localAssetId && assetIds.has(localAssetId)) {
-      return imageShape.id;
+      return mediaShape.id;
     }
   }
 
@@ -1936,6 +2380,303 @@ function fileNameWithImageExtension(name: string, mimeType: string): string {
 
 function isSupportedReferenceImageType(mimeType: string): boolean {
   return SUPPORTED_REFERENCE_MIME_TYPES.has(mimeType.toLowerCase());
+}
+
+function fileExtension(value: string): string {
+  const cleanName = value.split(/[?#]/u)[0] ?? value;
+  const match = /\.([a-z0-9]+)$/iu.exec(cleanName.trim());
+  return match?.[1]?.toLowerCase() ?? "";
+}
+
+function isReadableTextDocument(file: File): boolean {
+  const type = file.type.toLowerCase();
+  const extension = fileExtension(file.name);
+  return (
+    type.startsWith("text/") ||
+    type === "application/json" ||
+    ["csv", "tsv", "txt", "md", "json", "html", "htm"].includes(extension)
+  );
+}
+
+function isSupportedEcommerceDocument(file: File): boolean {
+  const type = file.type.toLowerCase();
+  const extension = fileExtension(file.name);
+  return (
+    isReadableTextDocument(file) ||
+    type === "application/pdf" ||
+    type === "application/msword" ||
+    type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+    type === "application/vnd.ms-excel" ||
+    type === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+    ["pdf", "doc", "docx", "xls", "xlsx"].includes(extension)
+  );
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes >= 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(bytes >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
+  }
+  if (bytes >= 1024) {
+    return `${Math.round(bytes / 1024)} KB`;
+  }
+  return `${bytes} B`;
+}
+
+async function readEcommerceDocument(file: File): Promise<EcommerceDocumentSource> {
+  if (!isSupportedEcommerceDocument(file)) {
+    throw new Error("资料文件仅支持 doc、pdf、excel、csv、txt 等格式。");
+  }
+  if (file.size > MAX_ECOMMERCE_DOCUMENT_BYTES) {
+    throw new Error(`资料文件不能超过 ${formatFileSize(MAX_ECOMMERCE_DOCUMENT_BYTES)}。`);
+  }
+
+  const readable = isReadableTextDocument(file);
+  const text = readable ? (await file.text()).replace(/\s+/gu, " ").trim().slice(0, 4000) : "";
+  const extension = fileExtension(file.name).toUpperCase();
+  return {
+    id: crypto.randomUUID(),
+    fileName: file.name || "product-document",
+    mimeType: file.type || extension || "application/octet-stream",
+    size: file.size,
+    text,
+    note: text
+      ? `已读取 ${Math.min(text.length, 4000)} 字资料摘要`
+      : `${extension || "文档"} 已选择；当前会把文件名作为资料线索，复杂内容建议复制到商品描述或补充方向。`
+  };
+}
+
+function ecommerceReferenceInput(image: EcommerceImageSource): ReferenceImageInput {
+  return {
+    dataUrl: image.dataUrl,
+    fileName: image.fileName
+  };
+}
+
+function mainEcommerceReferenceImage(images: EcommerceReferenceImageSource[]): ReferenceImageInput | undefined {
+  const [mainImage, ...additionalImages] = images;
+  if (!mainImage) {
+    return undefined;
+  }
+  return {
+    ...ecommerceReferenceInput(mainImage),
+    additionalReferenceImages: additionalImages.map(ecommerceReferenceInput)
+  };
+}
+
+function ecommerceImageRole(index: number): CategoryKitAssetRole {
+  if (index === 0) return "detail";
+  if (index === 1) return "package";
+  return "other";
+}
+
+function ecommerceReferenceAssets(images: EcommerceReferenceImageSource[]) {
+  return images.slice(1, MAX_ECOMMERCE_REFERENCE_IMAGES).map((image, index) => ({
+    role: ecommerceImageRole(index),
+    dataUrl: image.dataUrl,
+    fileName: image.fileName,
+    title: ecommerceReferenceRoleLabel("category-kit", index + 1)
+  }));
+}
+
+function ecommerceDocumentDirection(documents: EcommerceDocumentSource[]): string {
+  if (!documents.length) {
+    return "";
+  }
+  const lines = documents.map((document, index) => {
+    const summary = document.text
+      ? `内容摘要：${document.text.slice(0, 1200)}`
+      : `已上传但未解析正文：${document.note}`;
+    return `${index + 1}. ${document.fileName} (${formatFileSize(document.size)}) - ${summary}`;
+  });
+  return [
+    "商品资料文档（用户上传，用作生成依据；不得编造文档未提供的信息）：",
+    ...lines
+  ].join("\n");
+}
+
+function inferSupportedReferenceImageMimeType(value: string): string | undefined {
+  const lowerValue = value.trim().toLowerCase();
+  const pathname = (() => {
+    try {
+      return new URL(value, window.location.href).pathname.toLowerCase();
+    } catch {
+      return lowerValue;
+    }
+  })();
+
+  if (/\.png(?:[?#].*)?$/iu.test(pathname)) {
+    return "image/png";
+  }
+  if (/\.jpe?g(?:[?#].*)?$/iu.test(pathname)) {
+    return "image/jpeg";
+  }
+  if (/\.webp(?:[?#].*)?$/iu.test(pathname)) {
+    return "image/webp";
+  }
+
+  return undefined;
+}
+
+function normalizeSupportedReferenceImageFile(file: File): File | undefined {
+  const mimeType = isSupportedReferenceImageType(file.type) ? file.type.toLowerCase() : inferSupportedReferenceImageMimeType(file.name) ?? "";
+  if (!isSupportedReferenceImageType(mimeType)) {
+    return undefined;
+  }
+  if (mimeType === file.type.toLowerCase()) {
+    return file;
+  }
+
+  return new File([file], fileNameWithImageExtension(file.name || "dragged-image", mimeType), { type: mimeType });
+}
+
+function extractDraggedImageUrl(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed.startsWith("data:image/") || trimmed.startsWith("blob:")) {
+    return trimmed;
+  }
+  if (trimmed.startsWith("<")) {
+    const document = new DOMParser().parseFromString(trimmed, "text/html");
+    const imageSrc = document.querySelector("img[src]")?.getAttribute("src") ?? document.querySelector("a[href]")?.getAttribute("href");
+    if (imageSrc) {
+      return extractDraggedImageUrl(imageSrc);
+    }
+  }
+
+  for (const line of trimmed.split(/\r?\n/u)) {
+    const candidate = line.trim();
+    if (!candidate || candidate.startsWith("#")) {
+      continue;
+    }
+    if (candidate.startsWith("data:image/") || candidate.startsWith("blob:")) {
+      return candidate;
+    }
+    if (!/^(?:https?:|blob:|data:|\/\/|\/|\.\.?\/|[^\s<>]+\.[a-z0-9]{2,5}(?:[?#].*)?)$/iu.test(candidate)) {
+      continue;
+    }
+    try {
+      return new URL(candidate, window.location.href).toString();
+    } catch {
+      continue;
+    }
+  }
+
+  try {
+    return new URL(trimmed, window.location.href).toString();
+  } catch {
+    return undefined;
+  }
+}
+
+function extractDraggedImageUrlFromDataTransfer(dataTransfer: DataTransfer): string | undefined {
+  const candidates = [dataTransfer.getData("text/uri-list"), dataTransfer.getData("text/html"), dataTransfer.getData("text/plain")];
+  for (const candidate of candidates) {
+    const url = extractDraggedImageUrl(candidate);
+    if (url) {
+      return url;
+    }
+  }
+  return undefined;
+}
+
+function fileNameFromUrl(url: string): string {
+  try {
+    const pathname = new URL(url, window.location.href).pathname;
+    const lastSegment = pathname.split("/").filter(Boolean).pop();
+    if (lastSegment) {
+      try {
+        return decodeURIComponent(lastSegment);
+      } catch {
+        return lastSegment;
+      }
+    }
+  } catch {
+    // Fall through to the default name below.
+  }
+
+  return "dragged-image";
+}
+
+async function fileFromDraggedImageUrl(url: string): Promise<File | undefined> {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) {
+      return undefined;
+    }
+
+    const blob = await response.blob();
+    const blobMimeType = blob.type.toLowerCase();
+    const mimeType = isSupportedReferenceImageType(blobMimeType) ? blobMimeType : inferSupportedReferenceImageMimeType(url) ?? "";
+    if (!isSupportedReferenceImageType(mimeType)) {
+      return undefined;
+    }
+
+    return new File([blob], fileNameWithImageExtension(fileNameFromUrl(url), mimeType), { type: mimeType });
+  } catch {
+    return undefined;
+  }
+}
+
+async function extractImageFileFromDataTransfer(dataTransfer: DataTransfer): Promise<File | undefined> {
+  return (await extractImageFilesFromDataTransfer(dataTransfer))[0];
+}
+
+async function extractImageFilesFromDataTransfer(dataTransfer: DataTransfer): Promise<File[]> {
+  const directFiles = Array.from(dataTransfer.files)
+    .map((file) => normalizeSupportedReferenceImageFile(file))
+    .filter((file): file is File => Boolean(file));
+  if (directFiles.length > 0) {
+    return directFiles;
+  }
+
+  const itemFiles: File[] = [];
+  for (const item of Array.from(dataTransfer.items)) {
+    if (item.kind !== "file") {
+      continue;
+    }
+    const file = item.getAsFile();
+    const normalizedFile = file ? normalizeSupportedReferenceImageFile(file) : undefined;
+    if (normalizedFile) {
+      itemFiles.push(normalizedFile);
+    }
+  }
+  if (itemFiles.length > 0) {
+    return itemFiles;
+  }
+
+  const draggedUrl = extractDraggedImageUrlFromDataTransfer(dataTransfer);
+  if (!draggedUrl) {
+    return [];
+  }
+
+  const draggedFile = await fileFromDraggedImageUrl(draggedUrl);
+  return draggedFile ? [draggedFile] : [];
+}
+
+function extractImageFileFromClipboard(clipboardData: DataTransfer): File | undefined {
+  const itemFile = Array.from(clipboardData.items)
+    .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+    .map((item) => item.getAsFile())
+    .map((file) => (file ? normalizeSupportedReferenceImageFile(file) : undefined))
+    .find((file): file is File => Boolean(file));
+  if (itemFile) {
+    return itemFile;
+  }
+
+  return Array.from(clipboardData.files)
+    .map((file) => normalizeSupportedReferenceImageFile(file))
+    .find((file): file is File => Boolean(file));
+}
+
+function shouldIgnoreImagePasteTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  const editable = target.closest("input, textarea, select, [contenteditable='true']");
+  return Boolean(editable);
 }
 
 async function blobToDataUrl(blob: Blob): Promise<string> {
@@ -1973,7 +2714,7 @@ async function imageDimensions(file: File): Promise<{ width: number; height: num
   }
 }
 
-async function uploadCanvasImageAsset(file: File): Promise<GeneratedAsset> {
+async function uploadCanvasImageAsset(file: File, signal?: AbortSignal): Promise<GeneratedAsset> {
   const dimensions = await imageDimensions(file);
   const formData = new FormData();
   formData.set("file", file);
@@ -1982,7 +2723,8 @@ async function uploadCanvasImageAsset(file: File): Promise<GeneratedAsset> {
 
   const response = await authFetch("/api/assets", {
     method: "POST",
-    body: formData
+    body: formData,
+    signal
   });
 
   if (!response.ok) {
@@ -2002,6 +2744,7 @@ interface LoadedReferenceImage {
   fileName: string;
   width: number;
   height: number;
+  blob?: Blob;
 }
 
 async function readReferenceImage(selection: Extract<ReferenceSelection, { status: "ready" }>, signal: AbortSignal): Promise<LoadedReferenceImage> {
@@ -2037,7 +2780,8 @@ async function readReferenceImage(selection: Extract<ReferenceSelection, { statu
     dataUrl,
     fileName: fileNameWithImageExtension(selection.name, blob.type),
     width: image.naturalWidth,
-    height: image.naturalHeight
+    height: image.naturalHeight,
+    blob
   };
 }
 
@@ -2090,6 +2834,7 @@ async function buildReferenceGenerationInput(
       : [];
   const maskDataUrl =
     selectionPolygons.length > 0 ? createReferenceSelectionMaskDataUrl(selectionPolygons, baseImage.width, baseImage.height) : undefined;
+  const referenceAssetId = await ensureReferenceAssetId(selection, baseImage, signal);
 
   return {
     referenceImage: {
@@ -2097,8 +2842,32 @@ async function buildReferenceGenerationInput(
       fileName: baseImage.fileName,
       maskDataUrl
     },
-    referenceAssetId: selection.localAssetId
+    referenceAssetId
   };
+}
+
+async function ensureReferenceAssetId(
+  selection: Extract<ReferenceSelection, { status: "ready" }>,
+  baseImage: LoadedReferenceImage,
+  signal: AbortSignal
+): Promise<string | undefined> {
+  if (selection.localAssetId) {
+    return selection.localAssetId;
+  }
+  if (!baseImage.blob) {
+    return undefined;
+  }
+
+  try {
+    const sourceFile = new File([baseImage.blob], baseImage.fileName, { type: baseImage.blob.type });
+    const asset = await uploadCanvasImageAsset(sourceFile, signal);
+    return asset.id;
+  } catch (error) {
+    if (signal.aborted) {
+      throw error;
+    }
+    return undefined;
+  }
 }
 
 async function buildHistoryReferenceGenerationInput(
@@ -2254,6 +3023,34 @@ function showGenerationCompleteNotification(record: GenerationRecord, insertedCo
     icon: "/favicon.svg",
     tag: `generation-${record.id}`
   });
+}
+
+async function fetchNotifications(limit = 30, signal?: AbortSignal): Promise<AppNotificationListResponse> {
+  const response = await authFetch(`/api/notifications?limit=${limit}`, { signal });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  return response.json() as Promise<AppNotificationListResponse>;
+}
+
+async function markNotificationReadRequest(notificationId: string): Promise<AppNotificationListResponse> {
+  const response = await authFetch(`/api/notifications/${encodeURIComponent(notificationId)}/read`, {
+    method: "POST"
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  return response.json() as Promise<AppNotificationListResponse>;
+}
+
+async function markAllNotificationsReadRequest(): Promise<AppNotificationListResponse> {
+  const response = await authFetch("/api/notifications/read-all", {
+    method: "POST"
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  return response.json() as Promise<AppNotificationListResponse>;
 }
 
 function saveStatusLabel(status: SaveStatus): string {
@@ -2414,8 +3211,11 @@ function MobileWorkbench({
   count,
   ecommerceCount,
   ecommerceDescription,
+  ecommerceDocuments,
   ecommerceExtraDirection,
-  ecommerceImage,
+  ecommerceImages,
+  ecommerceReplacementImage,
+  ecommerceTargetImages,
   ecommerceMarket,
   ecommerceMode,
   ecommercePlatform,
@@ -2431,6 +3231,7 @@ function MobileWorkbench({
   generationWarning,
   height,
   isEcommerceGenerating,
+  isEcommerceExtraDirectionOptimizing,
   isGenerating,
   mobileReferenceImage,
   outputFormat,
@@ -2447,9 +3248,16 @@ function MobileWorkbench({
   onDownloadHistoryRecord,
   onNavigate,
   onOpenGallery,
+  onOptimizeEcommerceExtraDirection,
+  onOptimizePrompt,
   onRerunHistoryRecord,
-  onSelectEcommerceImage,
+  onRemoveEcommerceDocument,
+  onRemoveEcommerceReferenceImage,
+	  onSelectEcommerceImages,
+  onSelectEcommerceDocuments,
   onSelectEcommerceMode,
+  onSelectEcommerceReplacementImage,
+  onRemoveEcommerceTargetImage,
   onSelectEcommerceScene,
   onSelectMobileReferenceImage,
   onSelectSizePreset,
@@ -2473,15 +3281,19 @@ function MobileWorkbench({
   onSetStylePreset,
   onSetWidth,
   onSubmitEcommerce,
-  onSubmitGeneration
+  onSubmitGeneration,
+  isPromptOptimizing
 }: {
   activeTab: MobileCreateTab;
   canGenerate: boolean;
   count: GenerationCount;
   ecommerceCount: GenerationCount;
   ecommerceDescription: string;
+  ecommerceDocuments: EcommerceDocumentSource[];
   ecommerceExtraDirection: string;
-  ecommerceImage: EcommerceImageSource | null;
+  ecommerceImages: EcommerceReferenceImageSource[];
+  ecommerceReplacementImage: EcommerceImageSource | null;
+  ecommerceTargetImages: EcommerceTargetImageSource[];
   ecommerceMarket: EcommerceMarket;
   ecommerceMode: EcommerceGenerationMode;
   ecommercePlatform: EcommercePlatform;
@@ -2497,6 +3309,7 @@ function MobileWorkbench({
   generationWarning: string;
   height: number;
   isEcommerceGenerating: boolean;
+  isEcommerceExtraDirectionOptimizing: boolean;
   isGenerating: boolean;
   mobileReferenceImage: MobileReferenceImageSource | null;
   outputFormat: OutputFormat;
@@ -2513,9 +3326,16 @@ function MobileWorkbench({
   onDownloadHistoryRecord: (record: GenerationRecord) => void;
   onNavigate: (route: AppRoute) => void;
   onOpenGallery: () => void;
+  onOptimizeEcommerceExtraDirection: () => void;
+  onOptimizePrompt: () => void;
   onRerunHistoryRecord: (record: GenerationRecord) => void;
-  onSelectEcommerceImage: (file: File | undefined) => void;
+  onRemoveEcommerceDocument: (id: string) => void;
+  onRemoveEcommerceReferenceImage: (id: string) => void;
+	  onSelectEcommerceImages: (files: FileList | File[] | null | undefined) => void;
+  onSelectEcommerceDocuments: (files: FileList | File[] | null | undefined) => void;
   onSelectEcommerceMode: (mode: EcommerceGenerationMode) => void;
+  onSelectEcommerceReplacementImage: (file: File | undefined) => void;
+  onRemoveEcommerceTargetImage: (id: string) => void;
   onSelectEcommerceScene: (sceneId: EcommerceSceneTemplateId) => void;
   onSelectMobileReferenceImage: (file: File | undefined) => void;
   onSelectSizePreset: (presetId: string) => void;
@@ -2540,12 +3360,27 @@ function MobileWorkbench({
   onSetWidth: (value: string) => void;
   onSubmitEcommerce: () => void;
   onSubmitGeneration: () => void;
+  isPromptOptimizing: boolean;
 }) {
   const selectedRecord = generationHistory.find((record) => record.id === selectedRecordId) ?? generationHistory[0] ?? null;
   const resultAssets = selectedRecord ? generatedAssetsForRecord(selectedRecord) : [];
   const packageRemaining = user.packageRemaining ?? Math.max(0, (user.quotaTotal ?? 0) - (user.quotaUsed ?? 0));
   const activeScenes = ecommerceMode === "category-kit" ? [] : ECOMMERCE_SCENE_TEMPLATES.filter((item) => item.mode === ecommerceMode);
-  const ecommerceOutputCount = ecommerceMode === "category-kit" ? 0 : ecommerceSceneIds.length * (ecommerceMode === "single-poster" ? 1 : ecommerceCount);
+	  const ecommerceImage = ecommerceImages[0] ?? null;
+	  const ecommerceReferenceLimit = ecommerceReferenceUploadLimit(ecommerceMode);
+	  const ecommerceUploadTitle =
+	    ecommerceMode === "one-click-replace" ? "上传目标图" : ecommerceMode === "text-translation" ? "上传待翻译图片" : "上传产品图";
+	  const ecommerceUploadPrimaryText =
+	    ecommerceMode === "one-click-replace" ? "上传模特/场景图" : ecommerceMode === "text-translation" ? "上传待翻译图片" : "上传产品图";
+	  const oneClickTargetCount = ecommerceTargetImages.length;
+  const ecommerceOutputCount =
+    ecommerceMode === "category-kit"
+      ? 0
+      : ecommerceMode === "one-click-replace"
+        ? Math.max(1, oneClickTargetCount)
+        : ecommerceMode === "text-translation"
+          ? Math.max(1, ecommerceImages.length)
+          : ecommerceSceneIds.length * (ecommerceMode === "single-poster" ? 1 : ecommerceCount);
   const isCreateTab = activeTab === "ecommerce" || activeTab === "creative" || activeTab === "history";
   const recentAssets = generationHistory
     .flatMap((record) => generatedAssetsForRecord(record).map((asset) => ({ record, asset })))
@@ -2601,6 +3436,14 @@ function MobileWorkbench({
       icon: Maximize2,
       onClick: () => {
         onSelectEcommerceMode("single-poster");
+        onSetActiveTab("ecommerce");
+      }
+    },
+    {
+      label: "一键换装",
+      icon: Sparkles,
+      onClick: () => {
+        onSelectEcommerceMode("one-click-replace");
         onSetActiveTab("ecommerce");
       }
     },
@@ -2762,18 +3605,26 @@ function MobileWorkbench({
                 <h2>快捷生成</h2>
               </div>
               <div className="mobile-home-quick__body">
-                <label className={ecommerceImage ? "mobile-home-upload has-image" : "mobile-home-upload"}>
-                  {ecommerceImage ? (
-                    <img alt="产品图预览" src={ecommerceImage.previewUrl} />
-                  ) : (
-                    <span>
-                      <Cloud className="size-8" aria-hidden="true" />
-                      <strong>上传产品图</strong>
-                      <small>支持 JPG / PNG</small>
-                    </span>
-                  )}
-                  <input accept="image/png,image/jpeg,image/webp" type="file" onChange={(event) => onSelectEcommerceImage(event.target.files?.[0])} />
-                </label>
+	                <label className={ecommerceImage ? "mobile-home-upload has-image" : "mobile-home-upload"}>
+	                  {ecommerceImage ? (
+	                    <img alt="产品图预览" src={ecommerceImage.previewUrl} />
+	                  ) : (
+	                    <span>
+	                      <Cloud className="size-8" aria-hidden="true" />
+	                      <strong>上传产品图</strong>
+	                      <small>最多 3 张，主图 + 细节图</small>
+	                    </span>
+	                  )}
+	                  <input
+	                    accept="image/png,image/jpeg,image/webp"
+	                    multiple
+	                    type="file"
+	                    onChange={(event) => {
+		                      onSelectEcommerceImages(event.target.files);
+	                      event.currentTarget.value = "";
+	                    }}
+	                  />
+	                </label>
 
                 <div className="mobile-home-quick__controls">
                   <div className="mobile-home-control-group">
@@ -2829,7 +3680,7 @@ function MobileWorkbench({
                 {recentAssets.length > 0
                   ? recentAssets.map(({ record, asset }) => (
                       <article className="mobile-home-work-card" key={`${record.id}-${asset.id}`}>
-                        <img alt={record.prompt || "生成作品"} src={assetDisplayUrl(asset, 512)} />
+                        <GeneratedAssetPreview alt={record.prompt || "生成作品"} asset={asset} />
                         <div className="mobile-home-work-card__actions">
                           <a aria-label="下载作品" href={authenticatedAssetUrl(`/api/assets/${encodeURIComponent(asset.id)}/download`)} target="_blank" rel="noreferrer">
                             <Download className="size-5" aria-hidden="true" />
@@ -2900,30 +3751,105 @@ function MobileWorkbench({
             <section className="mobile-create-panel">
               <div className="mobile-create-panel__head">
                 <Cloud className="size-5" aria-hidden="true" />
-                <h2>上传产品图</h2>
+	                <h2>{ecommerceUploadTitle}</h2>
+	              </div>
+	              <div className="mobile-create-upload-grid">
+	                <label
+	                  className={[
+	                    ecommerceMode === "one-click-replace" || ecommerceImages.length > 1 ? "mobile-create-product-shot mobile-create-product-shot--multi" : "mobile-create-product-shot",
+	                    ecommerceMode === "one-click-replace" ? ecommerceTargetImages.length > 0 ? "has-image" : "" : ecommerceImages.length > 0 ? "has-image" : ""
+	                  ].filter(Boolean).join(" ")}
+	                >
+	                  {ecommerceMode === "one-click-replace" && ecommerceTargetImages.length > 0 ? (
+                    <span className="mobile-target-preview-grid">
+                      {ecommerceTargetImages.slice(0, 4).map((image, index) => (
+                        <span key={image.id} className="mobile-target-preview-tile">
+                          <img alt={`目标图预览 ${index + 1}`} src={image.previewUrl} />
+                        </span>
+	                      ))}
+	                      {ecommerceTargetImages.length > 4 ? <i>+{ecommerceTargetImages.length - 4}</i> : null}
+	                    </span>
+	                  ) : ecommerceImages.length > 1 ? (
+	                    <span className="mobile-target-preview-grid">
+	                      {ecommerceImages.slice(0, 4).map((image, index) => (
+	                        <span key={image.id} className="mobile-target-preview-tile">
+	                          <img alt={`产品参考图预览 ${index + 1}`} src={image.previewUrl} />
+	                        </span>
+	                      ))}
+	                      {ecommerceImages.length > 4 ? <i>+{ecommerceImages.length - 4}</i> : null}
+	                    </span>
+	                  ) : ecommerceImage ? (
+	                    <img alt={ecommerceMode === "one-click-replace" ? "目标图预览" : "产品图预览"} src={ecommerceImage.previewUrl} />
+	                  ) : (
+	                    <span className="mobile-create-upload-empty">
+	                      <Cloud className="size-8" aria-hidden="true" />
+	                      <strong>{ecommerceUploadPrimaryText}</strong>
+	                      <small>{ecommerceMode === "one-click-replace" ? "可多选，逐张换装/换品" : ecommerceReferenceUploadHint(ecommerceMode)}</small>
+	                    </span>
+	                  )}
+	                  <input
+	                    accept="image/png,image/jpeg,image/webp"
+	                    multiple
+	                    type="file"
+	                    onChange={(event) => {
+		                      onSelectEcommerceImages(event.target.files);
+                      event.currentTarget.value = "";
+                    }}
+                  />
+                </label>
+	                <label className="mobile-create-reupload">
+	                  <Cloud className="size-9" aria-hidden="true" />
+	                  <strong>{ecommerceMode === "one-click-replace" && ecommerceTargetImages.length > 0 ? `继续添加 ${ecommerceTargetImages.length} 张` : ecommerceImages.length > 0 ? `继续添加 ${ecommerceImages.length}/${ecommerceReferenceLimit}` : "选择图片"}</strong>
+	                  <small>{ecommerceMode === "one-click-replace" ? "目标图需主体完整" : ecommerceReferenceUploadHint(ecommerceMode)}</small>
+	                  <input
+	                    accept="image/png,image/jpeg,image/webp"
+	                    multiple
+	                    type="file"
+	                    onChange={(event) => {
+		                      onSelectEcommerceImages(event.target.files);
+                      event.currentTarget.value = "";
+                    }}
+                  />
+                </label>
               </div>
-              <div className="mobile-create-upload-grid">
-                <label className={ecommerceImage ? "mobile-create-product-shot has-image" : "mobile-create-product-shot"}>
-                  {ecommerceImage ? (
-                    <img alt="产品图预览" src={ecommerceImage.previewUrl} />
+              {ecommerceMode === "one-click-replace" && ecommerceTargetImages.length > 0 ? (
+                <div className="mobile-target-list" aria-label="已选择目标图">
+                  {ecommerceTargetImages.map((image, index) => (
+                    <button key={image.id} type="button" onClick={() => onRemoveEcommerceTargetImage(image.id)}>
+                      <img alt={`目标图 ${index + 1}`} src={image.previewUrl} />
+                      <span>目标 {index + 1}</span>
+                      <X className="size-3" aria-hidden="true" />
+                    </button>
+	                  ))}
+	                </div>
+	              ) : null}
+	              {ecommerceMode !== "one-click-replace" && ecommerceImages.length > 0 ? (
+	                <div className="mobile-target-list" aria-label="已选择产品参考图">
+	                  {ecommerceImages.map((image, index) => (
+	                    <button key={image.id} type="button" onClick={() => onRemoveEcommerceReferenceImage(image.id)}>
+	                      <img alt={`产品参考图 ${index + 1}`} src={image.previewUrl} />
+	                      <span>{ecommerceReferenceRoleLabel(ecommerceMode, index)}</span>
+	                      <X className="size-3" aria-hidden="true" />
+	                    </button>
+	                  ))}
+	                </div>
+	              ) : null}
+	              {ecommerceMode === "one-click-replace" ? (
+	                <label className={ecommerceReplacementImage ? "mobile-create-reupload has-image mt-3" : "mobile-create-reupload mt-3"}>
+                  {ecommerceReplacementImage ? (
+                    <img alt="要换进去的衣服或商品图预览" src={ecommerceReplacementImage.previewUrl} />
                   ) : (
-                    <span className="mobile-create-upload-empty">
-                      <Cloud className="size-8" aria-hidden="true" />
-                      <strong>上传产品图</strong>
-                      <small>支持 JPG / PNG</small>
-                    </span>
+                    <Sparkles className="size-9" aria-hidden="true" />
                   )}
-                  <input accept="image/png,image/jpeg,image/webp" type="file" onChange={(event) => onSelectEcommerceImage(event.target.files?.[0])} />
+                  <strong>{ecommerceReplacementImage ? "已选择换装/换品图" : "上传要换的衣服/商品"}</strong>
+                  <small>作为第二张参考图传给模型</small>
+                  <input accept="image/png,image/jpeg,image/webp" type="file" onChange={(event) => onSelectEcommerceReplacementImage(event.target.files?.[0])} />
                 </label>
-                <label className="mobile-create-reupload">
-                  <Cloud className="size-9" aria-hidden="true" />
-                  <strong>{ecommerceImage ? "重新上传" : "选择图片"}</strong>
-                  <small>建议正面图，效果更佳</small>
-                  <input accept="image/png,image/jpeg,image/webp" type="file" onChange={(event) => onSelectEcommerceImage(event.target.files?.[0])} />
-                </label>
-              </div>
-              {ecommerceImage ? <p className="mobile-create-image-ok"><CheckCircle2 className="size-4" aria-hidden="true" />图像清晰，主体完整</p> : null}
-            </section>
+              ) : null}
+	              {(ecommerceMode === "one-click-replace" ? ecommerceTargetImages.length > 0 : ecommerceImages.length > 0) ? (
+	                <p className="mobile-create-image-ok"><CheckCircle2 className="size-4" aria-hidden="true" />{ecommerceMode === "one-click-replace" ? `已选择 ${ecommerceTargetImages.length} 张目标图，将分别生成` : `已选择 ${ecommerceImages.length}/${ecommerceReferenceLimit} 张参考图`}</p>
+	              ) : null}
+	            </section>
 
             <section className="mobile-create-panel">
               <div className="mobile-create-panel__head">
@@ -2932,12 +3858,12 @@ function MobileWorkbench({
               </div>
               <div className="mobile-create-info-table">
                 <label>
-                  <span>商品名称</span>
-                  <input placeholder="例如：舒缓修护精华液" value={ecommerceTitle} onChange={(event) => onSetEcommerceTitle(event.target.value)} />
+	                  <span>{ecommerceMode === "one-click-replace" || ecommerceMode === "text-translation" ? "品名（可选）" : "商品名称"}</span>
+                  <input placeholder={ecommerceMode === "one-click-replace" ? "例如：白色衬衫 / 香薰瓶" : "例如：舒缓修护精华液"} value={ecommerceTitle} onChange={(event) => onSetEcommerceTitle(event.target.value)} />
                 </label>
                 <label>
-                  <span>商品描述</span>
-                  <input placeholder="核心卖点、材质、适用场景" value={ecommerceDescription} onChange={(event) => onSetEcommerceDescription(event.target.value)} />
+                  <span>{ecommerceMode === "one-click-replace" ? "补充提示词" : "商品描述"}</span>
+                  <input placeholder={ecommerceMode === "one-click-replace" ? "例如：保留原背景，衣服自然合身" : "核心卖点、材质、适用场景"} value={ecommerceDescription} onChange={(event) => onSetEcommerceDescription(event.target.value)} />
                 </label>
                 <label>
                   <span>{ecommerceMode === "text-translation" ? "目标语言" : "平台模板"}</span>
@@ -2955,17 +3881,48 @@ function MobileWorkbench({
                     </select>
                   )}
                 </label>
-                <div className="mobile-create-color-row">
-                  <span>主色调（可选）</span>
-                  <div className="mobile-create-swatches" aria-hidden="true">
+	                <div className="mobile-create-color-row">
+	                  <span>主色调（可选）</span>
+	                  <div className="mobile-create-swatches" aria-hidden="true">
                     <em style={{ background: "#b43a1c" }} />
                     <em style={{ background: "#e7c9a5" }} />
                     <em style={{ background: "#e9dfd0" }} />
                     <em style={{ background: "#73845d" }} />
-                  </div>
-                </div>
-              </div>
-            </section>
+	                  </div>
+	                </div>
+	              </div>
+	              <div className="mobile-document-upload">
+	                <label>
+	                  <BookOpen className="size-5" aria-hidden="true" />
+	                  <span>
+	                    <strong>上传商品资料</strong>
+	                    <small>doc / pdf / excel / csv / txt，最多 {MAX_ECOMMERCE_DOCUMENTS} 个</small>
+	                  </span>
+	                  <input
+	                    accept={ECOMMERCE_DOCUMENT_ACCEPT}
+	                    multiple
+	                    type="file"
+	                    onChange={(event) => {
+	                      onSelectEcommerceDocuments(event.target.files);
+	                      event.currentTarget.value = "";
+	                    }}
+	                  />
+	                </label>
+	                {ecommerceDocuments.length > 0 ? (
+	                  <div className="mobile-document-list">
+	                    {ecommerceDocuments.map((document) => (
+	                      <button key={document.id} type="button" onClick={() => onRemoveEcommerceDocument(document.id)}>
+	                        <span>{document.fileName}</span>
+	                        <small>{formatFileSize(document.size)}</small>
+	                        <X className="size-3" aria-hidden="true" />
+	                      </button>
+	                    ))}
+	                  </div>
+	                ) : (
+	                  <p>文本类会自动读取摘要；PDF / Office 资料请把关键内容补到描述或补充方向。</p>
+	                )}
+	              </div>
+	            </section>
 
             <section className="mobile-create-panel">
               <div className="mobile-create-panel__head">
@@ -3021,11 +3978,17 @@ function MobileWorkbench({
                   <strong>后台动态规划</strong>
                 ) : (
                   <>
-                    <button type="button" onClick={() => onSetEcommerceCount(Math.max(1, ecommerceCount - 1) as GenerationCount)}>−</button>
-                    <strong>{ecommerceMode === "single-poster" ? 1 : ecommerceCount}</strong>
-                    <button type="button" onClick={() => onSetEcommerceCount(Math.min(4, ecommerceCount + 1) as GenerationCount)}>+</button>
-                  </>
-                )}
+	                    {ecommerceMode === "text-translation" ? (
+	                      <strong>每图 1 张</strong>
+	                    ) : (
+	                      <>
+	                        <button type="button" onClick={() => onSetEcommerceCount(Math.max(1, ecommerceCount - 1) as GenerationCount)}>−</button>
+	                        <strong>{ecommerceMode === "single-poster" || ecommerceMode === "one-click-replace" ? 1 : ecommerceCount}</strong>
+	                        <button type="button" onClick={() => onSetEcommerceCount(Math.min(4, ecommerceCount + 1) as GenerationCount)}>+</button>
+	                      </>
+	                    )}
+	                  </>
+	                )}
               </div>
             </section>
 
@@ -3041,17 +4004,23 @@ function MobileWorkbench({
                 </span>
                 <input checked={ecommerceRemoveWatermark} type="checkbox" onChange={(event) => onSetEcommerceRemoveWatermark(event.target.checked)} />
               </label>
-              <label className="mobile-create-note">
-                <span>补充方向</span>
-                <textarea placeholder="例如：模特不露脸；不要新增夸大宣传文字" value={ecommerceExtraDirection} onChange={(event) => onSetEcommerceExtraDirection(event.target.value)} />
-              </label>
+              <div className="mobile-create-note">
+                <div className="mobile-create-note__heading">
+                  <span>补充方向</span>
+                  <button className="prompt-optimize-button" disabled={!ecommerceExtraDirection.trim() || isEcommerceExtraDirectionOptimizing} type="button" onClick={onOptimizeEcommerceExtraDirection}>
+                    {isEcommerceExtraDirectionOptimizing ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : <Sparkles className="size-3.5" aria-hidden="true" />}
+                    <span>{isEcommerceExtraDirectionOptimizing ? "优化中" : "优化提示词"}</span>
+                  </button>
+                </div>
+                <textarea aria-label="补充方向" placeholder="例如：模特不露脸；不要新增夸大宣传文字" value={ecommerceExtraDirection} onChange={(event) => onSetEcommerceExtraDirection(event.target.value)} />
+              </div>
             </section>
 
             <div className="mobile-sticky-action">
               <button className="mobile-create-submit" disabled={isEcommerceGenerating} type="button" onClick={onSubmitEcommerce}>
                 {isEcommerceGenerating ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Workflow className="size-4" aria-hidden="true" />}
                 <span>
-                  <strong>{isEcommerceGenerating ? "电商图生成中" : ecommerceMode === "category-kit" ? "生成品类套图" : `生成 ${ecommerceOutputCount || 1} 张电商图`}</strong>
+                  <strong>{isEcommerceGenerating ? "电商图生成中" : ecommerceMode === "category-kit" ? "生成品类套图" : ecommerceMode === "one-click-replace" ? "一键换装/换品" : `生成 ${ecommerceOutputCount || 1} 张电商图`}</strong>
                   <small>{ecommerceMode === "category-kit" ? "由后台规划后按实际图片数计费" : `预计消耗 ${ecommerceOutputCount || 1} 额度`}</small>
                 </span>
               </button>
@@ -3098,10 +4067,16 @@ function MobileWorkbench({
                   参考图
                 </button>
               </div>
-              <label>
-                <span className="control-label">提示词</span>
-                <textarea className="prompt-textarea" placeholder="描述画面主体、场景、光线、构图和关键细节" value={prompt} onChange={(event) => onSetPrompt(event.target.value)} />
-              </label>
+              <div>
+                <div className="prompt-field-heading">
+                  <span className="control-label">提示词</span>
+                  <button className="prompt-optimize-button" disabled={!prompt.trim() || isPromptOptimizing} type="button" onClick={onOptimizePrompt}>
+                    {isPromptOptimizing ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : <Sparkles className="size-3.5" aria-hidden="true" />}
+                    <span>{isPromptOptimizing ? "优化中" : "优化提示词"}</span>
+                  </button>
+                </div>
+                <textarea aria-label="提示词" className="prompt-textarea" placeholder="描述画面主体、场景、光线、构图和关键细节" value={prompt} onChange={(event) => onSetPrompt(event.target.value)} />
+              </div>
               {!prompt.trim() ? (
                 <div className="mobile-chip-grid">
                   {promptStarters.map((starter) => (
@@ -3237,7 +4212,7 @@ function MobileWorkbench({
                 <div className="mobile-result-grid">
                   {resultAssets.map((asset) => (
                     <article className="mobile-result-card" key={asset.id}>
-                      <img alt={selectedRecord?.prompt ?? "生成结果"} src={assetDisplayUrl(asset, 512)} />
+                      <GeneratedAssetPreview alt={selectedRecord?.prompt ?? "生成结果"} asset={asset} controls={isVideoAsset(asset)} />
                       <div className="grid gap-2">
                         <p className="m-0 truncate text-xs font-bold text-neutral-600">{asset.width} x {asset.height}</p>
                         <a className="secondary-action h-9 text-xs" href={authenticatedAssetUrl(`/api/assets/${encodeURIComponent(asset.id)}/download`)} target="_blank" rel="noreferrer">
@@ -3265,7 +4240,7 @@ function MobileWorkbench({
                   </button>
                   <button className="secondary-action h-10" type="button" onClick={() => onDownloadHistoryRecord(selectedRecord)}>
                     <Download className="size-4" aria-hidden="true" />
-                    下载首图
+                    {selectedRecord.outputFormat === "mp4" ? "下载视频" : "下载首图"}
                   </button>
                 </div>
               ) : null}
@@ -3285,10 +4260,10 @@ function MobileWorkbench({
                     const asset = firstDownloadableAsset(record);
                     return (
                       <button className="mobile-history-card text-left" key={record.id} type="button" onClick={() => onSetSelectedRecordId(record.id)}>
-                        {asset ? <img alt={record.prompt} src={assetDisplayUrl(asset, 512)} /> : <div className="grid place-items-center bg-neutral-100"><Loader2 className={record.status === "running" ? "size-5 animate-spin" : "size-5"} aria-hidden="true" /></div>}
+                        {asset ? <GeneratedAssetPreview alt={record.prompt} asset={asset} /> : <div className="grid place-items-center bg-neutral-100"><Loader2 className={record.status === "running" ? "size-5 animate-spin" : "size-5"} aria-hidden="true" /></div>}
                         <span className="grid content-center gap-1">
                           <strong className="truncate text-sm">{promptExcerpt(record.prompt)}</strong>
-                          <small className="text-xs font-semibold text-neutral-500">{statusLabels[record.status]} · {successfulOutputCount(record)} / {record.outputs.length || record.count} 张 · {formatCreatedTime(record.createdAt)}</small>
+                          <small className="text-xs font-semibold text-neutral-500">{statusLabels[record.status]} · {successfulOutputCount(record)} / {record.outputs.length || record.count} {recordOutputUnitLabel(record)} · {formatCreatedTime(record.createdAt)}</small>
                         </span>
                       </button>
                     );
@@ -3328,12 +4303,109 @@ function ClockIconFallback() {
   return <Cloud className="size-5 text-teal-700" aria-hidden="true" />;
 }
 
+function NotificationCenter({
+  notifications,
+  unreadCount,
+  isOpen,
+  onOpenChange,
+  onMarkAllRead,
+  onNotificationAction
+}: NotificationCenterProps) {
+  return (
+    <div className="notification-center">
+      <button
+        aria-expanded={isOpen}
+        aria-label={`消息通知，${unreadCount} 条未读`}
+        className="notification-bell"
+        data-has-unread={unreadCount > 0}
+        type="button"
+        onClick={() => onOpenChange(!isOpen)}
+      >
+        <Bell className="size-4" aria-hidden="true" />
+        {unreadCount > 0 ? <span className="notification-bell__badge">{unreadCount > 99 ? "99+" : unreadCount}</span> : null}
+      </button>
+      {isOpen ? (
+        <div className="notification-panel" role="dialog" aria-label="消息中心">
+          <div className="notification-panel__header">
+            <div>
+              <strong>消息中心</strong>
+              <span>{unreadCount > 0 ? `${unreadCount} 条未读` : "暂无未读"}</span>
+            </div>
+            <button type="button" onClick={onMarkAllRead} disabled={unreadCount === 0}>
+              全部已读
+            </button>
+          </div>
+          <div className="notification-panel__list">
+            {notifications.length ? (
+              notifications.map((notification) => (
+                <button
+                  key={notification.id}
+                  className="notification-item"
+                  data-unread={!notification.readAt}
+                  type="button"
+                  onClick={() => onNotificationAction(notification)}
+                >
+                  <span className="notification-item__dot" data-severity={notification.severity} />
+                  <span className="notification-item__copy">
+                    <strong>{notification.title}</strong>
+                    <span>{notification.body}</span>
+                    <time dateTime={notification.createdAt}>{formatNotificationTime(notification.createdAt)}</time>
+                  </span>
+                </button>
+              ))
+            ) : (
+              <div className="notification-empty">还没有消息</div>
+            )}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function NotificationToast({ notification, onClose, onView }: NotificationToastProps) {
+  return (
+    <div className="notification-toast" role="status">
+      <span className="notification-toast__icon" data-severity={notification.severity}>
+        <Bell className="size-4" aria-hidden="true" />
+      </span>
+      <div className="notification-toast__copy">
+        <strong>{notification.title}</strong>
+        <span>{notification.body}</span>
+      </div>
+      <button type="button" onClick={onView}>
+        查看
+      </button>
+      <button aria-label="关闭通知" className="notification-toast__close" type="button" onClick={onClose}>
+        <X className="size-4" aria-hidden="true" />
+      </button>
+    </div>
+  );
+}
+
+function formatNotificationTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
 function TopNavigation({
   route,
   user,
   generationHistoryCount,
   ecommerceStats,
+  notifications,
+  notificationUnreadCount,
+  isNotificationCenterOpen,
   onOpenGenerationHistory,
+  onNotificationCenterOpenChange,
+  onMarkAllNotificationsRead,
+  onNotificationAction,
   onNavigate,
   onPreloadGallery,
   onLogout
@@ -3342,7 +4414,13 @@ function TopNavigation({
   user: AuthUser;
   generationHistoryCount: number;
   ecommerceStats: EcommerceStatsResponse;
+  notifications: AppNotification[];
+  notificationUnreadCount: number;
+  isNotificationCenterOpen: boolean;
   onOpenGenerationHistory: () => void;
+  onNotificationCenterOpenChange: (open: boolean) => void;
+  onMarkAllNotificationsRead: () => void;
+  onNotificationAction: (notification: AppNotification) => void;
   onNavigate: (route: AppRoute) => void;
   onPreloadGallery: () => void;
   onLogout: () => void;
@@ -3459,6 +4537,14 @@ function TopNavigation({
           <span>图 {ecommerceStats.generatedImages}</span>
         </div>
         <div className="top-navigation__account">
+          <NotificationCenter
+            isOpen={isNotificationCenterOpen}
+            notifications={notifications}
+            unreadCount={notificationUnreadCount}
+            onMarkAllRead={onMarkAllNotificationsRead}
+            onNotificationAction={onNotificationAction}
+            onOpenChange={onNotificationCenterOpenChange}
+          />
           <button
             className="quota-chip"
             data-testid="quota-chip"
@@ -4120,13 +5206,21 @@ export function App() {
   const [generationMode, setGenerationMode] = useState<GenerationMode>("text");
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("plugins");
   const [ecommerceMode, setEcommerceMode] = useState<EcommerceGenerationMode>("enhance");
-  const [ecommerceImage, setEcommerceImage] = useState<EcommerceImageSource | null>(null);
+  const [ecommerceImages, setEcommerceImages] = useState<EcommerceReferenceImageSource[]>([]);
+  const [ecommerceReplacementImage, setEcommerceReplacementImage] = useState<EcommerceImageSource | null>(null);
+  const [ecommerceTargetImages, setEcommerceTargetImages] = useState<EcommerceTargetImageSource[]>([]);
+  const [activeEcommerceUploadSlot, setActiveEcommerceUploadSlot] = useState<EcommerceUploadSlot>("target");
+  const [draggingEcommerceUploadSlot, setDraggingEcommerceUploadSlot] = useState<EcommerceUploadSlot | null>(null);
   const [ecommerceTitle, setEcommerceTitle] = useState("");
   const [ecommerceDescription, setEcommerceDescription] = useState("");
   const [ecommerceTargetCustomer, setEcommerceTargetCustomer] = useState("");
   const [ecommerceUsageScene, setEcommerceUsageScene] = useState("");
   const [ecommerceMaterial, setEcommerceMaterial] = useState("");
   const [ecommerceColor, setEcommerceColor] = useState("");
+  const [ecommerceCategoryPath, setEcommerceCategoryPath] = useState("");
+  const [ecommerceCategoryName, setEcommerceCategoryName] = useState("");
+  const [ecommerceCategoryKitAssets, setEcommerceCategoryKitAssets] = useState<CategoryKitAssetSource[]>([]);
+  const [categoryKitPrepare, setCategoryKitPrepare] = useState<CategoryKitPrepareState>(emptyCategoryKitPrepare);
   const [ecommercePlatform, setEcommercePlatform] = useState<EcommercePlatform>("taobao");
   const [ecommerceMarket, setEcommerceMarket] = useState<EcommerceMarket>("cn");
   const [ecommerceTextLanguage, setEcommerceTextLanguage] = useState<EcommerceTextLanguage>("en");
@@ -4135,6 +5229,7 @@ export function App() {
   const [ecommerceCount, setEcommerceCount] = useState<GenerationCount>(1);
   const [ecommerceRemoveWatermark, setEcommerceRemoveWatermark] = useState(true);
   const [ecommerceExtraDirection, setEcommerceExtraDirection] = useState("");
+  const [ecommerceDocuments, setEcommerceDocuments] = useState<EcommerceDocumentSource[]>([]);
   const [isEcommerceGenerating, setIsEcommerceGenerating] = useState(false);
   const [ecommerceStats, setEcommerceStats] = useState<EcommerceStatsResponse>(emptyEcommerceStats);
   const [mobileCreateTab, setMobileCreateTab] = useState<MobileCreateTab>("home");
@@ -4156,6 +5251,8 @@ export function App() {
   const [generationError, setGenerationError] = useState("");
   const [generationMessage, setGenerationMessage] = useState("");
   const [generationWarning, setGenerationWarning] = useState("");
+  const [isPromptOptimizing, setIsPromptOptimizing] = useState(false);
+  const [isEcommerceExtraDirectionOptimizing, setIsEcommerceExtraDirectionOptimizing] = useState(false);
   const [generationHistory, setGenerationHistory] = useState<GenerationRecord[]>([]);
   const [isHistoryExpanded, setIsHistoryExpanded] = useState(false);
   const [isMobileDrawer, setIsMobileDrawer] = useState(false);
@@ -4163,6 +5260,10 @@ export function App() {
   const [pluginGuideLinks, setPluginGuideLinks] = useState<PluginGuideLinks>(defaultPluginGuideLinks);
   const [isPluginGuideOpen, setIsPluginGuideOpen] = useState(false);
   const [isGuestQuotaModalOpen, setIsGuestQuotaModalOpen] = useState(false);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [notificationUnreadCount, setNotificationUnreadCount] = useState(0);
+  const [isNotificationCenterOpen, setIsNotificationCenterOpen] = useState(false);
+  const [toastNotification, setToastNotification] = useState<AppNotification | null>(null);
   const [demoCanvasExamples, setDemoCanvasExamples] = useState<DemoCanvasExample[]>(demoComparisonExamples);
   const [selectedDemoExampleId, setSelectedDemoExampleId] = useState(demoComparisonExamples[0]?.id ?? "");
   const [referenceSelection, setReferenceSelection] = useState<ReferenceSelection>(missingReferenceSelection);
@@ -4177,9 +5278,14 @@ export function App() {
   const pluginBrowserLabel = useMemo(() => browserLabel(browserKind), [browserKind]);
   const dismissedPluginPromptRef = useRef(false);
   const pluginProbeRequestRef = useRef(0);
+  const knownNotificationIdsRef = useRef<Set<string>>(new Set());
+  const notificationPollingInitializedRef = useRef(false);
   const canvasShellRef = useRef<HTMLElement | null>(null);
   const panelCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const editorRef = useRef<Editor | null>(null);
+  const ecommerceImagesRef = useRef<EcommerceReferenceImageSource[]>([]);
+  const ecommerceCategoryKitAssetsRef = useRef<CategoryKitAssetSource[]>([]);
+  const ecommerceTargetImagesRef = useRef<EcommerceTargetImageSource[]>([]);
   const generationModeRef = useRef<GenerationMode>("text");
   const activeGenerationsRef = useRef<Map<number, ActiveGenerationTask>>(new Map());
   const generationRequestRef = useRef(0);
@@ -4203,6 +5309,7 @@ export function App() {
   }, []);
   const isGenerating = activeGenerationCount > 0;
   const isAuthenticated = authStatus === "authenticated" && currentUser !== null;
+  const ecommerceImage = ecommerceImages[0] ?? null;
 
   const closePluginGuide = useCallback((): void => {
     dismissedPluginPromptRef.current = true;
@@ -4295,6 +5402,112 @@ export function App() {
       window.clearTimeout(timerId);
     };
   }, [currentUser, isAuthenticated, probeAndMaybeShowPluginPrompt, route]);
+
+  useEffect(() => {
+    if (sidebarTab === "video" && !isAdminUser(currentUser)) {
+      setSidebarTab("creative");
+    }
+  }, [currentUser, sidebarTab]);
+
+  const applyNotificationResponse = useCallback((data: AppNotificationListResponse): void => {
+    setNotifications(data.notifications ?? []);
+    setNotificationUnreadCount(data.unreadCount ?? 0);
+
+    const nextIds = new Set((data.notifications ?? []).map((notification) => notification.id));
+    if (notificationPollingInitializedRef.current) {
+      const newestTaskNotification = (data.notifications ?? []).find(
+        (notification) =>
+          notification.type === "ecommerce_job_finished" &&
+          !notification.readAt &&
+          !knownNotificationIdsRef.current.has(notification.id)
+      );
+      if (newestTaskNotification) {
+        setToastNotification(newestTaskNotification);
+      }
+    }
+    knownNotificationIdsRef.current = nextIds;
+    notificationPollingInitializedRef.current = true;
+  }, []);
+
+  const refreshNotifications = useCallback(
+    async (signal?: AbortSignal): Promise<void> => {
+      if (!isAuthenticated) {
+        setNotifications([]);
+        setNotificationUnreadCount(0);
+        setToastNotification(null);
+        knownNotificationIdsRef.current = new Set();
+        notificationPollingInitializedRef.current = false;
+        return;
+      }
+
+      const data = await fetchNotifications(30, signal);
+      if (!signal?.aborted) {
+        applyNotificationResponse(data);
+      }
+    },
+    [applyNotificationResponse, isAuthenticated]
+  );
+
+  const handleNotificationAction = useCallback(
+    (notification: AppNotification): void => {
+      setToastNotification((current) => (current?.id === notification.id ? null : current));
+      setIsNotificationCenterOpen(false);
+      if (!notification.readAt) {
+        void markNotificationReadRequest(notification.id)
+          .then(applyNotificationResponse)
+          .catch(() => undefined);
+      }
+
+      if (notification.type === "ecommerce_job_finished") {
+        navigateToRoute("gallery");
+        return;
+      }
+      if (notification.actionUrl?.startsWith("/account")) {
+        navigateToRoute("account");
+        return;
+      }
+      navigateToRoute("gallery");
+    },
+    [applyNotificationResponse, navigateToRoute]
+  );
+
+  const markAllNotificationsRead = useCallback((): void => {
+    void markAllNotificationsReadRequest()
+      .then(applyNotificationResponse)
+      .catch(() => undefined);
+  }, [applyNotificationResponse]);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setNotifications([]);
+      setNotificationUnreadCount(0);
+      setToastNotification(null);
+      knownNotificationIdsRef.current = new Set();
+      notificationPollingInitializedRef.current = false;
+      return;
+    }
+
+    const controller = new AbortController();
+    void refreshNotifications(controller.signal).catch(() => undefined);
+    const timerId = window.setInterval(() => {
+      void refreshNotifications(controller.signal).catch(() => undefined);
+    }, NOTIFICATION_POLLING_INTERVAL_MS);
+
+    return () => {
+      controller.abort();
+      window.clearInterval(timerId);
+    };
+  }, [isAuthenticated, refreshNotifications]);
+
+  useEffect(() => {
+    if (!toastNotification) {
+      return;
+    }
+    const timerId = window.setTimeout(() => setToastNotification(null), 7000);
+    return () => {
+      window.clearTimeout(timerId);
+    };
+  }, [toastNotification]);
 
   const handleAuthenticated = useCallback((session: AuthSession): void => {
     storeAuthToken(session.token);
@@ -4518,9 +5731,30 @@ export function App() {
     return () => controller.abort();
   }, [isAuthenticated]);
 
+  useEffect(() => {
+    ecommerceImagesRef.current = ecommerceImages;
+  }, [ecommerceImages]);
+
+  useEffect(() => {
+    ecommerceCategoryKitAssetsRef.current = ecommerceCategoryKitAssets;
+  }, [ecommerceCategoryKitAssets]);
+
+  useEffect(() => {
+    ecommerceTargetImagesRef.current = ecommerceTargetImages;
+  }, [ecommerceTargetImages]);
+
+  useEffect(() => {
+    return () => {
+      ecommerceImagesRef.current.forEach((image) => URL.revokeObjectURL(image.previewUrl));
+      ecommerceCategoryKitAssetsRef.current.forEach((asset) => URL.revokeObjectURL(asset.previewUrl));
+      ecommerceTargetImagesRef.current.forEach((image) => URL.revokeObjectURL(image.previewUrl));
+    };
+  }, []);
+
   const trimmedPrompt = prompt.trim();
   const promptValidationMessage = prompt.trim() ? "" : "请输入提示词。";
-  const dimensionValidationMessage = sizeValidationMessage(width, height);
+  const dimensionValidationMessage = blockingSizeValidationMessage(width, height);
+  const sizeNormalizationMessage = normalizedSizeNotice(width, height);
   const isReferenceMode = generationMode === "reference";
   const isReferenceReady = isReferenceMode && referenceSelection.status === "ready";
   const isMobileReferenceReady = isReferenceMode && Boolean(mobileReferenceImage);
@@ -4547,13 +5781,12 @@ export function App() {
       return;
     }
 
-    const nextWidth = Math.round(referenceSelectionWidth);
-    const nextHeight = Math.round(referenceSelectionHeight);
-    if (width !== nextWidth) {
-      setWidth(nextWidth);
+    const nextSize = resolvedGenerationSize(Math.round(referenceSelectionWidth), Math.round(referenceSelectionHeight));
+    if (width !== nextSize.width) {
+      setWidth(nextSize.width);
     }
-    if (height !== nextHeight) {
-      setHeight(nextHeight);
+    if (height !== nextSize.height) {
+      setHeight(nextSize.height);
     }
   }, [height, referenceSelectionHeight, referenceSelectionWidth, sizePresetId, width]);
 
@@ -4590,6 +5823,14 @@ export function App() {
       };
     }
 
+    if (sizeNormalizationMessage) {
+      return {
+        tone: "warning",
+        message: sizeNormalizationMessage,
+        testId: "validation-message"
+      };
+    }
+
     if (generationWarning) {
       return {
         tone: "warning",
@@ -4615,6 +5856,7 @@ export function App() {
     isGenerating,
     isMobileDrawer,
     shouldShowValidation,
+    sizeNormalizationMessage,
     validationMessage
   ]);
 
@@ -4740,6 +5982,21 @@ export function App() {
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [closeAiPanel, isAiPanelOpen, isMobileDrawer]);
+
+  useEffect(() => {
+    if (sidebarTab !== "plugins") {
+      return;
+    }
+
+    const handlePaste = (event: ClipboardEvent): void => {
+      void pasteEcommerceUploadImage(event);
+    };
+
+    window.addEventListener("paste", handlePaste);
+    return () => {
+      window.removeEventListener("paste", handlePaste);
+    };
+	  }, [activeEcommerceUploadSlot, sidebarTab, ecommerceImages, ecommerceMode, ecommerceReplacementImage, ecommerceTargetImages]);
 
   useEffect(() => {
     if (!isMobileDrawer || !isAiPanelOpen) {
@@ -4886,9 +6143,10 @@ export function App() {
         return;
       }
 
+      const nextSize = resolvedGenerationSize(Math.round(referenceSelection.width), Math.round(referenceSelection.height));
       setSizePresetId(ORIGINAL_SIZE_PRESET_ID);
-      setWidth(Math.round(referenceSelection.width));
-      setHeight(Math.round(referenceSelection.height));
+      setWidth(nextSize.width);
+      setHeight(nextSize.height);
       return;
     }
 
@@ -4919,18 +6177,143 @@ export function App() {
     setGenerationWarning("");
   }
 
-  function selectEcommerceMode(nextMode: EcommerceGenerationMode): void {
-    const nextScenes = ecommerceScenesByMode[nextMode];
-    const firstScene = ECOMMERCE_SCENE_TEMPLATES.find((item) => item.id === nextScenes[0]);
-    const nextPreset = firstScene ? SIZE_PRESETS.find((item) => item.id === firstScene.defaultSizePresetId) : undefined;
-
-    setEcommerceMode(nextMode);
-    setEcommerceSceneIds(nextScenes);
-    setEcommerceSizePresetId(nextPreset?.id ?? "square-1k");
-    if (nextMode === "single-poster" || nextMode === "category-kit") {
-      setEcommerceCount(1);
+  async function optimizePrompt(): Promise<void> {
+    const sourcePrompt = prompt.trim();
+    if (!sourcePrompt) {
+      setGenerationError("请输入提示词后再优化。");
+      setGenerationMessage("");
+      setGenerationWarning("");
+      return;
     }
+
+    setIsPromptOptimizing(true);
+    setGenerationError("");
+    setGenerationMessage("正在优化提示词。");
+    setGenerationWarning("");
+    try {
+      const response = await authFetch("/api/images/prompt/optimize", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          prompt: sourcePrompt,
+          mode: generationMode,
+          stylePresetId: stylePreset,
+          sizePresetId,
+          size: resolvedGenerationSize(width, height),
+          hasReferenceImage: generationMode === "reference" && (isMobileDrawer ? Boolean(mobileReferenceImage) : referenceSelection.status === "ready")
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+
+      const body = (await response.json()) as Partial<PromptOptimizeResponse>;
+      const optimizedPrompt = typeof body.optimizedPrompt === "string" ? body.optimizedPrompt.trim() : "";
+      if (!optimizedPrompt) {
+        throw new Error("提示词优化没有返回可用结果。");
+      }
+      setPrompt(optimizedPrompt);
+      setGenerationMessage("提示词已优化，可以直接生成或继续微调。");
+    } catch (error) {
+      setGenerationError(error instanceof Error ? error.message : "提示词优化失败，请稍后重试。");
+      setGenerationMessage("");
+    } finally {
+      setIsPromptOptimizing(false);
+    }
+  }
+
+  async function optimizeEcommerceExtraDirection(): Promise<void> {
+    const sourcePrompt = ecommerceExtraDirection.trim();
+    if (!sourcePrompt) {
+      setGenerationError("请输入补充方向后再优化。");
+      setGenerationMessage("");
+      setGenerationWarning("");
+      return;
+    }
+
+    const selectedSize = SIZE_PRESETS.find((item) => item.id === ecommerceSizePresetId) ?? SIZE_PRESETS[0];
+	    const hasReferenceImage =
+	      ecommerceMode === "one-click-replace"
+	        ? ecommerceTargetImages.length > 0 || Boolean(ecommerceReplacementImage)
+	        : ecommerceImages.length > 0;
+    const ecommercePresetId: StylePresetId =
+      ecommerceMode === "creative" || ecommerceMode === "one-click-replace" ? "photoreal" : ecommerceMode === "single-poster" ? "poster" : "product";
+
+    setIsEcommerceExtraDirectionOptimizing(true);
+    setGenerationError("");
+    setGenerationMessage("正在优化补充方向。");
+    setGenerationWarning("");
+    try {
+      const response = await authFetch("/api/images/prompt/optimize", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          prompt: sourcePrompt,
+          mode: hasReferenceImage ? "reference" : "text",
+          stylePresetId: ecommercePresetId,
+          sizePresetId: selectedSize.id,
+          size: {
+            width: selectedSize.width,
+            height: selectedSize.height
+          },
+          hasReferenceImage
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+
+      const body = (await response.json()) as Partial<PromptOptimizeResponse>;
+      const optimizedPrompt = typeof body.optimizedPrompt === "string" ? body.optimizedPrompt.trim() : "";
+      if (!optimizedPrompt) {
+        throw new Error("补充方向优化没有返回可用结果。");
+      }
+      setEcommerceExtraDirection(optimizedPrompt);
+      setGenerationMessage("补充方向已优化，可以继续微调或直接生成。");
+    } catch (error) {
+      setGenerationError(error instanceof Error ? error.message : "补充方向优化失败，请稍后重试。");
+      setGenerationMessage("");
+    } finally {
+      setIsEcommerceExtraDirectionOptimizing(false);
+    }
+  }
+
+	  function selectEcommerceMode(nextMode: EcommerceGenerationMode): void {
+	    const nextScenes = ecommerceScenesByMode[nextMode];
+	    const firstScene = ECOMMERCE_SCENE_TEMPLATES.find((item) => item.id === nextScenes[0]);
+	    const nextPreset = firstScene ? SIZE_PRESETS.find((item) => item.id === firstScene.defaultSizePresetId) : undefined;
+	    const nextReferenceLimit = ecommerceReferenceUploadLimit(nextMode);
+
+	    setEcommerceMode(nextMode);
+	    setEcommerceSceneIds(nextScenes);
+	    setEcommerceSizePresetId(nextPreset?.id ?? "square-1k");
+	    if (nextMode !== "one-click-replace" && ecommerceImagesRef.current.length > nextReferenceLimit) {
+	      setEcommerceImages((images) => {
+	        images.slice(nextReferenceLimit).forEach((image) => URL.revokeObjectURL(image.previewUrl));
+	        return images.slice(0, nextReferenceLimit);
+	      });
+	      setGenerationWarning(`当前模式最多支持 ${nextReferenceLimit} 张参考图，已保留前 ${nextReferenceLimit} 张。`);
+	    }
+	    if (nextMode === "single-poster" || nextMode === "category-kit" || nextMode === "one-click-replace" || nextMode === "text-translation") {
+	      setEcommerceCount(1);
+	    }
     setEcommerceTextLanguage(nextMode === "text-translation" ? ecommerceTextLanguage === "none" ? "en" : ecommerceTextLanguage : "none");
+  }
+
+  function selectEcommercePlatform(platform: EcommercePlatform): void {
+    setEcommercePlatform(platform);
+    if (CHINESE_ECOMMERCE_PLATFORM_IDS.has(platform)) {
+      setEcommerceMarket("cn");
+      return;
+    }
+    if (RUSSIAN_ECOMMERCE_PLATFORM_IDS.has(platform)) {
+      setEcommerceMarket("ru");
+      setEcommerceSizePresetId(OZON_SIZE_PRESET_ID);
+    }
   }
 
   async function selectEcommerceImage(file: File | undefined): Promise<void> {
@@ -4946,17 +6329,256 @@ export function App() {
       return;
     }
 
-    const previousPreviewUrl = ecommerceImage?.previewUrl;
+    if (ecommerceMode === "one-click-replace") {
+      if (ecommerceTargetImagesRef.current.length >= MAX_ONE_CLICK_TARGET_IMAGES) {
+        setGenerationError(`一次最多支持 ${MAX_ONE_CLICK_TARGET_IMAGES} 张目标图。`);
+        return;
+      }
+      const previewUrl = URL.createObjectURL(file);
+      const targetImage: EcommerceTargetImageSource = {
+        id: crypto.randomUUID(),
+        dataUrl: await blobToDataUrl(file),
+        fileName: fileNameWithImageExtension(file.name || "target-image", file.type),
+        previewUrl
+      };
+      setEcommerceTargetImages((images) => {
+        if (images.length >= MAX_ONE_CLICK_TARGET_IMAGES) {
+          URL.revokeObjectURL(targetImage.previewUrl);
+          return images;
+        }
+        return [...images, targetImage];
+      });
+      setGenerationError("");
+      setGenerationMessage("已添加目标图，多张会分别换装/换品生成。");
+      return;
+    }
+
+    const limit = ecommerceReferenceUploadLimit(ecommerceMode);
+    if (ecommerceImagesRef.current.length >= limit) {
+      setGenerationError(`当前模式最多支持 ${limit} 张图片。`);
+      return;
+    }
     const previewUrl = URL.createObjectURL(file);
-    setEcommerceImage({
+    const referenceImage: EcommerceReferenceImageSource = {
+      id: crypto.randomUUID(),
       dataUrl: await blobToDataUrl(file),
       fileName: fileNameWithImageExtension(file.name || "product-image", file.type),
+      previewUrl
+    };
+    setEcommerceImages((images) => {
+      if (images.length >= limit) {
+        URL.revokeObjectURL(referenceImage.previewUrl);
+        return images;
+      }
+      return [...images, referenceImage];
+    });
+    setGenerationError("");
+    setGenerationMessage(
+      ecommerceMode === "text-translation"
+        ? "已添加待翻译图片，会逐张翻译并分别返回。"
+        : `已添加产品参考图，最多可上传 ${limit} 张；第一张作为主体，后续作为细节依据。`
+    );
+    setCategoryKitPrepare(emptyCategoryKitPrepare);
+  }
+
+  async function selectEcommerceImages(files: FileList | File[] | null | undefined): Promise<void> {
+    const imageFiles = Array.from(files ?? []);
+    if (imageFiles.length === 0) {
+      return;
+    }
+    if (ecommerceMode === "one-click-replace") {
+      for (const file of imageFiles.slice(0, Math.max(0, MAX_ONE_CLICK_TARGET_IMAGES - ecommerceTargetImagesRef.current.length))) {
+        await selectEcommerceImage(file);
+      }
+      return;
+    }
+    const remainingSlots = Math.max(0, ecommerceReferenceUploadLimit(ecommerceMode) - ecommerceImagesRef.current.length);
+    if (remainingSlots === 0) {
+      setGenerationError(`当前模式最多支持 ${ecommerceReferenceUploadLimit(ecommerceMode)} 张图片。`);
+      return;
+    }
+    for (const file of imageFiles.slice(0, remainingSlots)) {
+      await selectEcommerceImage(file);
+    }
+    if (imageFiles.length > remainingSlots) {
+      setGenerationWarning(`已达到当前模式的图片数量上限，只添加了前 ${remainingSlots} 张。`);
+    }
+  }
+
+  function removeEcommerceReferenceImage(id: string): void {
+    setEcommerceImages((images) => {
+      const removed = images.find((image) => image.id === id);
+      if (removed) {
+        URL.revokeObjectURL(removed.previewUrl);
+      }
+      return images.filter((image) => image.id !== id);
+    });
+    setCategoryKitPrepare(emptyCategoryKitPrepare);
+  }
+
+  function removeEcommerceTargetImage(id: string): void {
+    setEcommerceTargetImages((images) => {
+      const removed = images.find((image) => image.id === id);
+      if (removed) {
+        URL.revokeObjectURL(removed.previewUrl);
+      }
+      return images.filter((image) => image.id !== id);
+    });
+  }
+
+  async function selectEcommerceDocuments(files: FileList | File[] | null | undefined): Promise<void> {
+    const documentFiles = Array.from(files ?? []);
+    if (!documentFiles.length) {
+      return;
+    }
+    const remainingSlots = Math.max(0, MAX_ECOMMERCE_DOCUMENTS - ecommerceDocuments.length);
+    if (remainingSlots === 0) {
+      setGenerationError(`最多上传 ${MAX_ECOMMERCE_DOCUMENTS} 个商品资料文档。`);
+      return;
+    }
+
+    try {
+      const documents = await Promise.all(documentFiles.slice(0, remainingSlots).map(readEcommerceDocument));
+      setEcommerceDocuments((current) => [...current, ...documents].slice(0, MAX_ECOMMERCE_DOCUMENTS));
+      setGenerationError("");
+      setGenerationMessage(`已添加 ${documents.length} 个商品资料文档，可作为生成依据。`);
+      if (documentFiles.length > remainingSlots) {
+        setGenerationWarning(`资料文档最多 ${MAX_ECOMMERCE_DOCUMENTS} 个，只添加了前 ${remainingSlots} 个。`);
+      }
+    } catch (error) {
+      setGenerationError(error instanceof Error ? error.message : "资料文档读取失败。");
+    }
+  }
+
+  function removeEcommerceDocument(id: string): void {
+    setEcommerceDocuments((documents) => documents.filter((document) => document.id !== id));
+  }
+
+  async function selectEcommerceReplacementImage(file: File | undefined): Promise<void> {
+    if (!file) {
+      return;
+    }
+    if (!isSupportedReferenceImageType(file.type)) {
+      setGenerationError("请上传 PNG、JPEG 或 WebP 图片。");
+      return;
+    }
+    if (file.size > MAX_REFERENCE_IMAGE_BYTES) {
+      setGenerationError("换装/换品图不能超过 50MB。");
+      return;
+    }
+
+    const previousPreviewUrl = ecommerceReplacementImage?.previewUrl;
+    const previewUrl = URL.createObjectURL(file);
+    setEcommerceReplacementImage({
+      dataUrl: await blobToDataUrl(file),
+      fileName: fileNameWithImageExtension(file.name || "replacement-product", file.type),
       previewUrl
     });
     if (previousPreviewUrl) {
       URL.revokeObjectURL(previousPreviewUrl);
     }
     setGenerationError("");
+  }
+
+	  async function handleImageDrop(
+	    event: ReactDragEvent<HTMLLabelElement>,
+	    slot: EcommerceUploadSlot,
+	    onSelect: (file: File | undefined) => Promise<void>,
+	    emptyDropMessage: string,
+	    options: { multiple?: boolean } = {}
+	  ): Promise<void> {
+    event.preventDefault();
+    setActiveEcommerceUploadSlot(slot);
+    setDraggingEcommerceUploadSlot(null);
+    const files = await extractImageFilesFromDataTransfer(event.dataTransfer);
+    if (files.length === 0) {
+      setGenerationError(emptyDropMessage);
+      return;
+    }
+
+	    if (options.multiple) {
+	      await selectEcommerceImages(files);
+	      return;
+	    }
+
+    await onSelect(files[0]);
+  }
+
+  async function pasteEcommerceUploadImage(
+    event: ReactClipboardEvent<HTMLElement> | ClipboardEvent,
+    slot: EcommerceUploadSlot = activeEcommerceUploadSlot
+  ): Promise<void> {
+    if (shouldIgnoreImagePasteTarget(event.target)) {
+      return;
+    }
+
+    const file = event.clipboardData ? extractImageFileFromClipboard(event.clipboardData) : undefined;
+    if (!file) {
+      return;
+    }
+
+	    event.preventDefault();
+	    setActiveEcommerceUploadSlot(slot);
+	    await (slot === "replacement" ? selectEcommerceReplacementImage(file) : selectEcommerceImage(file));
+	    setGenerationMessage(
+	      slot === "replacement"
+	        ? "已粘贴要换进去的衣服/商品图。"
+	        : ecommerceMode === "one-click-replace"
+	          ? "已粘贴目标模特/场景图。"
+	          : "已粘贴产品参考图。"
+	    );
+	  }
+
+	  function activateEcommerceUploadSlot(slot: EcommerceUploadSlot): void {
+	    setActiveEcommerceUploadSlot(slot);
+	    setGenerationMessage(
+	      slot === "replacement"
+	        ? "已选中换入图素材槽，可粘贴或拖入图片。"
+	        : ecommerceMode === "one-click-replace"
+	          ? "已选中目标图素材槽，可粘贴或拖入多张图片。"
+	          : "已选中产品参考图素材槽，可粘贴或拖入多张图片。"
+	    );
+	  }
+
+  async function addCategoryKitAsset(file: File | undefined): Promise<void> {
+    if (!file) {
+      return;
+    }
+    if (!isSupportedReferenceImageType(file.type)) {
+      setGenerationError("补充素材请上传 PNG、JPEG 或 WebP 图片。");
+      return;
+    }
+    if (file.size > MAX_REFERENCE_IMAGE_BYTES) {
+      setGenerationError("补充素材不能超过 50MB。");
+      return;
+    }
+    const previewUrl = URL.createObjectURL(file);
+    const asset: CategoryKitAssetSource = {
+      id: crypto.randomUUID(),
+      role: "detail",
+      dataUrl: await blobToDataUrl(file),
+      fileName: fileNameWithImageExtension(file.name || "category-kit-asset", file.type),
+      previewUrl
+    };
+    setEcommerceCategoryKitAssets((assets) => [...assets, asset]);
+    setGenerationError("");
+    setCategoryKitPrepare((current) => (current.status === "idle" ? current : { ...current, status: "idle", message: "" }));
+  }
+
+  function updateCategoryKitAssetRole(id: string, role: CategoryKitAssetRole): void {
+    setEcommerceCategoryKitAssets((assets) => assets.map((asset) => (asset.id === id ? { ...asset, role } : asset)));
+    setCategoryKitPrepare((current) => (current.status === "idle" ? current : { ...current, status: "idle", message: "" }));
+  }
+
+  function removeCategoryKitAsset(id: string): void {
+    setEcommerceCategoryKitAssets((assets) => {
+      const removed = assets.find((asset) => asset.id === id);
+      if (removed) {
+        URL.revokeObjectURL(removed.previewUrl);
+      }
+      return assets.filter((asset) => asset.id !== id);
+    });
+    setCategoryKitPrepare((current) => (current.status === "idle" ? current : { ...current, status: "idle", message: "" }));
   }
 
   async function selectMobileReferenceImage(file: File | undefined): Promise<void> {
@@ -4973,6 +6595,8 @@ export function App() {
     }
 
     const previousPreviewUrl = mobileReferenceImage?.previewUrl;
+    const dimensions = await imageDimensions(file);
+    const nextSize = resolvedGenerationSize(dimensions.width, dimensions.height);
     const previewUrl = URL.createObjectURL(file);
     setMobileReferenceImage({
       dataUrl: await blobToDataUrl(file),
@@ -4983,6 +6607,9 @@ export function App() {
       URL.revokeObjectURL(previousPreviewUrl);
     }
     setGenerationMode("reference");
+    setSizePresetId(CUSTOM_SIZE_PRESET_ID);
+    setWidth(nextSize.width);
+    setHeight(nextSize.height);
     setGenerationError("");
     setGenerationMessage("已添加参考图。");
     setGenerationWarning("");
@@ -5012,25 +6639,38 @@ export function App() {
     }
   }
 
-  function buildEcommerceGenerationPayload(input: {
-    selectedSize: SizePreset;
-    outputCountPerScene: number;
-    ecommercePresetId: StylePresetId;
-    title: string;
-  }) {
-    return {
-      product: {
+	  function buildEcommerceGenerationPayload(input: {
+	    selectedSize: SizePreset;
+	    outputCountPerScene: number;
+	    ecommercePresetId: StylePresetId;
+	    title: string;
+	    categoryPath?: string;
+	    categoryName?: string;
+	  }) {
+	    const productReferenceImage = mainEcommerceReferenceImage(ecommerceImages);
+	    const productReferenceAssets = ecommerceReferenceAssets(ecommerceImages);
+	    const documentDirection = ecommerceDocumentDirection(ecommerceDocuments);
+	    const extraDirection = [ecommerceExtraDirection.trim(), documentDirection].filter(Boolean).join("\n\n");
+	    const translationLanguageLabel = ECOMMERCE_TEXT_LANGUAGES.find((item) => item.id === ecommerceTextLanguage)?.label ?? "目标语言";
+	    const effectiveTextLanguage =
+	      ecommerceMode === "text-translation"
+	        ? ecommerceTextLanguage
+	        : ecommerceMode === "category-kit"
+	          ? categoryKitTextLanguageForTarget(ecommercePlatform, ecommerceMarket, ecommerceTextLanguage)
+	          : "none";
+	    return {
+	      product: {
         title: input.title || (ecommerceMode === "category-kit" ? "AI 自拆品类套图" : ecommerceMode === "single-poster" ? "单品完整电商海报" : `${ecommerceModeLabels[ecommerceMode]}产品`),
         description: ecommerceDescription.trim(),
         targetCustomer: ecommerceTargetCustomer.trim(),
         usageScene: ecommerceUsageScene.trim(),
         material: ecommerceMaterial.trim(),
         color: ecommerceColor.trim()
-      },
-      platform: ecommerceMode === "text-translation" ? "other" : ecommercePlatform,
-      market: ecommerceMode === "text-translation" ? "global" : ecommerceMarket,
-      textLanguage: ecommerceMode === "text-translation" ? ecommerceTextLanguage : "none",
-      allowTextRecreation: ecommerceMode !== "text-translation",
+	      },
+	      platform: ecommerceMode === "text-translation" ? "other" : ecommercePlatform,
+	      market: ecommerceMode === "text-translation" ? "global" : ecommerceMarket,
+	      textLanguage: effectiveTextLanguage,
+	      allowTextRecreation: ecommerceMode !== "text-translation",
       removeWatermarkAndLogo: ecommerceRemoveWatermark,
       sceneTemplateIds: ecommerceMode === "category-kit" && ecommerceSceneIds.length === 0 ? ecommerceScenesByMode["category-kit"] : ecommerceSceneIds,
       sizePresetId: input.selectedSize.id,
@@ -5039,37 +6679,161 @@ export function App() {
         height: input.selectedSize.height
       },
       stylePresetId: input.ecommercePresetId,
-      quality: "auto" as const,
-      outputFormat: "png" as const,
-      countPerScene: input.outputCountPerScene,
-      referenceImage: ecommerceImage
-        ? {
-            dataUrl: ecommerceImage.dataUrl,
-            fileName: ecommerceImage.fileName
-          }
-        : undefined,
-      extraDirection: ecommerceExtraDirection.trim()
-    };
+	      quality: "auto" as const,
+	      outputFormat: "png" as const,
+	      countPerScene: input.outputCountPerScene,
+	      referenceImage:
+	        ecommerceMode !== "one-click-replace" && ecommerceMode !== "text-translation"
+	          ? productReferenceImage
+	          : undefined,
+	      referenceImages:
+	        ecommerceMode === "one-click-replace" && ecommerceReplacementImage
+          ? ecommerceTargetImages.map((targetImage, index) => ({
+              referenceImage: {
+                dataUrl: targetImage.dataUrl,
+                fileName: targetImage.fileName
+              },
+              additionalReferenceImages: [
+                {
+                  dataUrl: ecommerceReplacementImage.dataUrl,
+                  fileName: ecommerceReplacementImage.fileName
+	                }
+	              ],
+	              title: input.title ? `${input.title} ${index + 1}` : undefined
+	            }))
+	          : ecommerceMode === "text-translation"
+	            ? ecommerceImages.map((image, index) => ({
+	                referenceImage: ecommerceReferenceInput(image),
+	                title: input.title ? `${input.title} ${index + 1}` : `待翻译图片 ${index + 1}`,
+	                extraDirection: `待翻译图片 ${index + 1}。请逐张翻译为${translationLanguageLabel}，保留原版式、商品主体、图标和排版层级。`
+	              }))
+	          : undefined,
+	      categoryPath: ecommerceMode === "category-kit" ? input.categoryPath ?? ecommerceCategoryPath.trim() : undefined,
+	      categoryName: ecommerceMode === "category-kit" ? input.categoryName ?? ecommerceCategoryName.trim() : undefined,
+	      assets:
+	        ecommerceMode === "category-kit"
+	          ? [
+	              ...productReferenceAssets,
+	              ...ecommerceCategoryKitAssets.map((asset) => ({
+	                role: asset.role,
+	                dataUrl: asset.dataUrl,
+	                fileName: asset.fileName
+	              }))
+	            ]
+	          : undefined,
+	      extraDirection
+	    };
+	  }
+
+	  async function prepareCategoryKitStrategy(options: { silent?: boolean } = {}): Promise<CategoryKitPrepareState | null> {
+	    const productReferenceImage = mainEcommerceReferenceImage(ecommerceImages);
+	    if (!productReferenceImage) {
+	      if (!options.silent) {
+	        setGenerationError("请先上传至少一张产品参考图。");
+	      }
+	      return null;
+	    }
+	    const documentDirection = ecommerceDocumentDirection(ecommerceDocuments);
+	    const extraDirection = [ecommerceExtraDirection.trim(), documentDirection].filter(Boolean).join("\n\n");
+
+	    setCategoryKitPrepare((current) => ({ ...current, status: "loading", message: "正在预检" }));
+    if (!options.silent) {
+      setGenerationError("");
+      setGenerationMessage("");
+      setGenerationWarning("");
+    }
+
+    try {
+      const response = await authFetch("/api/ecommerce/images/category-kit-prepare", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          product: {
+            title: ecommerceTitle.trim(),
+            description: ecommerceDescription.trim(),
+            targetCustomer: ecommerceTargetCustomer.trim(),
+            usageScene: ecommerceUsageScene.trim(),
+            material: ecommerceMaterial.trim(),
+            color: ecommerceColor.trim()
+          },
+		          platform: ecommercePlatform,
+		          market: ecommerceMarket,
+		          textLanguage: categoryKitTextLanguageForTarget(ecommercePlatform, ecommerceMarket, ecommerceTextLanguage),
+		          categoryPath: ecommerceCategoryPath.trim(),
+	          categoryName: ecommerceCategoryName.trim(),
+	          referenceImage: productReferenceImage,
+	          assets: [
+	            ...ecommerceReferenceAssets(ecommerceImages),
+	            ...ecommerceCategoryKitAssets.map((asset) => ({
+	              role: asset.role,
+	              dataUrl: asset.dataUrl,
+	              fileName: asset.fileName
+	            }))
+	          ],
+	          extraDirection
+	        })
+	      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const prepared = parseCategoryKitPrepare(await response.json());
+      setCategoryKitPrepare(prepared);
+      if (!ecommerceCategoryPath.trim() && prepared.categoryPath) {
+        setEcommerceCategoryPath(prepared.categoryPath);
+      }
+      if (!ecommerceCategoryName.trim() && prepared.categoryName) {
+        setEcommerceCategoryName(prepared.categoryName);
+      }
+      if (!options.silent) {
+        setGenerationMessage(prepared.message || "类目策略预检完成。");
+      }
+      return prepared;
+    } catch (error) {
+      setCategoryKitPrepare({
+        ...emptyCategoryKitPrepare,
+        status: "error",
+        message: error instanceof Error ? error.message : "类目策略预检失败。"
+      });
+      if (!options.silent) {
+        setGenerationError(error instanceof Error ? error.message : "类目策略预检失败。");
+      }
+      return null;
+    }
   }
 
   async function submitEcommerceGeneration(): Promise<void> {
-    const title = ecommerceTitle.trim();
-    const selectedSize = SIZE_PRESETS.find((item) => item.id === ecommerceSizePresetId) ?? SIZE_PRESETS[0];
-    const outputCountPerScene = ecommerceMode === "single-poster" || ecommerceMode === "category-kit" ? 1 : ecommerceCount;
+	    const title = ecommerceTitle.trim();
+	    const selectedSize = SIZE_PRESETS.find((item) => item.id === ecommerceSizePresetId) ?? SIZE_PRESETS[0];
+	    const outputCountPerScene = ecommerceMode === "single-poster" || ecommerceMode === "category-kit" || ecommerceMode === "one-click-replace" || ecommerceMode === "text-translation" ? 1 : ecommerceCount;
     const ecommercePresetId: StylePresetId =
-      ecommerceMode === "creative" ? "photoreal" : ecommerceMode === "single-poster" ? "poster" : "product";
+      ecommerceMode === "creative" || ecommerceMode === "one-click-replace" ? "photoreal" : ecommerceMode === "single-poster" ? "poster" : "product";
     const effectiveEcommerceSceneIds = ecommerceMode === "category-kit" && ecommerceSceneIds.length === 0 ? ecommerceScenesByMode["category-kit"] : ecommerceSceneIds;
-    const totalOutputs = effectiveEcommerceSceneIds.length * outputCountPerScene;
+	    const totalOutputs =
+	      ecommerceMode === "one-click-replace"
+	        ? Math.max(1, ecommerceTargetImages.length)
+	        : ecommerceMode === "text-translation"
+	          ? Math.max(1, ecommerceImages.length)
+	        : effectiveEcommerceSceneIds.length * outputCountPerScene;
 
     setGenerationError("");
     setGenerationMessage("");
     setGenerationWarning("");
 
-    if (!ecommerceImage) {
-      setGenerationError("请先上传一张产品图。");
+    if (ecommerceMode === "one-click-replace" && ecommerceTargetImages.length === 0) {
+      setGenerationError("请先上传至少一张模特或场景图。");
       return;
     }
-    const titleOptionalMode = ecommerceMode === "single-poster" || ecommerceMode === "category-kit";
+	    if (ecommerceMode !== "one-click-replace" && ecommerceImages.length === 0) {
+	      setGenerationError(ecommerceMode === "text-translation" ? "请先上传至少一张待翻译图片。" : "请先上传至少一张产品参考图。");
+	      return;
+	    }
+    if (ecommerceMode === "one-click-replace" && !ecommerceReplacementImage) {
+      setGenerationError("请上传要换进去的衣服或商品图。");
+      return;
+    }
+	    const titleOptionalMode = ecommerceMode === "single-poster" || ecommerceMode === "category-kit" || ecommerceMode === "one-click-replace" || ecommerceMode === "text-translation";
     if (!title && !titleOptionalMode && !isMobileDrawer) {
       setGenerationError("请输入商品标题。");
       return;
@@ -5078,12 +6842,21 @@ export function App() {
       setGenerationError("请至少选择一个生成场景。");
       return;
     }
+    let preparedCategoryKit: CategoryKitPrepareState | null = null;
+    if (ecommerceMode === "category-kit" && categoryKitPrepare.status !== "ready") {
+      preparedCategoryKit = await prepareCategoryKitStrategy({ silent: true });
+      if (!preparedCategoryKit) {
+        setGenerationWarning("未完成策略预检，已继续按当前信息生成。");
+      }
+    }
 
     const payload = buildEcommerceGenerationPayload({
       selectedSize,
       outputCountPerScene,
       ecommercePresetId,
-      title
+      title,
+      categoryPath: ecommerceCategoryPath.trim() || preparedCategoryKit?.categoryPath || categoryKitPrepare.categoryPath,
+      categoryName: ecommerceCategoryName.trim() || preparedCategoryKit?.categoryName || categoryKitPrepare.categoryName
     });
 
     const generateEndpoint = ecommerceMode === "category-kit" ? "/api/ecommerce/images/category-kit-generate" : "/api/ecommerce/images/batch-generate";
@@ -5177,10 +6950,13 @@ export function App() {
         outputFormat: "png",
         count: finalOutputCount
       });
-      if (!placeholderSet) {
-        throw new Error("生成占位内容失败。");
-      }
-      await Promise.all(combinedRecord.outputs.flatMap((output) => (output.asset ? [preloadGeneratedAssetPreview(output.asset, controller.signal)] : [])));
+	      if (!placeholderSet) {
+	        throw new Error("生成占位内容失败。");
+	      }
+	      if (ecommerceMode === "category-kit" && finalOutputCount < placeholderSet.placements.length) {
+	        placeholderSet = trimGenerationPlaceholders(editor, placeholderSet, finalOutputCount);
+	      }
+	      await Promise.all(combinedRecord.outputs.flatMap((output) => (output.asset ? [preloadGeneratedAssetPreview(output.asset, controller.signal)] : [])));
       const insertedCount = replaceGenerationPlaceholders(editor, placeholderSet, combinedRecord);
       const failedCount = Math.max(0, finalOutputCount - insertedCount);
       setGenerationHistory((history) => [
@@ -5218,7 +6994,11 @@ export function App() {
     setGenerationMessage("");
     setGenerationWarning("");
 
-    const inputValidationMessage = generationValidationMessage(input.prompt, input.size.width, input.size.height);
+    const requestInput = {
+      ...input,
+      size: resolvedGenerationSize(input.size.width, input.size.height)
+    };
+    const inputValidationMessage = generationValidationMessage(requestInput.prompt, requestInput.size.width, requestInput.size.height);
     if (inputValidationMessage) {
       setGenerationError(inputValidationMessage);
       return;
@@ -5235,7 +7015,7 @@ export function App() {
     generationRequestRef.current = requestId;
     const temporaryRecord = createTemporaryGenerationRecord({
       requestId,
-      submitInput: input,
+      submitInput: requestInput,
       requestMode,
       referenceAssetId
     });
@@ -5247,14 +7027,14 @@ export function App() {
 
     try {
       const requestBody: Record<string, unknown> = {
-        prompt: input.prompt.trim(),
-        presetId: input.presetId,
-        sizePresetId: input.sizePresetId === ORIGINAL_SIZE_PRESET_ID ? CUSTOM_SIZE_PRESET_ID : input.sizePresetId,
-        size: input.size,
-        quality: input.quality,
-        outputFormat: input.outputFormat,
-        count: input.count,
-        modelConfigId: input.modelConfigId
+        prompt: requestInput.prompt.trim(),
+        presetId: requestInput.presetId,
+        sizePresetId: requestInput.sizePresetId === ORIGINAL_SIZE_PRESET_ID ? CUSTOM_SIZE_PRESET_ID : requestInput.sizePresetId,
+        size: requestInput.size,
+        quality: requestInput.quality,
+        outputFormat: requestInput.outputFormat,
+        count: requestInput.count,
+        modelConfigId: requestInput.modelConfigId
       };
 
       if (requestMode === "reference" && referenceForRequest) {
@@ -5323,7 +7103,11 @@ export function App() {
     setGenerationMessage("");
     setGenerationWarning("");
 
-    const inputValidationMessage = generationValidationMessage(input.prompt, input.size.width, input.size.height);
+    const requestInput = {
+      ...input,
+      size: resolvedGenerationSize(input.size.width, input.size.height)
+    };
+    const inputValidationMessage = generationValidationMessage(requestInput.prompt, requestInput.size.width, requestInput.size.height);
     if (inputValidationMessage) {
       return;
     }
@@ -5339,12 +7123,12 @@ export function App() {
     const controller = new AbortController();
     const requestId = generationRequestRef.current + 1;
     generationRequestRef.current = requestId;
-    const placeholderSet = createGenerationPlaceholders(editor, input, requestId, {
+    const placeholderSet = createGenerationPlaceholders(editor, requestInput, requestId, {
       selectPlaceholders: requestMode !== "reference"
     });
     const temporaryRecord = createTemporaryGenerationRecord({
       requestId,
-      submitInput: input,
+      submitInput: requestInput,
       requestMode,
       referenceAssetId
     });
@@ -5365,14 +7149,14 @@ export function App() {
       }
 
       const requestBody: Record<string, unknown> = {
-        prompt: input.prompt.trim(),
-        presetId: input.presetId,
-        sizePresetId: input.sizePresetId === ORIGINAL_SIZE_PRESET_ID ? CUSTOM_SIZE_PRESET_ID : input.sizePresetId,
-        size: input.size,
-        quality: input.quality,
-        outputFormat: input.outputFormat,
-        count: input.count,
-        modelConfigId: input.modelConfigId
+        prompt: requestInput.prompt.trim(),
+        presetId: requestInput.presetId,
+        sizePresetId: requestInput.sizePresetId === ORIGINAL_SIZE_PRESET_ID ? CUSTOM_SIZE_PRESET_ID : requestInput.sizePresetId,
+        size: requestInput.size,
+        quality: requestInput.quality,
+        outputFormat: requestInput.outputFormat,
+        count: requestInput.count,
+        modelConfigId: requestInput.modelConfigId
       };
 
       if (requestMode === "reference" && referenceForRequest) {
@@ -5393,12 +7177,6 @@ export function App() {
 
       if (!response.ok) {
         const message = await readErrorMessage(response);
-        console.error("Image generation request failed", {
-          endpoint: requestMode === "reference" ? "/api/images/edit" : "/api/images/generate",
-          status: response.status,
-          message,
-          requestBody
-        });
         throw new Error(message);
       }
 
@@ -5457,11 +7235,19 @@ export function App() {
   }
 
   async function submitGeneration(): Promise<void> {
+    const normalizedSize = resolveNearestValidImageSize({ width, height });
+    const shouldNormalizeSize = normalizedSize !== undefined && (normalizedSize.width !== width || normalizedSize.height !== height);
+    if (shouldNormalizeSize) {
+      setSizePresetId(CUSTOM_SIZE_PRESET_ID);
+      setWidth(normalizedSize.width);
+      setHeight(normalizedSize.height);
+    }
+
     const input: GenerationSubmitInput = {
       prompt: trimmedPrompt,
       presetId: stylePreset,
-      sizePresetId,
-      size: {
+      sizePresetId: shouldNormalizeSize ? CUSTOM_SIZE_PRESET_ID : sizePresetId,
+      size: normalizedSize ?? {
         width,
         height
       },
@@ -5542,7 +7328,7 @@ export function App() {
       const activeTask = Array.from(activeGenerationsRef.current.values()).find((task) => task.temporaryRecordId === record.id);
       const placeholderId = activeTask ? firstLiveGenerationPlaceholder(editor, activeTask.placeholderSet) : undefined;
       if (!placeholderId) {
-        setGenerationError("画布上找不到这张历史图片，可能已被删除。");
+        setGenerationError("画布上找不到这条历史作品，可能已被删除。");
         return;
       }
 
@@ -5570,10 +7356,17 @@ export function App() {
     } else {
       editor.zoomToSelection({ animation: { duration: 220 } });
     }
-    setGenerationMessage("已定位到历史图像。");
+    setGenerationMessage("已定位到历史作品。");
   }
 
   async function rerunHistoryRecord(record: GenerationRecord): Promise<void> {
+    if (generatedAssetsForRecord(record).some(isVideoAsset)) {
+      setGenerationError("");
+      setGenerationWarning("");
+      setGenerationMessage("视频记录已保存，可在右侧视频生成面板重新提交新的成片。");
+      return;
+    }
+
     const nextPresetId = coerceStylePresetId(record.presetId);
     const nextSizePresetId = sizePresetIdForSize(record.size.width, record.size.height);
     const nextCount = coerceGenerationCount(record.count);
@@ -5638,7 +7431,65 @@ export function App() {
     setGenerationMessage("已打开原始资源下载。");
   }
 
+  function handleSeedanceVideoGenerated(record: GenerationRecord): void {
+    setGenerationError("");
+    setGenerationWarning("");
+    setGenerationHistory((history) => [record, ...history.filter((item) => item.id !== record.id)].slice(0, 20));
+
+    const asset = firstDownloadableAsset(record);
+    if (!asset) {
+      setGenerationError("视频已生成，但没有返回可插入的资源。");
+      return;
+    }
+
+    const editor = editorRef.current;
+    if (!editor) {
+      setGenerationMessage("视频已生成并保存到作品图库，画布载入后可从图库放入画布。");
+      return;
+    }
+
+    const shapeId = insertGeneratedAssetOnCanvas(editor, asset, record.prompt);
+    const bounds = editor.getShapePageBounds(shapeId);
+    if (bounds) {
+      editor.zoomToBounds(bounds, {
+        animation: { duration: 220 },
+        inset: 96
+      });
+    } else {
+      editor.zoomToSelection({ animation: { duration: 220 } });
+    }
+
+    setGenerationMessage("视频已生成，已插入画布并保存到作品图库。");
+  }
+
   function reuseGalleryImage(item: GalleryImageItem, modelConfigId?: string): void {
+    if (isVideoAsset(item.asset) && !modelConfigId) {
+      setGenerationError("");
+      setGenerationWarning("");
+      navigateToRoute("canvas");
+
+      window.requestAnimationFrame(() => {
+        const editor = editorRef.current;
+        if (!editor) {
+          setGenerationMessage("已从 Gallery 选择视频，画布载入后可再次放入。");
+          return;
+        }
+
+        const shapeId = insertGalleryImageOnCanvas(editor, item);
+        const bounds = editor.getShapePageBounds(shapeId);
+        if (bounds) {
+          editor.zoomToBounds(bounds, {
+            animation: { duration: 220 },
+            inset: 96
+          });
+        } else {
+          editor.zoomToSelection({ animation: { duration: 220 } });
+        }
+        setGenerationMessage("已把 Gallery 视频放到画布。");
+      });
+      return;
+    }
+
     const nextPresetId = coerceStylePresetId(item.presetId);
     const nextSizePresetId = sizePresetIdForSize(item.size.width, item.size.height);
     const shouldRetryWithModel = Boolean(modelConfigId);
@@ -5925,18 +7776,32 @@ export function App() {
   const visibleRoute = requiresPhoneVerification && resolvedRoute !== "help" ? "account" : resolvedRoute;
   const showMobileWorkbench = isMobileDrawer && visibleRoute === "canvas";
   const showMobileAppShell = isMobileDrawer && (visibleRoute === "canvas" || visibleRoute === "gallery" || visibleRoute === "account");
-  const packageRemaining = currentUser.packageRemaining ?? Math.max(0, (currentUser.quotaTotal ?? 0) - (currentUser.quotaUsed ?? 0));
+	  const packageRemaining = currentUser.packageRemaining ?? Math.max(0, (currentUser.quotaTotal ?? 0) - (currentUser.quotaUsed ?? 0));
+	  const canUseSeedanceVideo = isAdminUser(currentUser);
+	  const activeSidebarTab = canUseSeedanceVideo || sidebarTab !== "video" ? sidebarTab : "creative";
+	  const visibleSidebarTabs = canUseSeedanceVideo ? sidebarTabs : sidebarTabs.filter((tab) => tab.id !== "video");
+	  const ecommerceReferenceLimit = ecommerceReferenceUploadLimit(ecommerceMode);
+	  const ecommerceUploadHeading =
+	    ecommerceMode === "one-click-replace" ? "目标模特/场景图" : ecommerceMode === "text-translation" ? "待翻译图片" : "产品参考图";
+	  const ecommerceUploadEmptyTitle =
+	    ecommerceMode === "one-click-replace" ? "上传模特/场景图" : ecommerceMode === "text-translation" ? "上传待翻译图片" : "上传产品参考图";
 
-  return (
+	  return (
     <div className="app-root">
       {!showMobileAppShell ? (
         <TopNavigation
           ecommerceStats={ecommerceStats}
           generationHistoryCount={generationHistory.length}
+          isNotificationCenterOpen={isNotificationCenterOpen}
+          notifications={notifications}
+          notificationUnreadCount={notificationUnreadCount}
           route={visibleRoute}
           user={currentUser}
           onLogout={handleLogout}
+          onMarkAllNotificationsRead={markAllNotificationsRead}
           onNavigate={navigateToRoute}
+          onNotificationAction={handleNotificationAction}
+          onNotificationCenterOpenChange={setIsNotificationCenterOpen}
           onOpenGenerationHistory={() => {
             navigateToRoute("canvas");
             setSidebarTab("creative");
@@ -5946,15 +7811,25 @@ export function App() {
           onPreloadGallery={preloadGalleryPage}
         />
       ) : null}
+      {toastNotification ? (
+        <NotificationToast
+          notification={toastNotification}
+          onClose={() => setToastNotification(null)}
+          onView={() => handleNotificationAction(toastNotification)}
+        />
+      ) : null}
       {showMobileWorkbench ? (
         <MobileWorkbench
           activeTab={mobileCreateTab}
           canGenerate={canGenerate}
           count={count}
-          ecommerceCount={ecommerceCount}
-          ecommerceDescription={ecommerceDescription}
-          ecommerceExtraDirection={ecommerceExtraDirection}
-          ecommerceImage={ecommerceImage}
+	          ecommerceCount={ecommerceCount}
+	          ecommerceDescription={ecommerceDescription}
+	          ecommerceDocuments={ecommerceDocuments}
+	          ecommerceExtraDirection={ecommerceExtraDirection}
+	          ecommerceImages={ecommerceImages}
+	          ecommerceReplacementImage={ecommerceReplacementImage}
+	          ecommerceTargetImages={ecommerceTargetImages}
           ecommerceMarket={ecommerceMarket}
           ecommerceMode={ecommerceMode}
           ecommercePlatform={ecommercePlatform}
@@ -5968,9 +7843,11 @@ export function App() {
           generationMessage={generationMessage}
           generationMode={generationMode}
           generationWarning={generationWarning}
-          height={height}
-          isEcommerceGenerating={isEcommerceGenerating}
-          isGenerating={isGenerating}
+	          height={height}
+	          isEcommerceGenerating={isEcommerceGenerating}
+	          isEcommerceExtraDirectionOptimizing={isEcommerceExtraDirectionOptimizing}
+	          isGenerating={isGenerating}
+          isPromptOptimizing={isPromptOptimizing}
           mobileReferenceImage={mobileReferenceImage}
           outputFormat={outputFormat}
           panelStatus={panelStatus}
@@ -5984,11 +7861,18 @@ export function App() {
           onApplyPromptStarter={applyPromptStarter}
           onCopyHistoryPrompt={(record) => void copyHistoryPrompt(record)}
           onDownloadHistoryRecord={downloadHistoryRecord}
-          onNavigate={navigateToRoute}
-          onOpenGallery={() => navigateToRoute("gallery")}
-          onRerunHistoryRecord={(record) => void rerunHistoryRecord(record)}
-          onSelectEcommerceImage={(file) => void selectEcommerceImage(file)}
-          onSelectEcommerceMode={selectEcommerceMode}
+	          onNavigate={navigateToRoute}
+	          onOpenGallery={() => navigateToRoute("gallery")}
+	          onOptimizeEcommerceExtraDirection={() => void optimizeEcommerceExtraDirection()}
+	          onOptimizePrompt={() => void optimizePrompt()}
+	          onRerunHistoryRecord={(record) => void rerunHistoryRecord(record)}
+	          onRemoveEcommerceDocument={removeEcommerceDocument}
+	          onRemoveEcommerceReferenceImage={removeEcommerceReferenceImage}
+	          onSelectEcommerceImages={(files) => void selectEcommerceImages(files)}
+	          onSelectEcommerceDocuments={(files) => void selectEcommerceDocuments(files)}
+	          onSelectEcommerceMode={selectEcommerceMode}
+          onSelectEcommerceReplacementImage={(file) => void selectEcommerceReplacementImage(file)}
+          onRemoveEcommerceTargetImage={removeEcommerceTargetImage}
           onSelectEcommerceScene={toggleEcommerceScene}
           onSelectMobileReferenceImage={(file) => void selectMobileReferenceImage(file)}
           onSelectSizePreset={selectScenePreset}
@@ -5998,7 +7882,7 @@ export function App() {
           onSetEcommerceDescription={setEcommerceDescription}
           onSetEcommerceExtraDirection={setEcommerceExtraDirection}
           onSetEcommerceMarket={setEcommerceMarket}
-          onSetEcommercePlatform={setEcommercePlatform}
+          onSetEcommercePlatform={selectEcommercePlatform}
           onSetEcommerceRemoveWatermark={setEcommerceRemoveWatermark}
           onSetEcommerceSizePresetId={setEcommerceSizePresetId}
           onSetEcommerceTextLanguage={setEcommerceTextLanguage}
@@ -6105,12 +7989,12 @@ export function App() {
             </div>
           </div>
           <h1 className="mt-1 text-xl font-semibold text-neutral-950" id="ai-panel-title">
-            {sidebarTab === "plugins" ? "插件能力整合" : "自主生图与编辑"}
+            {activeSidebarTab === "plugins" ? "插件能力整合" : activeSidebarTab === "creative" ? "自主生图与编辑" : "视频生成"}
           </h1>
           <div className="ai-panel-tabs" role="tablist" aria-label="左侧功能菜单">
-            {sidebarTabs.map((tab) => {
+            {visibleSidebarTabs.map((tab) => {
               const Icon = tab.icon;
-              const active = sidebarTab === tab.id;
+              const active = activeSidebarTab === tab.id;
               return (
                 <button
                   aria-pressed={active}
@@ -6128,7 +8012,7 @@ export function App() {
         </div>
 
         <div className="ai-panel-body flex-1 space-y-5 overflow-y-auto px-5 py-5">
-          {sidebarTab === "plugins" ? (
+          {activeSidebarTab === "plugins" ? (
             <>
               <section className="sidebar-hero">
                 <div className="sidebar-hero__top">
@@ -6199,26 +8083,128 @@ export function App() {
               <section className="sidebar-section">
                 <div className="sidebar-section__head">
                   <div>
-                    <p className="sidebar-section__eyebrow">上传图片</p>
-                    <h3>产品参考图</h3>
-                  </div>
-                  <ImageIcon className="size-4 text-amber-700" aria-hidden="true" />
-                </div>
-                <label className={ecommerceImage ? "ecommerce-upload has-image" : "ecommerce-upload"}>
-                  {ecommerceImage ? (
-                    <img alt="产品参考图预览" src={ecommerceImage.previewUrl} />
-                  ) : (
-                    <span className="ecommerce-upload__empty">
-                      <ImageIcon className="size-5" aria-hidden="true" />
-                      上传 1 张产品图
-                    </span>
-                  )}
-                  <input
-                    accept="image/png,image/jpeg,image/webp"
-                    type="file"
-                    onChange={(event) => void selectEcommerceImage(event.target.files?.[0])}
+	                    <p className="sidebar-section__eyebrow">上传图片</p>
+	                    <h3>{ecommerceUploadHeading}</h3>
+	                  </div>
+	                  <span className="ecommerce-upload-count">
+	                    {ecommerceMode === "one-click-replace" ? `${ecommerceTargetImages.length}/${MAX_ONE_CLICK_TARGET_IMAGES}` : `${ecommerceImages.length}/${ecommerceReferenceLimit}`}
+	                  </span>
+	                </div>
+	                <label
+	                  className={[
+	                    "ecommerce-upload",
+	                    ecommerceMode === "one-click-replace" ? ecommerceTargetImages.length > 0 ? "has-image" : "" : ecommerceImages.length > 0 ? "has-image" : "",
+	                    activeEcommerceUploadSlot === "target" ? "is-active" : "",
+	                    draggingEcommerceUploadSlot === "target" ? "is-dragging" : ""
+	                  ].filter(Boolean).join(" ")}
+                  tabIndex={0}
+                  onClick={() => activateEcommerceUploadSlot("target")}
+                  onFocus={() => activateEcommerceUploadSlot("target")}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    setDraggingEcommerceUploadSlot("target");
+                    event.dataTransfer.dropEffect = "copy";
+                  }}
+                  onDragLeave={() => setDraggingEcommerceUploadSlot((slot) => (slot === "target" ? null : slot))}
+	                  onDrop={(event) => void handleImageDrop(event, "target", selectEcommerceImage, "未能从拖拽内容中读取图片，请拖拽浏览器里打开的图片本体，或先保存后上传。", { multiple: true })}
+	                  onPaste={(event) => void pasteEcommerceUploadImage(event, "target")}
+	                >
+                  {ecommerceMode === "one-click-replace" && ecommerceTargetImages.length > 0 ? (
+                    <span className="ecommerce-target-grid">
+                      {ecommerceTargetImages.slice(0, 6).map((image, index) => (
+                        <span key={image.id} className="ecommerce-target-grid__item">
+                          <img alt={`目标模特或场景图 ${index + 1}`} src={image.previewUrl} />
+                          <button
+                            aria-label={`移除目标图 ${index + 1}`}
+                            type="button"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              removeEcommerceTargetImage(image.id);
+                            }}
+                          >
+                            <X className="size-3" aria-hidden="true" />
+                          </button>
+                        </span>
+	                      ))}
+	                      {ecommerceTargetImages.length > 6 ? <i>+{ecommerceTargetImages.length - 6}</i> : null}
+	                    </span>
+	                  ) : ecommerceImages.length > 0 ? (
+	                    <span className="ecommerce-reference-grid">
+	                      {ecommerceImages.map((image, index) => (
+	                        <span key={image.id} className="ecommerce-reference-grid__item">
+	                          <img alt={`产品参考图 ${index + 1}`} src={image.previewUrl} />
+	                          <em>{ecommerceReferenceRoleLabel(ecommerceMode, index)}</em>
+	                          <button
+	                            aria-label={`移除产品参考图 ${index + 1}`}
+	                            type="button"
+	                            onClick={(event) => {
+	                              event.preventDefault();
+	                              event.stopPropagation();
+	                              removeEcommerceReferenceImage(image.id);
+	                            }}
+	                          >
+	                            <X className="size-3" aria-hidden="true" />
+	                          </button>
+	                        </span>
+	                      ))}
+	                    </span>
+	                  ) : (
+	                    <span className="ecommerce-upload__empty">
+	                      <ImageIcon className="size-5" aria-hidden="true" />
+	                      <span>{ecommerceUploadEmptyTitle}</span>
+	                      <small>{ecommerceReferenceUploadHint(ecommerceMode)}</small>
+	                    </span>
+	                  )}
+	                  <input
+	                    accept="image/png,image/jpeg,image/webp"
+	                    multiple
+	                    type="file"
+	                    onChange={(event) => {
+	                      void selectEcommerceImages(event.target.files);
+                      event.currentTarget.value = "";
+                    }}
                   />
                 </label>
+                {ecommerceMode === "one-click-replace" ? (
+                  <label
+                    className={[
+                      "ecommerce-upload mt-3",
+                      ecommerceReplacementImage ? "has-image" : "",
+                      activeEcommerceUploadSlot === "replacement" ? "is-active" : "",
+                      draggingEcommerceUploadSlot === "replacement" ? "is-dragging" : ""
+                    ].filter(Boolean).join(" ")}
+                    tabIndex={0}
+                    onClick={() => activateEcommerceUploadSlot("replacement")}
+                    onFocus={() => activateEcommerceUploadSlot("replacement")}
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                      setDraggingEcommerceUploadSlot("replacement");
+                      event.dataTransfer.dropEffect = "copy";
+                    }}
+                    onDragLeave={() => setDraggingEcommerceUploadSlot((slot) => (slot === "replacement" ? null : slot))}
+                    onDrop={(event) => void handleImageDrop(event, "replacement", selectEcommerceReplacementImage, "未能从拖拽内容中读取图片，请拖拽浏览器里打开的图片本体，或先保存后上传。")}
+                    onPaste={(event) => void pasteEcommerceUploadImage(event, "replacement")}
+                  >
+                    {ecommerceReplacementImage ? (
+                      <img alt="要换进去的衣服或商品图预览" src={ecommerceReplacementImage.previewUrl} />
+                    ) : (
+                      <span className="ecommerce-upload__empty">
+                        <Sparkles className="size-5" aria-hidden="true" />
+                        <span>上传要换的衣服/商品</span>
+                        <small>点击、粘贴或拖入</small>
+                      </span>
+                    )}
+                    <input
+                      accept="image/png,image/jpeg,image/webp"
+                    type="file"
+                    onChange={(event) => {
+                      void selectEcommerceReplacementImage(event.target.files?.[0]);
+                      event.currentTarget.value = "";
+                    }}
+                  />
+                </label>
+                ) : null}
               </section>
 
               <section className="sidebar-section">
@@ -6230,10 +8216,10 @@ export function App() {
                   <Package className="size-4 text-amber-700" aria-hidden="true" />
 	                </div>
 	                <label className="block">
-	                  <span className="control-label">{ecommerceMode === "single-poster" || ecommerceMode === "category-kit" ? "商品标题（可选）" : "商品标题"}</span>
+		                  <span className="control-label">{ecommerceMode === "single-poster" || ecommerceMode === "category-kit" || ecommerceMode === "one-click-replace" || ecommerceMode === "text-translation" ? "商品标题（可选）" : "商品标题"}</span>
 	                  <input
 	                    className="field-control"
-	                    placeholder={ecommerceMode === "single-poster" || ecommerceMode === "category-kit" ? "可留空，由模型依据产品图和描述归纳" : "例如：便携榨汁杯 / 雪地靴"}
+	                    placeholder={ecommerceMode === "one-click-replace" ? "例如：白色衬衫 / 手提包 / 香薰瓶" : ecommerceMode === "single-poster" || ecommerceMode === "category-kit" ? "可留空，由模型依据产品图和描述归纳" : "例如：便携榨汁杯 / 雪地靴"}
 	                    value={ecommerceTitle}
 	                    onChange={(event) => setEcommerceTitle(event.target.value)}
 	                  />
@@ -6242,12 +8228,12 @@ export function App() {
                   <span className="control-label">商品描述</span>
                   <textarea
                     className="prompt-textarea mt-2 h-24 w-full resize-none rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm leading-6 text-neutral-950 outline-none transition focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100"
-                    placeholder="核心卖点、尺寸、包装、注意事项等"
+                    placeholder={ecommerceMode === "one-click-replace" ? "一句补充提示词，例如：模特不露脸，保留原背景，衣服自然垂坠" : "核心卖点、尺寸、包装、注意事项等"}
                     value={ecommerceDescription}
                     onChange={(event) => setEcommerceDescription(event.target.value)}
                   />
                 </label>
-                <div className="mt-3 grid grid-cols-2 gap-3">
+	                <div className="mt-3 grid grid-cols-2 gap-3">
                   <label>
                     <span className="control-label">目标人群</span>
                     <input className="field-control" value={ecommerceTargetCustomer} onChange={(event) => setEcommerceTargetCustomer(event.target.value)} />
@@ -6263,9 +8249,146 @@ export function App() {
                   <label>
                     <span className="control-label">颜色 / SKU</span>
                     <input className="field-control" value={ecommerceColor} onChange={(event) => setEcommerceColor(event.target.value)} />
-                  </label>
-                </div>
-              </section>
+	                  </label>
+	                </div>
+	                <div className="ecommerce-document-upload">
+	                  <label>
+	                    <BookOpen className="size-5" aria-hidden="true" />
+	                    <span>
+	                      <strong>商品资料文档</strong>
+	                      <small>支持 doc / pdf / excel / csv / txt，最多 {MAX_ECOMMERCE_DOCUMENTS} 个</small>
+	                    </span>
+	                    <input
+	                      accept={ECOMMERCE_DOCUMENT_ACCEPT}
+	                      multiple
+	                      type="file"
+	                      onChange={(event) => {
+	                        void selectEcommerceDocuments(event.target.files);
+	                        event.currentTarget.value = "";
+	                      }}
+	                    />
+	                  </label>
+	                  <p>文本类会自动读取摘要；PDF / Office 当前作为资料文件线索，关键内容建议粘到描述或补充方向。</p>
+	                  {ecommerceDocuments.length > 0 ? (
+	                    <div className="ecommerce-document-list" aria-label="已上传商品资料">
+	                      {ecommerceDocuments.map((document) => (
+	                        <div className="ecommerce-document-card" key={document.id}>
+	                          <BookOpen className="size-4" aria-hidden="true" />
+	                          <span>
+	                            <strong>{document.fileName}</strong>
+	                            <small>{formatFileSize(document.size)} · {document.note}</small>
+	                          </span>
+	                          <button aria-label={`移除资料文档 ${document.fileName}`} type="button" onClick={() => removeEcommerceDocument(document.id)}>
+	                            <X className="size-3.5" aria-hidden="true" />
+	                          </button>
+	                        </div>
+	                      ))}
+	                    </div>
+	                  ) : null}
+	                </div>
+	              </section>
+
+              {ecommerceMode === "category-kit" ? (
+                <section className="sidebar-section">
+                  <div className="sidebar-section__head">
+                    <div>
+                      <p className="sidebar-section__eyebrow">类目策略</p>
+                      <h3>{categoryKitPrepare.status === "ready" ? "策略已预检" : "自动识别或指定类目"}</h3>
+                    </div>
+                    <Workflow className="size-4 text-emerald-600" aria-hidden="true" />
+                  </div>
+                  <div className="ecommerce-category-flow" aria-label="品类套图生成流程">
+                    <span>识别类目</span>
+                    <span>策略库</span>
+                    <span>补素材</span>
+                    <span>生成</span>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-3">
+                    <label>
+                      <span className="control-label">标准类目</span>
+                      <input
+                        className="field-control"
+                        placeholder="留空自动识别"
+                        value={ecommerceCategoryPath}
+                        onChange={(event) => {
+                          setEcommerceCategoryPath(event.target.value);
+                          setCategoryKitPrepare(emptyCategoryKitPrepare);
+                        }}
+                      />
+                    </label>
+                    <label>
+                      <span className="control-label">类目名称</span>
+                      <input
+                        className="field-control"
+                        placeholder="例如：雪地靴"
+                        value={ecommerceCategoryName}
+                        onChange={(event) => {
+                          setEcommerceCategoryName(event.target.value);
+                          setCategoryKitPrepare(emptyCategoryKitPrepare);
+                        }}
+                      />
+                    </label>
+                  </div>
+                  <div className="category-kit-precheck" data-status={categoryKitPrepare.status}>
+                    <div>
+                      <strong>
+                        {categoryKitPrepare.status === "loading"
+                          ? "正在预检"
+                          : categoryKitPrepare.status === "ready"
+                            ? categoryKitPrepare.strategyName || categoryKitPrepare.categoryPath || categoryKitPrepare.categoryName || "策略已匹配"
+                            : categoryKitPrepare.status === "error"
+                              ? "预检失败"
+                              : "等待预检"}
+                      </strong>
+                      <small>
+                        {categoryKitPrepare.status === "ready"
+                          ? categoryKitPrepare.missingItems.length > 0
+                            ? `缺 ${categoryKitPrepare.missingItems.slice(0, 3).join("、")}`
+                            : categoryKitPrepare.strategySummary || "素材充足"
+                          : categoryKitPrepare.message || "上传主图后可先检查类目策略"}
+                      </small>
+                    </div>
+                    <button className="secondary-action h-10" disabled={categoryKitPrepare.status === "loading"} type="button" onClick={() => void prepareCategoryKitStrategy()}>
+                      {categoryKitPrepare.status === "loading" ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <BadgeCheck className="size-4" aria-hidden="true" />}
+                      预检
+                    </button>
+                  </div>
+                  {categoryKitPrepare.requiredAssets.length > 0 ? (
+                    <div className="category-kit-tags">
+                      {categoryKitPrepare.requiredAssets.slice(0, 5).map((item) => (
+                        <span key={item}>{item}</span>
+                      ))}
+                    </div>
+                  ) : null}
+                  <div className="category-kit-assets">
+                    {ecommerceCategoryKitAssets.map((asset) => (
+                      <div className="category-kit-asset-card" key={asset.id}>
+                        <img alt="" src={asset.previewUrl} />
+                        <button aria-label="移除补充素材" type="button" onClick={() => removeCategoryKitAsset(asset.id)}>
+                          <X className="size-3.5" aria-hidden="true" />
+                        </button>
+                        <select value={asset.role} onChange={(event) => updateCategoryKitAssetRole(asset.id, event.target.value as CategoryKitAssetRole)}>
+                          {categoryKitAssetRoles.map((role) => (
+                            <option key={role.id} value={role.id}>{role.label}</option>
+                          ))}
+                        </select>
+                      </div>
+                    ))}
+                    <label
+                      className="category-kit-asset-card category-kit-asset-card--add"
+                      onDragOver={(event) => {
+                        event.preventDefault();
+                        event.dataTransfer.dropEffect = "copy";
+                      }}
+                      onDrop={(event) => void handleImageDrop(event, "target", addCategoryKitAsset, "未能从拖拽内容中读取图片，请拖拽浏览器里打开的图片本体，或先保存后上传。")}
+                    >
+                      <ImageIcon className="size-5" aria-hidden="true" />
+                      <span>补充素材</span>
+                      <input accept="image/png,image/jpeg,image/webp" type="file" onChange={(event) => void addCategoryKitAsset(event.target.files?.[0])} />
+                    </label>
+                  </div>
+                </section>
+              ) : null}
 
               <section className="sidebar-section">
                 <div className="sidebar-section__head">
@@ -6288,7 +8411,7 @@ export function App() {
                   <div className="grid grid-cols-2 gap-3">
                     <label>
                       <span className="control-label">平台</span>
-                      <select className="field-control" value={ecommercePlatform} onChange={(event) => setEcommercePlatform(event.target.value as EcommercePlatform)}>
+                      <select className="field-control" value={ecommercePlatform} onChange={(event) => selectEcommercePlatform(event.target.value as EcommercePlatform)}>
                         {ECOMMERCE_PLATFORMS.map((item) => (
                           <option key={item.id} value={item.id}>{item.label}</option>
                         ))}
@@ -6355,44 +8478,51 @@ export function App() {
 	                    </select>
 	                  </label>
 	                  <label>
-	                    <span className="control-label">{ecommerceMode === "single-poster" || ecommerceMode === "category-kit" ? "输出张数" : "每场景张数"}</span>
-	                    {ecommerceMode === "category-kit" ? (
-	                      <input className="field-control" readOnly value="后台动态规划" />
-	                    ) : (
-	                      <select
-	                        className="field-control"
-	                        disabled={ecommerceMode === "single-poster"}
-	                        value={ecommerceMode === "single-poster" ? 1 : ecommerceCount}
-	                        onChange={(event) => setEcommerceCount(Number(event.target.value) as GenerationCount)}
-	                      >
-	                        {(ecommerceMode === "single-poster" ? [1] : GENERATION_COUNTS).map((item) => (
-	                          <option key={item} value={item}>{item} 张</option>
-	                        ))}
+		                    <span className="control-label">{ecommerceMode === "text-translation" ? "每图张数" : ecommerceMode === "single-poster" || ecommerceMode === "category-kit" || ecommerceMode === "one-click-replace" ? "输出张数" : "每场景张数"}</span>
+		                    {ecommerceMode === "category-kit" ? (
+		                      <input className="field-control" readOnly value="后台动态规划" />
+		                    ) : (
+		                      <select
+		                        className="field-control"
+		                        disabled={ecommerceMode === "single-poster" || ecommerceMode === "one-click-replace" || ecommerceMode === "text-translation"}
+		                        value={ecommerceMode === "single-poster" || ecommerceMode === "one-click-replace" || ecommerceMode === "text-translation" ? 1 : ecommerceCount}
+		                        onChange={(event) => setEcommerceCount(Number(event.target.value) as GenerationCount)}
+		                      >
+		                        {(ecommerceMode === "single-poster" || ecommerceMode === "one-click-replace" || ecommerceMode === "text-translation" ? [1] : GENERATION_COUNTS).map((item) => (
+		                          <option key={item} value={item}>{item} 张</option>
+		                        ))}
 	                      </select>
 	                    )}
 	                  </label>
                 </div>
-                <label className="ecommerce-switch-row">
+	                <label className="ecommerce-switch-row">
                   <span>
                     <strong>去水印 / Logo</strong>
                     <small>清理平台标识、旧店铺水印和无关角标。</small>
                   </span>
                   <input checked={ecommerceRemoveWatermark} type="checkbox" onChange={(event) => setEcommerceRemoveWatermark(event.target.checked)} />
-                </label>
-                <label className="mt-3 block">
-                  <span className="control-label">补充方向</span>
-                  <textarea
-                    className="prompt-textarea mt-2 h-24 w-full resize-none rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm leading-6 text-neutral-950 outline-none transition focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100"
-                    placeholder="例如：保留原构图；模特不露脸；不要新增夸大宣传文字"
-                    value={ecommerceExtraDirection}
-                    onChange={(event) => setEcommerceExtraDirection(event.target.value)}
-                  />
-                </label>
+	                </label>
+	                <div className="mt-3 block">
+	                  <div className="prompt-field-heading">
+	                    <span className="control-label">补充方向</span>
+	                    <button className="prompt-optimize-button" disabled={!ecommerceExtraDirection.trim() || isEcommerceExtraDirectionOptimizing} type="button" onClick={() => void optimizeEcommerceExtraDirection()}>
+	                      {isEcommerceExtraDirectionOptimizing ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : <Sparkles className="size-3.5" aria-hidden="true" />}
+	                      <span>{isEcommerceExtraDirectionOptimizing ? "优化中" : "优化提示词"}</span>
+	                    </button>
+	                  </div>
+	                  <textarea
+	                    aria-label="补充方向"
+	                    className="prompt-textarea mt-2 h-24 w-full resize-none rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm leading-6 text-neutral-950 outline-none transition focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100"
+	                    placeholder="例如：保留原构图；模特不露脸；不要新增夸大宣传文字"
+	                    value={ecommerceExtraDirection}
+	                    onChange={(event) => setEcommerceExtraDirection(event.target.value)}
+	                  />
+	                </div>
               </section>
             </>
           ) : null}
 
-          {sidebarTab === "creative" ? (
+          {activeSidebarTab === "creative" ? (
             <>
           {saveError ? (
             <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700" data-testid="save-error">
@@ -6426,10 +8556,17 @@ export function App() {
             </div>
           </div>
 
-          <label className="block">
-            <span className="control-label">提示词</span>
+          <div className="block">
+            <div className="prompt-field-heading">
+              <span className="control-label">提示词</span>
+              <button className="prompt-optimize-button" disabled={!trimmedPrompt || isPromptOptimizing} type="button" onClick={() => void optimizePrompt()}>
+                {isPromptOptimizing ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : <Sparkles className="size-3.5" aria-hidden="true" />}
+                <span>{isPromptOptimizing ? "优化中" : "优化提示词"}</span>
+              </button>
+            </div>
             <textarea
               aria-invalid={Boolean(promptValidationMessage)}
+              aria-label="提示词"
               className="prompt-textarea mt-2 h-32 w-full resize-none rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm leading-6 text-neutral-950 outline-none transition focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100"
               id="prompt-input"
               name="prompt"
@@ -6438,7 +8575,7 @@ export function App() {
               data-testid="prompt-input"
               onChange={(event) => setPrompt(event.target.value)}
             />
-          </label>
+          </div>
 
           {!trimmedPrompt ? (
             <div className="-mt-3 flex flex-wrap gap-2" data-testid="prompt-starters">
@@ -6753,7 +8890,7 @@ export function App() {
                           <div className="inline-flex items-center gap-1">
                             <dt className="sr-only">输出数量</dt>
                             <dd>
-                              {successfulOutputCount(record)} / {totalOutputs} 张
+                              {successfulOutputCount(record)} / {totalOutputs} {recordOutputUnitLabel(record)}
                             </dd>
                           </div>
                           <div className="inline-flex items-center gap-1">
@@ -6837,34 +8974,38 @@ export function App() {
           </section>
             </>
           ) : null}
+
+          {canUseSeedanceVideo && activeSidebarTab === "video" ? <SeedanceVideoPanel onGenerated={handleSeedanceVideoGenerated} /> : null}
         </div>
 
-        <div className="ai-panel-actions grid grid-cols-1 gap-3 border-t border-neutral-200 bg-white px-5 py-4">
-          {sidebarTab === "plugins" ? (
-            <button className="primary-action" disabled={isEcommerceGenerating} type="button" onClick={() => void submitEcommerceGeneration()}>
-              {isEcommerceGenerating ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Workflow className="size-4" aria-hidden="true" />}
-              {isEcommerceGenerating ? "电商图生成中" : ecommerceMode === "category-kit" ? "生成品类套图到画布" : "生成电商图到画布"}
-            </button>
-          ) : (
-            <button
-              className="primary-action"
-              disabled={!canGenerate}
-              type="button"
-              data-generation-mode={generationMode}
-              data-reference-mode={isReferenceReady ? "edit" : "generate"}
-              data-testid="generate-button"
-              title={validationMessage || undefined}
-              onClick={submitGeneration}
-            >
-              {isReferenceReady ? (
-                <ImageIcon className="size-4" aria-hidden="true" />
-              ) : (
-                <Square className="size-4" aria-hidden="true" />
-              )}
-              {generationMode === "reference" ? "参考图生成到画布" : "生成到画布"}
-            </button>
-          )}
-        </div>
+        {activeSidebarTab !== "video" ? (
+          <div className="ai-panel-actions grid grid-cols-1 gap-3 border-t border-neutral-200 bg-white px-5 py-4">
+            {activeSidebarTab === "plugins" ? (
+              <button className="primary-action" disabled={isEcommerceGenerating} type="button" onClick={() => void submitEcommerceGeneration()}>
+                {isEcommerceGenerating ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Workflow className="size-4" aria-hidden="true" />}
+                {isEcommerceGenerating ? "电商图生成中" : ecommerceMode === "category-kit" ? "生成品类套图到画布" : ecommerceMode === "one-click-replace" ? "一键换装/换品到画布" : "生成电商图到画布"}
+              </button>
+            ) : (
+              <button
+                className="primary-action"
+                disabled={!canGenerate}
+                type="button"
+                data-generation-mode={generationMode}
+                data-reference-mode={isReferenceReady ? "edit" : "generate"}
+                data-testid="generate-button"
+                title={validationMessage || undefined}
+                onClick={submitGeneration}
+              >
+                {isReferenceReady ? (
+                  <ImageIcon className="size-4" aria-hidden="true" />
+                ) : (
+                  <Square className="size-4" aria-hidden="true" />
+                )}
+                {generationMode === "reference" ? "参考图生成到画布" : "生成到画布"}
+              </button>
+            )}
+          </div>
+        ) : null}
       </aside>
 
       </main>

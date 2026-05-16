@@ -357,7 +357,7 @@ export function GalleryPage({
       "_blank",
       "noopener,noreferrer"
     );
-    showStatus(isDemoMode ? "已打开演示图片。" : "已打开原图下载。");
+    showStatus(isVideoAsset(item.asset) ? "已打开视频下载。" : isDemoMode ? "已打开演示图片。" : "已打开原图下载。");
   }
 
   function requestDelete(item: GalleryImageItem): void {
@@ -373,6 +373,11 @@ export function GalleryPage({
     setError("");
     if (isDemoMode) {
       onAuthRequired?.();
+      return;
+    }
+    if (isVideoAsset(item.asset)) {
+      onReuse(item);
+      setSelectedItem(null);
       return;
     }
     const enabledModelOptions = modelOptions.filter((model) => model.enabled);
@@ -507,7 +512,7 @@ export function GalleryPage({
             <div className="mobile-gallery__empty" data-testid="gallery-empty">
               <ImageIcon className="size-7" aria-hidden="true" />
               <p>{items.length === 0 ? "暂无作品" : "没有匹配结果"}</p>
-              <span>{items.length === 0 ? "生成成功的图片会出现在这里。" : "换一个关键词再试试。"}</span>
+              <span>{items.length === 0 ? "生成成功的作品会出现在这里。" : "换一个关键词再试试。"}</span>
             </div>
           ) : (
             <div className="mobile-gallery__grid" data-testid="gallery-grid">
@@ -629,7 +634,7 @@ export function GalleryPage({
             <ImageIcon className="size-7" aria-hidden="true" />
             <div>
               <p>{items.length === 0 ? "暂无作品" : "没有匹配结果"}</p>
-              <span>{items.length === 0 ? "生成成功的图片会出现在这里。" : "换一个提示词关键词再试试。"}</span>
+              <span>{items.length === 0 ? "生成成功的作品会出现在这里。" : "换一个提示词关键词再试试。"}</span>
             </div>
           </div>
         ) : (
@@ -720,21 +725,26 @@ function FeaturedGalleryItem({
   onOpen: (item: GalleryImageItem) => void;
   onTogglePrompt: (outputId: string) => void;
 } & GalleryActionHandlers) {
+  const canCompare = isGalleryComparisonReady(item);
   return (
     <article className="gallery-feature" data-testid="gallery-feature">
       <button
         aria-label={`打开最新作品详情：${promptExcerpt(item.prompt)}`}
         className="gallery-feature__image-button"
         type="button"
+        onBlur={(event) => deactivateGalleryComparison(event.currentTarget)}
+        onFocus={(event) => activateGalleryComparison(event.currentTarget)}
+        onMouseEnter={(event) => activateGalleryComparison(event.currentTarget)}
+        onMouseLeave={(event) => deactivateGalleryComparison(event.currentTarget)}
+        onMouseMove={(event) => activateGalleryComparison(event.currentTarget)}
+        onPointerEnter={(event) => activateGalleryComparison(event.currentTarget)}
+        onPointerLeave={(event) => deactivateGalleryComparison(event.currentTarget)}
+        onPointerMove={(event) => activateGalleryComparison(event.currentTarget)}
         onClick={() => onOpen(item)}
       >
-        <img
-          alt={item.prompt}
-          className="gallery-feature__image"
-          height={item.asset.height}
-          src={assetDisplayUrl(item.asset, 1024)}
-          width={item.asset.width}
-        />
+        <GalleryMedia className="gallery-feature__image" item={item} previewWidth={1024} />
+        {canCompare ? <GalleryComparisonPreview item={item} previewWidth={1024} /> : null}
+        {canCompare ? <span className="gallery-image-compare-badge">对比</span> : null}
         <span className="gallery-feature__badge">Latest</span>
         <span className="gallery-card__zoom">
           <Maximize2 className="size-4" aria-hidden="true" />
@@ -744,7 +754,7 @@ function FeaturedGalleryItem({
       <div className="gallery-feature__body">
         <div>
           <p className="gallery-feature__eyebrow">最新生成</p>
-          <h2>编辑台主图</h2>
+          <h2>{isVideoAsset(item.asset) ? "视频作品" : "编辑台主图"}</h2>
         </div>
         <GalleryTags item={item} />
         <CollapsiblePrompt
@@ -761,7 +771,7 @@ function FeaturedGalleryItem({
             <Clock3 className="size-3.5" aria-hidden="true" />
             {formatCreatedTime(item.createdAt)}
           </span>
-          <span>{item.outputFormat.toUpperCase()}</span>
+          <span>{formatTagLabel(item)}</span>
           <span>{qualityLabel(item.quality)}</span>
         </div>
         <GalleryIconActions
@@ -797,22 +807,26 @@ function GalleryCard({
   onOpen: (item: GalleryImageItem) => void;
   onTogglePrompt: (outputId: string) => void;
 } & GalleryActionHandlers) {
+  const canCompare = isGalleryComparisonReady(item);
   return (
     <article className="gallery-card" data-testid="gallery-card">
       <button
         aria-label={`打开图片详情：${promptExcerpt(item.prompt)}`}
         className="gallery-card__image-button"
         type="button"
+        onBlur={(event) => deactivateGalleryComparison(event.currentTarget)}
+        onFocus={(event) => activateGalleryComparison(event.currentTarget)}
+        onMouseEnter={(event) => activateGalleryComparison(event.currentTarget)}
+        onMouseLeave={(event) => deactivateGalleryComparison(event.currentTarget)}
+        onMouseMove={(event) => activateGalleryComparison(event.currentTarget)}
+        onPointerEnter={(event) => activateGalleryComparison(event.currentTarget)}
+        onPointerLeave={(event) => deactivateGalleryComparison(event.currentTarget)}
+        onPointerMove={(event) => activateGalleryComparison(event.currentTarget)}
         onClick={() => onOpen(item)}
       >
-        <img
-          alt={item.prompt}
-          className="gallery-card__image"
-          height={item.asset.height}
-          loading="lazy"
-          src={assetDisplayUrl(item.asset, 512)}
-          width={item.asset.width}
-        />
+        <GalleryMedia className="gallery-card__image" item={item} previewWidth={512} />
+        {canCompare ? <GalleryComparisonPreview item={item} previewWidth={512} /> : null}
+        {canCompare ? <span className="gallery-image-compare-badge">对比</span> : null}
         <span className="gallery-card__zoom">
           <Maximize2 className="size-4" aria-hidden="true" />
         </span>
@@ -867,8 +881,8 @@ function MobileGalleryCard({
   return (
     <article className="mobile-gallery-card" data-testid="gallery-card">
       <button aria-label={`打开作品：${promptExcerpt(item.prompt)}`} className="mobile-gallery-card__image" type="button" onClick={() => onMore(item)}>
-        <img alt={item.prompt} height={item.asset.height} loading="lazy" src={assetDisplayUrl(item.asset, 512)} width={item.asset.width} />
-        <span>{item.mode === "edit" ? "场景图" : "主图"}</span>
+        <GalleryMedia item={item} previewWidth={512} />
+        <span>{isVideoAsset(item.asset) ? "视频" : item.mode === "edit" ? "场景图" : "主图"}</span>
       </button>
       <div className="mobile-gallery-card__meta">
         <span><i /> 已完成</span>
@@ -884,7 +898,7 @@ function MobileGalleryCard({
         </button>
         <button type="button" onClick={() => onReuse(item)}>
           <RotateCcw className="size-4" aria-hidden="true" />
-          复用
+          {isVideoAsset(item.asset) ? "放到画布" : "复用"}
         </button>
         <button disabled={deleting} type="button" onClick={() => onMore(item)}>
           {deleting ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <MoreHorizontal className="size-4" aria-hidden="true" />}
@@ -893,6 +907,115 @@ function MobileGalleryCard({
       </div>
     </article>
   );
+}
+
+function GalleryMedia({
+  className,
+  controls = false,
+  item,
+  previewWidth
+}: {
+  className?: string;
+  controls?: boolean;
+  item: GalleryImageItem;
+  previewWidth?: number;
+}) {
+  const url = assetDisplayUrl(item.asset, previewWidth);
+  if (isVideoAsset(item.asset)) {
+    return (
+      <video
+        aria-label={item.prompt}
+        className={className}
+        controls={controls}
+        height={item.asset.height}
+        loop={!controls}
+        muted={!controls}
+        playsInline
+        preload="metadata"
+        src={url}
+        width={item.asset.width}
+      />
+    );
+  }
+
+  return (
+    <img
+      alt={item.prompt}
+      className={className}
+      height={item.asset.height}
+      loading={controls ? undefined : "lazy"}
+      src={url}
+      width={item.asset.width}
+    />
+  );
+}
+
+function GalleryComparisonPreview({ item, previewWidth }: { item: GalleryImageItem; previewWidth?: number }) {
+  if (!item.referenceAsset || !isGalleryComparisonReady(item)) {
+    return null;
+  }
+
+  return (
+    <span aria-hidden="true" className="gallery-image-compare">
+      <span className="gallery-image-compare__pane">
+        <span className="gallery-image-compare__label">原图/参考图</span>
+        <img
+          alt=""
+          className="gallery-image-compare__image"
+          decoding="async"
+          height={item.referenceAsset.height}
+          loading="eager"
+          src={assetDisplayUrl(item.referenceAsset, previewWidth)}
+          width={item.referenceAsset.width}
+        />
+      </span>
+      <span className="gallery-image-compare__divider" />
+      <span className="gallery-image-compare__pane">
+        <span className="gallery-image-compare__label">生成图</span>
+        <img
+          alt=""
+          className="gallery-image-compare__image"
+          decoding="async"
+          height={item.asset.height}
+          loading="eager"
+          src={assetDisplayUrl(item.asset, previewWidth)}
+          width={item.asset.width}
+        />
+      </span>
+    </span>
+  );
+}
+
+function isGalleryComparisonReady(item: GalleryImageItem): boolean {
+  return galleryComparisonBlockReasons(item).length === 0;
+}
+
+function galleryComparisonBlockReasons(item: GalleryImageItem): string[] {
+  const reasons: string[] = [];
+  const referenceAsset = item.referenceAsset;
+  if (item.mode !== "edit") {
+    reasons.push("mode_not_edit");
+  }
+  if (isVideoAsset(item.asset)) {
+    reasons.push("generated_is_video");
+  }
+  if (!item.referenceAssetId) {
+    reasons.push("missing_referenceAssetId");
+  }
+  if (!referenceAsset) {
+    reasons.push("missing_referenceAsset");
+  } else if (isVideoAsset(referenceAsset)) {
+    reasons.push("reference_is_video");
+  }
+  return reasons;
+}
+
+function activateGalleryComparison(target: HTMLElement): void {
+  target.dataset.galleryCompareActive = "true";
+}
+
+function deactivateGalleryComparison(target: HTMLElement): void {
+  delete target.dataset.galleryCompareActive;
 }
 
 function GalleryIconActions({
@@ -922,25 +1045,25 @@ function GalleryIconActions({
         <Copy className="size-4" aria-hidden="true" />
       </button>
       <button
-        aria-label={`下载图片：${excerpt}`}
+        aria-label={`${isVideoAsset(item.asset) ? "下载视频" : "下载图片"}：${excerpt}`}
         className="gallery-icon-action"
-        title="下载原图"
+        title={isVideoAsset(item.asset) ? "下载视频" : "下载原图"}
         type="button"
         onClick={() => onDownload(item)}
       >
         <Download className="size-4" aria-hidden="true" />
       </button>
       <button
-        aria-label={`${demoMode ? "登录后重新生成" : "重新生成"}：${excerpt}`}
+        aria-label={`${isVideoAsset(item.asset) ? "放到画布" : demoMode ? "登录后重新生成" : "重新生成"}：${excerpt}`}
         className="gallery-icon-action"
-        title={demoMode ? "登录后重新生成" : "重新生成"}
+        title={isVideoAsset(item.asset) ? "放到画布" : demoMode ? "登录后重新生成" : "重新生成"}
         type="button"
         onClick={() => onReuse(item)}
       >
         <RotateCcw className="size-4" aria-hidden="true" />
       </button>
       <button
-        aria-label={`${demoMode ? "登录后管理 Gallery 图片" : "删除 Gallery 图片"}：${excerpt}`}
+        aria-label={`${demoMode ? "登录后管理 Gallery 作品" : "删除 Gallery 作品"}：${excerpt}`}
         className="gallery-icon-action gallery-icon-action--danger"
         disabled={deleting}
         title={demoMode ? "登录后可管理作品" : "从 Gallery 移除"}
@@ -963,7 +1086,7 @@ function GalleryTags({ item, compact = false }: { item: GalleryImageItem; compac
 
   return (
     <div className="gallery-tags" data-compact={compact}>
-      <span className="gallery-tag gallery-tag--mode">{modeLabel(item.mode)}</span>
+      <span className="gallery-tag gallery-tag--mode">{isVideoAsset(item.asset) ? "视频" : modeLabel(item.mode)}</span>
       {styleLabel ? (
         <span className="gallery-tag gallery-tag--style">
           <Palette className="size-3.5" aria-hidden="true" />
@@ -1063,6 +1186,7 @@ function GalleryDetailDialog({
   onReuse: () => void;
 }) {
   const [promptExpanded, setPromptExpanded] = useState(false);
+  const canCompare = isGalleryComparisonReady(item);
 
   return (
     <div className="gallery-modal-backdrop" data-testid="gallery-detail" role="presentation">
@@ -1070,25 +1194,28 @@ function GalleryDetailDialog({
         <header className="gallery-modal__header">
           <div className="gallery-modal__title">
             <p>Gallery Detail</p>
-            <h2 id="gallery-detail-title">图片详情</h2>
+            <h2 id="gallery-detail-title">{isVideoAsset(item.asset) ? "视频详情" : "图片详情"}</h2>
             <GalleryTags item={item} />
           </div>
-          <button aria-label="关闭图片详情" className="gallery-icon-action gallery-modal__close" type="button" onClick={onClose}>
+          <button aria-label={isVideoAsset(item.asset) ? "关闭视频详情" : "关闭图片详情"} className="gallery-icon-action gallery-modal__close" type="button" onClick={onClose}>
             <X className="size-4" aria-hidden="true" />
           </button>
         </header>
 
         <div className="gallery-modal__body">
           <div className="gallery-modal__media">
-            <div className="gallery-modal__image-frame">
-              <img
-                alt={item.prompt}
-                className="gallery-modal__image"
-                height={item.asset.height}
-                src={assetDisplayUrl(item.asset)}
-                width={item.asset.width}
-              />
-              {previewOverlay ? (
+            <div
+              className="gallery-modal__image-frame"
+              onMouseEnter={canCompare ? (event) => activateGalleryComparison(event.currentTarget) : undefined}
+              onMouseLeave={canCompare ? (event) => deactivateGalleryComparison(event.currentTarget) : undefined}
+              onMouseMove={canCompare ? (event) => activateGalleryComparison(event.currentTarget) : undefined}
+              onPointerEnter={canCompare ? (event) => activateGalleryComparison(event.currentTarget) : undefined}
+              onPointerLeave={canCompare ? (event) => deactivateGalleryComparison(event.currentTarget) : undefined}
+              onPointerMove={canCompare ? (event) => activateGalleryComparison(event.currentTarget) : undefined}
+            >
+              <GalleryMedia className="gallery-modal__image" controls item={item} />
+              {canCompare ? <GalleryComparisonPreview item={item} previewWidth={1024} /> : null}
+              {previewOverlay && !isVideoAsset(item.asset) ? (
                 <span className={`brand-result-overlay brand-result-overlay-${previewOverlay.placement}`}>
                   {previewOverlay.logoDataUrl ? <img alt="" src={previewOverlay.logoDataUrl} /> : <strong>{previewOverlay.text}</strong>}
                 </span>
@@ -1104,7 +1231,7 @@ function GalleryDetailDialog({
                 <Clock3 className="size-3.5" aria-hidden="true" />
                 {formatCreatedTime(item.createdAt)}
               </span>
-              <span>{item.outputFormat.toUpperCase()}</span>
+              <span>{formatTagLabel(item)}</span>
               <span>{qualityLabel(item.quality)}</span>
             </div>
             <CollapsiblePrompt
@@ -1128,7 +1255,7 @@ function GalleryDetailDialog({
           </button>
           <button className="secondary-action h-10" type="button" onClick={onReuse}>
             <RotateCcw className="size-4" aria-hidden="true" />
-            {demoMode ? "登录后重跑" : "重新生成"}
+            {isVideoAsset(item.asset) ? "放到画布" : demoMode ? "登录后重跑" : "重新生成"}
           </button>
           <button className="secondary-action h-10 text-red-700 hover:text-red-800" disabled={deleting} type="button" onClick={onDelete}>
             {deleting ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Trash2 className="size-4" aria-hidden="true" />}
@@ -1249,7 +1376,19 @@ function assetPreviewUrl(assetId: string, width: number): string {
 }
 
 function assetDisplayUrl(asset: GalleryImageItem["asset"], fallbackPreviewWidth?: number): string {
+  if (isVideoAsset(asset)) {
+    return asset.cdnUrl || authenticatedAssetUrl(asset.url);
+  }
+
   return previewUrlForWidth(asset.cdnPreviewUrls, fallbackPreviewWidth) || asset.cdnUrl || (fallbackPreviewWidth ? assetPreviewUrl(asset.id, fallbackPreviewWidth) : authenticatedAssetUrl(asset.url));
+}
+
+function isVideoAsset(asset: GalleryImageItem["asset"]): boolean {
+  return asset.mimeType.toLowerCase().startsWith("video/");
+}
+
+function formatTagLabel(item: GalleryImageItem): string {
+  return isVideoAsset(item.asset) ? "MP4" : item.outputFormat.toUpperCase();
 }
 
 function previewUrlForWidth(previewUrls: Record<string, string> | undefined, preferredWidth: number | undefined): string | undefined {

@@ -6,6 +6,7 @@ import { hashPassword } from "./auth-crypto.js";
 import { DEMO_USER_ID, DEMO_WORKSPACE_ID, type RequestTenant } from "./auth-context.js";
 import { authConfig, ensureRuntimeStorage, mysqlConfig, wechatMiniAppRuntimeConfig } from "./runtime.js";
 import * as schema from "./schema.js";
+import { builtInCategoryKitStrategies } from "./category-kit-strategy-seeds.js";
 
 ensureRuntimeStorage();
 
@@ -425,6 +426,47 @@ async function createSchema(): Promise<void> {
   await migrateBillingTransactionsTable();
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS redemption_codes (
+      id VARCHAR(64) PRIMARY KEY,
+      code VARCHAR(64) NOT NULL,
+      batch_id VARCHAR(64),
+      quota BIGINT NOT NULL DEFAULT 0,
+      max_redemptions INT NOT NULL DEFAULT 1,
+      used_count INT NOT NULL DEFAULT 0,
+      valid_days INT NOT NULL DEFAULT 30,
+      status VARCHAR(32) NOT NULL DEFAULT 'active',
+      note TEXT,
+      created_by_user_id VARCHAR(64),
+      created_at VARCHAR(32) NOT NULL,
+      updated_at VARCHAR(32) NOT NULL,
+      UNIQUE KEY redemption_codes_code_unique_idx (code),
+      KEY redemption_codes_batch_created_idx (batch_id, created_at),
+      KEY redemption_codes_status_created_idx (status, created_at),
+      CONSTRAINT redemption_codes_created_by_user_fk FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+  await migrateRedemptionCodesTable();
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS redemption_code_redemptions (
+      id VARCHAR(64) PRIMARY KEY,
+      code_id VARCHAR(64) NOT NULL,
+      code VARCHAR(64) NOT NULL,
+      user_id VARCHAR(64) NOT NULL,
+      quota_granted BIGINT NOT NULL DEFAULT 0,
+      expires_at VARCHAR(32) NOT NULL,
+      settled_at VARCHAR(32),
+      created_at VARCHAR(32) NOT NULL,
+      UNIQUE KEY redemption_code_redemptions_code_user_unique_idx (code_id, user_id),
+      KEY redemption_code_redemptions_user_created_at_idx (user_id, created_at),
+      KEY redemption_code_redemptions_code_created_at_idx (code_id, created_at),
+      CONSTRAINT redemption_code_redemptions_code_fk FOREIGN KEY (code_id) REFERENCES redemption_codes(id) ON DELETE CASCADE,
+      CONSTRAINT redemption_code_redemptions_user_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+  await migrateRedemptionCodeRedemptionsTable();
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS billing_orders (
       id VARCHAR(64) PRIMARY KEY,
       out_trade_no VARCHAR(128) NOT NULL,
@@ -511,6 +553,76 @@ async function createSchema(): Promise<void> {
       CONSTRAINT ecommerce_batch_jobs_created_by_user_fk FOREIGN KEY (created_by_user_id) REFERENCES users(id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS app_notifications (
+      id VARCHAR(64) PRIMARY KEY,
+      workspace_id VARCHAR(64) NOT NULL,
+      user_id VARCHAR(64) NOT NULL,
+      type VARCHAR(64) NOT NULL,
+      severity VARCHAR(32) NOT NULL,
+      title VARCHAR(255) NOT NULL,
+      body TEXT NOT NULL,
+      action_url TEXT,
+      related_type VARCHAR(64),
+      related_id VARCHAR(64),
+      payload_json LONGTEXT,
+      created_at VARCHAR(32) NOT NULL,
+      read_at VARCHAR(32),
+      delivered_at VARCHAR(32),
+      dismissed_at VARCHAR(32),
+      KEY app_notifications_user_created_at_idx (user_id, created_at),
+      KEY app_notifications_user_read_idx (user_id, read_at),
+      KEY app_notifications_related_idx (related_type, related_id),
+      CONSTRAINT app_notifications_workspace_fk FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+      CONSTRAINT app_notifications_user_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS notification_devices (
+      id VARCHAR(64) PRIMARY KEY,
+      user_id VARCHAR(64) NOT NULL,
+      channel VARCHAR(32) NOT NULL,
+      platform VARCHAR(32) NOT NULL,
+      provider VARCHAR(64),
+      push_token VARCHAR(512),
+      device_id VARCHAR(255),
+      user_agent TEXT,
+      enabled INT NOT NULL DEFAULT 1,
+      created_at VARCHAR(32) NOT NULL,
+      updated_at VARCHAR(32) NOT NULL,
+      last_seen_at VARCHAR(32) NOT NULL,
+      KEY notification_devices_user_channel_idx (user_id, channel),
+      UNIQUE KEY notification_devices_push_token_idx (provider, push_token),
+      UNIQUE KEY notification_devices_device_idx (user_id, device_id),
+      CONSTRAINT notification_devices_user_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ecommerce_category_kit_strategies (
+      id VARCHAR(64) PRIMARY KEY,
+      category_path_key VARCHAR(512) NOT NULL,
+      category_path_json LONGTEXT NOT NULL,
+      category_name VARCHAR(255) NOT NULL,
+      platform VARCHAR(64),
+      market VARCHAR(64),
+      enabled INT NOT NULL DEFAULT 1,
+      priority INT NOT NULL DEFAULT 0,
+      source VARCHAR(64) NOT NULL DEFAULT 'manual',
+      version VARCHAR(64),
+      search_text LONGTEXT NOT NULL,
+      strategy_json LONGTEXT NOT NULL,
+      created_at VARCHAR(32) NOT NULL,
+      updated_at VARCHAR(32) NOT NULL,
+      KEY ecommerce_category_kit_strategies_category_path_idx (category_path_key),
+      KEY ecommerce_category_kit_strategies_platform_market_idx (platform, market),
+      KEY ecommerce_category_kit_strategies_enabled_priority_idx (enabled, priority)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+  await migrateCategoryKitStrategiesTable();
+  await seedDefaultCategoryKitStrategies();
 
   const now = new Date().toISOString();
   await pool.query(
@@ -785,6 +897,53 @@ async function migrateBillingTransactionsTable(): Promise<void> {
     "billing_transactions",
     "billing_transactions_type_created_at_idx",
     "KEY billing_transactions_type_created_at_idx (type, created_at)"
+  );
+}
+
+async function migrateRedemptionCodesTable(): Promise<void> {
+  await addColumnIfMissing("redemption_codes", "batch_id", "VARCHAR(64)");
+  await addColumnIfMissing("redemption_codes", "quota", "BIGINT NOT NULL DEFAULT 0");
+  await addColumnIfMissing("redemption_codes", "max_redemptions", "INT NOT NULL DEFAULT 1");
+  await addColumnIfMissing("redemption_codes", "used_count", "INT NOT NULL DEFAULT 0");
+  await addColumnIfMissing("redemption_codes", "valid_days", "INT NOT NULL DEFAULT 30");
+  await addColumnIfMissing("redemption_codes", "status", "VARCHAR(32) NOT NULL DEFAULT 'active'");
+  await addColumnIfMissing("redemption_codes", "note", "TEXT");
+  await addColumnIfMissing("redemption_codes", "created_by_user_id", "VARCHAR(64)");
+  await addColumnIfMissing("redemption_codes", "created_at", "VARCHAR(32) NOT NULL DEFAULT ''");
+  await addColumnIfMissing("redemption_codes", "updated_at", "VARCHAR(32) NOT NULL DEFAULT ''");
+  await addIndexIfMissing("redemption_codes", "redemption_codes_code_unique_idx", "UNIQUE KEY redemption_codes_code_unique_idx (code)");
+  await addIndexIfMissing(
+    "redemption_codes",
+    "redemption_codes_batch_created_idx",
+    "KEY redemption_codes_batch_created_idx (batch_id, created_at)"
+  );
+  await addIndexIfMissing(
+    "redemption_codes",
+    "redemption_codes_status_created_idx",
+    "KEY redemption_codes_status_created_idx (status, created_at)"
+  );
+}
+
+async function migrateRedemptionCodeRedemptionsTable(): Promise<void> {
+  await addColumnIfMissing("redemption_code_redemptions", "code", "VARCHAR(64) NOT NULL DEFAULT ''");
+  await addColumnIfMissing("redemption_code_redemptions", "quota_granted", "BIGINT NOT NULL DEFAULT 0");
+  await addColumnIfMissing("redemption_code_redemptions", "expires_at", "VARCHAR(32) NOT NULL DEFAULT ''");
+  await addColumnIfMissing("redemption_code_redemptions", "settled_at", "VARCHAR(32)");
+  await addColumnIfMissing("redemption_code_redemptions", "created_at", "VARCHAR(32) NOT NULL DEFAULT ''");
+  await addIndexIfMissing(
+    "redemption_code_redemptions",
+    "redemption_code_redemptions_code_user_unique_idx",
+    "UNIQUE KEY redemption_code_redemptions_code_user_unique_idx (code_id, user_id)"
+  );
+  await addIndexIfMissing(
+    "redemption_code_redemptions",
+    "redemption_code_redemptions_user_created_at_idx",
+    "KEY redemption_code_redemptions_user_created_at_idx (user_id, created_at)"
+  );
+  await addIndexIfMissing(
+    "redemption_code_redemptions",
+    "redemption_code_redemptions_code_created_at_idx",
+    "KEY redemption_code_redemptions_code_created_at_idx (code_id, created_at)"
   );
 }
 
@@ -1144,6 +1303,87 @@ async function seedDefaultSubscriptionPlans(): Promise<void> {
       ]
     );
   }
+}
+
+async function migrateCategoryKitStrategiesTable(): Promise<void> {
+  await addColumnIfMissing("ecommerce_category_kit_strategies", "category_path_key", "VARCHAR(512) NOT NULL DEFAULT ''");
+  await addColumnIfMissing("ecommerce_category_kit_strategies", "category_path_json", "LONGTEXT NOT NULL");
+  await addColumnIfMissing("ecommerce_category_kit_strategies", "category_name", "VARCHAR(255) NOT NULL DEFAULT ''");
+  await addColumnIfMissing("ecommerce_category_kit_strategies", "platform", "VARCHAR(64)");
+  await addColumnIfMissing("ecommerce_category_kit_strategies", "market", "VARCHAR(64)");
+  await addColumnIfMissing("ecommerce_category_kit_strategies", "enabled", "INT NOT NULL DEFAULT 1");
+  await addColumnIfMissing("ecommerce_category_kit_strategies", "priority", "INT NOT NULL DEFAULT 0");
+  await addColumnIfMissing("ecommerce_category_kit_strategies", "source", "VARCHAR(64) NOT NULL DEFAULT 'manual'");
+  await addColumnIfMissing("ecommerce_category_kit_strategies", "version", "VARCHAR(64)");
+  await addColumnIfMissing("ecommerce_category_kit_strategies", "search_text", "LONGTEXT NOT NULL");
+  await addColumnIfMissing("ecommerce_category_kit_strategies", "strategy_json", "LONGTEXT NOT NULL");
+  await addColumnIfMissing("ecommerce_category_kit_strategies", "created_at", "VARCHAR(32) NOT NULL DEFAULT ''");
+  await addColumnIfMissing("ecommerce_category_kit_strategies", "updated_at", "VARCHAR(32) NOT NULL DEFAULT ''");
+  await addIndexIfMissing(
+    "ecommerce_category_kit_strategies",
+    "ecommerce_category_kit_strategies_category_path_idx",
+    "KEY ecommerce_category_kit_strategies_category_path_idx (category_path_key)"
+  );
+  await addIndexIfMissing(
+    "ecommerce_category_kit_strategies",
+    "ecommerce_category_kit_strategies_platform_market_idx",
+    "KEY ecommerce_category_kit_strategies_platform_market_idx (platform, market)"
+  );
+  await addIndexIfMissing(
+    "ecommerce_category_kit_strategies",
+    "ecommerce_category_kit_strategies_enabled_priority_idx",
+    "KEY ecommerce_category_kit_strategies_enabled_priority_idx (enabled, priority)"
+  );
+}
+
+async function seedDefaultCategoryKitStrategies(): Promise<void> {
+  const now = new Date().toISOString();
+  for (const strategy of builtInCategoryKitStrategies) {
+    await pool.query(
+      `
+        INSERT INTO ecommerce_category_kit_strategies (
+          id, category_path_key, category_path_json, category_name, platform, market, enabled, priority, source, version, search_text, strategy_json, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+          id = id
+      `,
+      [
+        strategy.id,
+        categoryPathKey(strategy.categoryPath),
+        JSON.stringify(strategy.categoryPath),
+        strategy.categoryName,
+        strategy.platform ?? null,
+        strategy.market ?? null,
+        strategy.enabled === false ? 0 : 1,
+        strategy.priority ?? 0,
+        strategy.source ?? "built-in",
+        strategy.version ?? null,
+        categoryKitStrategySearchText(strategy),
+        JSON.stringify(strategy),
+        now,
+        now
+      ]
+    );
+  }
+}
+
+function categoryPathKey(categoryPath: string[]): string {
+  return categoryPath.map((part) => part.trim()).filter(Boolean).join("/");
+}
+
+function categoryKitStrategySearchText(strategy: typeof builtInCategoryKitStrategies[number]): string {
+  return [
+    strategy.id,
+    strategy.categoryName,
+    ...strategy.categoryPath,
+    ...(strategy.aliases ?? []),
+    ...(strategy.visualStyle ?? []),
+    ...(strategy.copyStyle ?? []),
+    ...(strategy.sellingPointLogic ?? [])
+  ]
+    .join(" ")
+    .toLowerCase();
 }
 
 async function getDefaultSubscriptionPlan(): Promise<{ imageQuota: number; storageQuotaBytes: number }> {

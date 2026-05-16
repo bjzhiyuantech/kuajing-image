@@ -78,6 +78,7 @@ export interface BatchFormState {
   countPerScene: 1 | 2 | 4;
   referenceImageUrl: string;
   referenceImageUrls: string[];
+  replacementImageUrls: string[];
   extraDirection: string;
   categoryKit: {
     categoryId: "auto-category-kit" | "accessory-scarf";

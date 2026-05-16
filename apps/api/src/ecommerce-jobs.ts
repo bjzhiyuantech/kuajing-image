@@ -3,9 +3,11 @@ import type { RequestTenant } from "./auth-context.js";
 import { buildAssetCdnPreviewUrls, buildAssetCdnUrl } from "./asset-cdn.js";
 import type {
   EcommerceCategoryKitPlanItem,
+  EcommerceBatchReferenceImage,
   EcommerceBatchGenerateResponse,
   EcommerceJobListResponse,
   EcommerceJobSummary,
+  EcommerceCategoryKitPreparationResponse,
   EcommerceMarket,
   EcommercePlatform,
   EcommerceProductBrief,
@@ -36,6 +38,7 @@ export interface PersistedEcommerceBatchRequest {
   sceneTemplateIds: EcommerceSceneTemplateId[];
   categoryKitPlannerPending?: boolean;
   plannedImages?: EcommerceCategoryKitPlanItem[];
+  categoryKit?: EcommerceCategoryKitPreparationResponse;
   sourcePageUrl?: string;
   size: ImageSize;
   stylePresetId: StylePresetId;
@@ -43,6 +46,7 @@ export interface PersistedEcommerceBatchRequest {
   outputFormat: OutputFormat;
   countPerScene: number;
   referenceImage?: ReferenceImageInput;
+  referenceImages?: EcommerceBatchReferenceImage[];
   extraDirection?: string;
 }
 
@@ -101,19 +105,78 @@ export async function createEcommerceBatchJob(input: CreateEcommerceBatchJobInpu
 }
 
 export function getEcommerceBatchSceneCount(input: PersistedEcommerceBatchRequest): number {
+  if (input.referenceImages?.length) {
+    return input.referenceImages.length;
+  }
   return input.plannedImages?.length || input.sceneTemplateIds.length;
 }
 
 function toStoredRequest(input: PersistedEcommerceBatchRequest): Record<string, unknown> {
+  const {
+    referenceImage,
+    referenceImages,
+    categoryKit,
+    ...rest
+  } = input;
+  return scrubInlineImageData({
+    ...rest,
+    referenceImage: referenceImage
+      ? summarizeReferenceImage(referenceImage)
+      : undefined,
+    referenceImages: referenceImages?.map((item, index) => ({
+      hasImage: true,
+      referenceImage: summarizeReferenceImage(item.referenceImage),
+      fileName: item.referenceImage.fileName,
+      title: item.title,
+      size: item.size,
+      extraDirection: item.extraDirection,
+      index
+    })),
+    categoryKit
+  }) as Record<string, unknown>;
+}
+
+function summarizeReferenceImage(input: ReferenceImageInput): Record<string, unknown> {
   return {
-    ...input,
-    referenceImage: input.referenceImage
-      ? {
-          hasImage: true,
-          fileName: input.referenceImage.fileName
-        }
-      : undefined
+    hasImage: true,
+    fileName: input.fileName,
+    mimeType: dataUrlMimeType(input.dataUrl),
+    approxBytes: dataUrlApproxBytes(input.dataUrl),
+    hasMask: Boolean(input.maskDataUrl),
+    hasMaskedImage: Boolean(input.maskedDataUrl),
+    hasAnnotatedImage: Boolean(input.annotatedDataUrl)
   };
+}
+
+function scrubInlineImageData(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(scrubInlineImageData);
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, item]) => {
+      if (/dataUrl$/iu.test(key) && typeof item === "string") {
+        return [key, { redacted: true, mimeType: dataUrlMimeType(item), approxBytes: dataUrlApproxBytes(item) }];
+      }
+      return [key, scrubInlineImageData(item)];
+    })
+  );
+}
+
+function dataUrlMimeType(value: string): string | undefined {
+  const match = /^data:([^;,]+)[;,]/iu.exec(value);
+  return match?.[1];
+}
+
+function dataUrlApproxBytes(value: string): number | undefined {
+  const commaIndex = value.indexOf(",");
+  if (commaIndex < 0) {
+    return undefined;
+  }
+  return Math.round(((value.length - commaIndex - 1) * 3) / 4);
 }
 
 export async function updateEcommerceBatchJob(
@@ -231,12 +294,14 @@ export async function getEcommerceStats(tenant: RequestTenant): Promise<Ecommerc
 
 async function toBatchJobResponse(tenant: RequestTenant, row: typeof ecommerceBatchJobs.$inferSelect): Promise<EcommerceBatchGenerateResponse> {
   const records = await hydrateRecordAssetCdnFields(tenant, parseRecords(row.recordsJson));
+  const storedRequest = parseStoredRequest(row.requestJson);
   return {
     jobId: row.id,
     status: row.status as PersistedEcommerceBatchJobStatus,
     message: row.message,
     totalScenes: row.totalScenes,
     completedScenes: row.completedScenes,
+    categoryKitPreparation: storedRequest.categoryKit,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     completedAt: row.completedAt ?? undefined,

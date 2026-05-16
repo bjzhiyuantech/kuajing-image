@@ -172,6 +172,22 @@ function getStats() {
   return request("/api/ecommerce/stats");
 }
 
+function getNotifications(limit = 30) {
+  return request(`/api/notifications?limit=${limit}`);
+}
+
+function markNotificationRead(notificationId) {
+  return request(`/api/notifications/${encodeURIComponent(notificationId)}/read`, {
+    method: "POST"
+  });
+}
+
+function markAllNotificationsRead() {
+  return request("/api/notifications/read-all", {
+    method: "POST"
+  });
+}
+
 function getGallery() {
   return request("/api/gallery");
 }
@@ -195,6 +211,13 @@ function applyInvoiceApplication(payload) {
   });
 }
 
+function redeemCode(code) {
+  return request("/api/redemption-codes/redeem", {
+    method: "POST",
+    data: { code }
+  });
+}
+
 module.exports = {
   clearSession,
   applyInvoiceApplication,
@@ -204,12 +227,16 @@ module.exports = {
   getGallery,
   getJob,
   getJobs,
+  getNotifications,
   getInvoiceApplications,
   getStats,
   getWechatMiniAppConfig,
   getToken,
   login,
+  markAllNotificationsRead,
+  markNotificationRead,
   me,
+  redeemCode,
   register,
   updateProfile,
   wechatMiniAppBind,

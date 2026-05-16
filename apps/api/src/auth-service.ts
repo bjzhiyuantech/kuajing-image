@@ -65,6 +65,13 @@ interface WechatSession {
   unionid?: string;
 }
 
+export interface WechatMiniAppServerConfig {
+  enabled: boolean;
+  appId: string;
+  appSecret: string;
+  taskCompleteTemplateId?: string;
+}
+
 interface WechatBindTokenPayload {
   openId: string;
   unionId?: string;
@@ -249,19 +256,30 @@ export async function getWechatMiniAppConfig(): Promise<WechatMiniAppConfigRespo
   };
 }
 
+export async function getWechatMiniAppServerConfig(): Promise<WechatMiniAppServerConfig> {
+  const config = await getRawWechatMiniAppConfig();
+  return {
+    enabled: config.enabled === true,
+    appId: stringValue(config.appId) ?? "",
+    appSecret: stringValue(config.appSecret) ?? "",
+    taskCompleteTemplateId: stringValue(config.taskCompleteTemplateId)
+  };
+}
+
 export async function getAdminWechatMiniAppConfig(): Promise<AdminWechatMiniAppConfigResponse> {
   const row = await getSystemSetting(WECHAT_MINIAPP_SETTINGS_KEY);
   const config = parseRecord(row?.valueJson);
   return {
-    wechatMiniApp: {
-      ...toWechatMiniAppPublicConfig(config, row?.updatedAt),
-      appId: stringValue(config.appId) ?? "",
-      appSecret: {
-        hasSecret: Boolean(stringValue(config.appSecret)),
-        value: maskSecret(stringValue(config.appSecret))
+      wechatMiniApp: {
+        ...toWechatMiniAppPublicConfig(config, row?.updatedAt),
+        appId: stringValue(config.appId) ?? "",
+        appSecret: {
+          hasSecret: Boolean(stringValue(config.appSecret)),
+          value: maskSecret(stringValue(config.appSecret))
+        },
+        taskCompleteTemplateId: stringValue(config.taskCompleteTemplateId) ?? ""
       }
-    }
-  };
+    };
 }
 
 export async function saveWechatMiniAppConfig(input: SaveWechatMiniAppConfigRequest): Promise<AdminWechatMiniAppConfigResponse> {
@@ -270,6 +288,7 @@ export async function saveWechatMiniAppConfig(input: SaveWechatMiniAppConfigRequ
     enabled: input.enabled === true,
     appId: limitedString(input.appId, 255) ?? stringValue(existing.appId) ?? "",
     appSecret: input.preserveAppSecret === true ? stringValue(existing.appSecret) ?? "" : limitedString(input.appSecret, 512) ?? "",
+    taskCompleteTemplateId: limitedString(input.taskCompleteTemplateId, 255) ?? stringValue(existing.taskCompleteTemplateId) ?? "",
     allowBindExistingAccount: input.allowBindExistingAccount !== false,
     allowRegisterNewUser: input.allowRegisterNewUser !== false
   };
@@ -487,7 +506,7 @@ export async function getAuthSessionFromToken(token: string): Promise<AuthSessio
 export async function requireAuthSession(headers: Headers): Promise<AuthSession> {
   const session = await getAuthSession(headers);
   if (!session) {
-    throw new AuthError("unauthorized", "请先登录，并使用 Authorization: Bearer <JWT> 访问接口。", 401);
+    throw new AuthError("unauthorized", "请先登录账号。", 401);
   }
 
   return session;
@@ -710,6 +729,7 @@ async function getRawWechatMiniAppConfig(): Promise<Record<string, unknown>> {
     enabled: true,
     appId: stringValue(saved.appId) ?? wechatMiniAppRuntimeConfig.appId ?? "",
     appSecret: stringValue(saved.appSecret) ?? wechatMiniAppRuntimeConfig.appSecret ?? "",
+    taskCompleteTemplateId: stringValue(saved.taskCompleteTemplateId) ?? wechatMiniAppRuntimeConfig.taskCompleteTemplateId ?? "",
     allowBindExistingAccount: saved.allowBindExistingAccount !== false,
     allowRegisterNewUser: saved.allowRegisterNewUser !== false
   };
@@ -720,6 +740,7 @@ function toWechatMiniAppPublicConfig(value: Record<string, unknown>, updatedAt?:
     enabled: value.enabled === true,
     allowBindExistingAccount: value.allowBindExistingAccount !== false,
     allowRegisterNewUser: value.allowRegisterNewUser !== false,
+    taskCompleteTemplateId: stringValue(value.taskCompleteTemplateId),
     updatedAt
   };
 }

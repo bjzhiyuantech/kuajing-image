@@ -2,6 +2,9 @@
 set -eu
 
 PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
+COREPACK_NPM_REGISTRY="${COREPACK_NPM_REGISTRY:-${NPM_CONFIG_REGISTRY:-https://registry.npmmirror.com}}"
+NPM_CONFIG_REGISTRY="${NPM_CONFIG_REGISTRY:-$COREPACK_NPM_REGISTRY}"
+export COREPACK_NPM_REGISTRY NPM_CONFIG_REGISTRY
 
 SERVER="${SERVER:-root@101.200.231.35}"
 SERVER_HOST="${SERVER#*@}"
@@ -33,7 +36,7 @@ Usage: $0 [dev|promote|status]
 
 Commands:
   dev      Sync local code to the inactive dev color, start it, package/upload the dev extension.
-  promote  Promote the current dev color to production, package/upload the prod extension.
+  promote  Promote the current dev color to production, package/upload the prod extension. No color is needed.
   status   Show current server blue/green and extension release status.
 
 Environment:

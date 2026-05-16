@@ -38,6 +38,17 @@
         <view class="muted">账户余额</view>
       </view>
     </view>
+    <button class="secondary-button" bindtap="goNotifications">消息中心</button>
+    <view class="redeem-box">
+      <view>
+        <view class="redeem-title">兑换码</view>
+        <view class="muted">输入后台发放的兑换码，立即领取生图额度。</view>
+      </view>
+      <view class="redeem-row">
+        <input class="login-input" value="{{redemptionCode}}" bindinput="onRedemptionCodeInput" placeholder="输入兑换码" />
+        <button class="secondary-button redeem-button" loading="{{redemptionSaving}}" bindtap="redeemCode">兑换</button>
+      </view>
+    </view>
     <button class="secondary-button danger" bindtap="logout">退出登录</button>
   </view>
 

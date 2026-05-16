@@ -166,7 +166,7 @@ docker compose up --build
 
 Docker Compose 还会默认设置 `SQLITE_JOURNAL_MODE=DELETE` 和 `SQLITE_LOCKING_MODE=EXCLUSIVE`。这样可以避开 Docker Desktop 绑定挂载 `./data` 目录时常见的 SQLite `SQLITE_IOERR_SHMOPEN` 错误，同时仍然把项目和生成资产保存在宿主机上。
 
-如需使用宿主机已经运行的 MySQL，请在 `.env` 中设置：
+应用使用 MySQL 存储业务数据。蓝绿部署不会启动本地 MySQL，请在 `.env` 中指向外部 MySQL（例如阿里云 RDS）。如果是宿主机已经运行的 MySQL，可以这样设置：
 
 ```env
 MYSQL_HOST=host.docker.internal
@@ -195,6 +195,18 @@ NODE_IMAGE=public.ecr.aws/docker/library/node:22-bookworm-slim docker compose up
 
 `OPENAI_API_KEY` 可以在本地启动检查时留空。应用仍会启动，生成端点会返回缺少 key 的 JSON 错误，直到配置凭证为止。
 
+任务完成通知支持站内消息、App 个推离线推送和小程序订阅消息。生产环境建议在 API 服务 `.env` 中配置：
+
+```env
+GETUI_ENABLED=true
+GETUI_APP_ID=你的个推 AppID
+GETUI_APP_KEY=你的个推 AppKey
+GETUI_MASTER_SECRET=你的个推 MasterSecret
+WECHAT_MINIAPP_TASK_COMPLETE_TEMPLATE_ID=小程序任务完成订阅消息模板 ID
+```
+
+注意不要把 `GETUI_APP_KEY` 或 `GETUI_MASTER_SECRET` 放到移动端包里；Android 客户端只需要 AppID 来初始化 SDK，CID 会登录后上报给后端。
+
 ## 蓝绿部署
 
 如果希望升级时生产入口不断线，可以使用仓库内置的蓝绿部署 Compose 文件。它会同时运行两套应用服务：
@@ -202,7 +214,8 @@ NODE_IMAGE=public.ecr.aws/docker/library/node:22-bookworm-slim docker compose up
 - `app-blue`：蓝色环境。
 - `app-green`：绿色环境。
 - `nginx`：对外暴露统一入口，默认 `http://localhost:8787`，只把流量转发到当前上线环境。
-- `mysql`：两套应用共享同一个 MySQL 数据库。
+
+数据库由 `.env` 中的 `DATABASE_URL` 或 `MYSQL_*` 指向外部 MySQL；蓝绿 Compose 不会启动本地 `mysql` 容器。
 
 默认端口：
 
@@ -215,25 +228,26 @@ NODE_IMAGE=public.ecr.aws/docker/library/node:22-bookworm-slim docker compose up
 
 ```sh
 cp .env.example .env
+# 编辑 .env，把 MYSQL_HOST/MYSQL_PORT/MYSQL_USER/MYSQL_PASSWORD/MYSQL_DATABASE 指向外部 MySQL
 docker compose -f docker-compose.bluegreen.yml up -d --build
 ```
 
-默认生产流量指向 `app-blue`。你可以把未接流量的一侧作为开发/预发布环境，完成升级后切换生产流量：
-
-```sh
-./scripts/bluegreen-switch.sh green
-```
-
-不传参数时，脚本会自动切到当前环境的另一侧：
+默认生产流量指向 `app-blue`。你可以把未接流量的一侧作为开发/预发布环境，完成升级后切换生产流量。脚本会读取远端 dev 入口当前指向的颜色，并将它提升为生产，不需要手动记住当前是蓝还是绿：
 
 ```sh
 ./scripts/bluegreen-switch.sh
 ```
 
-脚本会先启动并构建目标服务，等待目标服务的 `/api/health` 通过，再重写 Nginx upstream 并 reload Nginx。切换完成后，旧环境仍保持运行，可以作为下一轮开发/升级环境，也可以用于快速回滚：
+如果确实要强制指定颜色，也可以传 `blue` 或 `green`：
 
 ```sh
 ./scripts/bluegreen-switch.sh blue
+```
+
+`bluegreen-switch.sh` 是远端发布切换入口，等价于 `server-release.sh promote`；它会 SSH 到 `SERVER` 指向的机器，在 `REMOTE_DIR` 下检查目标服务的 `/api/health`，再重写 Nginx upstream 并重建 Nginx。切换完成后，它会从后台“插件发布配置”读取 prod 版本号，打包正式插件并上传到远端 `downloads/`。旧环境仍保持运行，可以作为下一轮开发/升级环境，也可以用于快速回滚：
+
+```sh
+./scripts/bluegreen-switch.sh
 ```
 
 线上入口端口可通过 `.env` 中的 `PUBLIC_PORT` 修改，例如：
@@ -253,25 +267,31 @@ dev.neimou.com    -> 127.0.0.1:8790
 
 Docker 内部 Nginx 会自动维护两条线路：生产入口指向当前上线颜色，dev 入口指向另一种颜色。例如生产在 `blue` 时，dev 指向 `green`；生产切到 `green` 后，dev 会指向 `blue`。
 
-服务器上拉取 GitHub 最新代码、启动 inactive 颜色作为 dev 环境、打包两个插件 zip，可以运行：
+推荐使用统一发布脚本；直接运行时会出现交互菜单，选择 `1` 发布 dev，选择 `2` 切换蓝绿并打包/上传正式插件：
 
 ```sh
-./scripts/server-deploy.sh
+./scripts/server-release.sh
+```
+
+也可以用非交互命令同步本地代码到服务器、启动 inactive 颜色作为 dev 环境，并打包/上传 Dev 插件：
+
+```sh
+./scripts/server-release.sh dev
 ```
 
 也可以明确指定本次要启动哪一侧作为 dev 环境：
 
 ```sh
-./scripts/server-deploy.sh green
+./scripts/server-release.sh dev green
 ```
 
-脚本完成后先访问 `https://dev.neimou.com`，并安装 `downloads/` 里的 Dev 插件包验证。确认没问题后，再把生产流量切到本次验证过的颜色：
+脚本完成后先访问 `https://dev.neimou.com`，并安装 `downloads/` 里的 Dev 插件包验证。确认没问题后，用切换入口自动把当前 dev 颜色提升为生产，并打包/上传正式插件：
 
 ```sh
-./scripts/bluegreen-switch.sh green
+./scripts/bluegreen-switch.sh
 ```
 
-下一轮发布时，当前生产色会变成 `green`，再运行 `./scripts/server-deploy.sh` 会自动选择 `blue` 作为 dev 环境。
+`./scripts/bluegreen-switch.sh` 等价于 `./scripts/server-release.sh promote`，会在切换后继续打包/上传正式插件并更新发布配置。下一轮发布时，再运行 `./scripts/server-release.sh dev` 会自动选择新的 inactive 颜色作为 dev 环境。
 
 注意：蓝绿部署可以避免应用容器重启导致的断链，但数据库结构变更仍需要向前兼容。发布前请避免“新代码必须依赖刚删除的旧字段”或“旧代码无法读取新结构”这类一次性破坏性迁移；更稳妥的做法是先加字段/表，确认新旧版本都能运行，再在后续版本清理旧结构。
 

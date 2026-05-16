@@ -2,8 +2,11 @@
 set -eu
 
 PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
+COREPACK_NPM_REGISTRY="${COREPACK_NPM_REGISTRY:-${NPM_CONFIG_REGISTRY:-https://registry.npmmirror.com}}"
+NPM_CONFIG_REGISTRY="${NPM_CONFIG_REGISTRY:-$COREPACK_NPM_REGISTRY}"
+export COREPACK_NPM_REGISTRY NPM_CONFIG_REGISTRY
 
-COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.bluegreen.yml}"
+COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.server-bluegreen.yml}"
 ACTIVE_FILE="${ACTIVE_FILE:-deploy/bluegreen/active}"
 UPSTREAM_FILE="${UPSTREAM_FILE:-deploy/nginx/active-upstream.conf}"
 DEV_UPSTREAM_FILE="${DEV_UPSTREAM_FILE:-deploy/nginx/dev-upstream.conf}"
@@ -79,6 +82,11 @@ require_command docker
 require_command corepack
 require_command node
 
+if ! docker info >/dev/null 2>&1; then
+  echo "Docker daemon is not running. Start Docker Desktop first; this script starts app/nginx containers but does not start a local MySQL container." >&2
+  exit 1
+fi
+
 current="$(read_active_color)"
 target="${1:-$(opposite_color "$current")}"
 
@@ -123,8 +131,7 @@ fi
 echo "Installing workspace dependencies for extension packaging..."
 corepack pnpm install --frozen-lockfile
 
-echo "Starting shared services and rebuilding $service..."
-docker compose -f "$COMPOSE_FILE" up -d mysql
+echo "Rebuilding $service..."
 docker compose -f "$COMPOSE_FILE" up -d --build "$service"
 wait_for_service "$service"
 

@@ -45,6 +45,7 @@ import {
   type AppConfig,
   type AdminAssetsResponse,
   type AdminAdjustBalanceRequest,
+  type AdminCreateRedemptionCodesRequest,
   type AdminPlansResponse,
   type AdminStatsResponse,
   type AdminUsersResponse,
@@ -62,8 +63,14 @@ import {
   type SaveWechatMiniAppConfigRequest,
   type ApplyInvoiceRequest,
   type EcommerceBatchGenerateRequest,
+  type EcommerceBatchReferenceImage,
   type EcommerceBatchGenerateResponse,
+  type EcommerceBatchJobStatus,
+  type EcommerceCategoryKitAssetInput,
   type EcommerceCategoryKitPlanItem,
+  type EcommerceCategoryKitPreparationResponse,
+  type EcommerceCategoryKitMissingInput,
+  type EcommerceCategoryKitStrategy,
   type EcommerceJobListResponse,
   type EcommerceStatsResponse,
   type EcommerceMarket,
@@ -77,6 +84,9 @@ import {
   type ImageSize,
   type OutputFormat,
   type Plan,
+  type PromptOptimizeRequest,
+  type RedemptionCodeRedeemRequest,
+  type NotificationDeviceRegisterRequest,
   type ReferenceImageInput,
   type SaveStorageConfigRequest,
   type ExtensionReleaseConfig,
@@ -130,8 +140,20 @@ import {
 import {
   generateCategoryKitPlan,
   getCategoryKitPlannerConfig,
+  optimizeImagePrompt,
   saveCategoryKitPlannerConfig
 } from "./category-kit-planner.js";
+import {
+  CategoryKitStrategyError,
+  createCategoryKitStrategy,
+  deleteCategoryKitStrategy,
+  getCategoryKitStrategy,
+  listCategoryKitStrategies,
+  prepareCategoryKitPlanRequest,
+  updateCategoryKitStrategy,
+  type CategoryKitStrategyQuery,
+  type SaveCategoryKitStrategyInput
+} from "./category-kit-strategy-service.js";
 import {
   getEcommerceGenerationConcurrencyConfig,
   initializeEcommerceGenerationConcurrency,
@@ -149,6 +171,7 @@ import {
 import {
   createEcommerceBatchJob,
   getEcommerceBatchJob,
+  getEcommerceBatchSceneCount,
   getEcommerceStats,
   listEcommerceBatchJobs,
   updateEcommerceBatchJob
@@ -171,6 +194,13 @@ import {
   listAdminReferralTransactions,
   saveInviteRewardSettings
 } from "./referral-service.js";
+import {
+  RedemptionCodeError,
+  createAdminRedemptionCodes,
+  listAdminRedemptionCodes,
+  normalizeRedemptionCode,
+  redeemCode
+} from "./redemption-codes.js";
 import { runtimePaths, serverConfig } from "./runtime.js";
 import { assets, ecommerceBatchJobs, subscriptionPlans, users, workspaceMembers, workspaces } from "./schema.js";
 import { getStorageConfig, saveStorageConfig, testStorageConfig } from "./storage-config.js";
@@ -186,6 +216,18 @@ import {
   updateHelpCategory
 } from "./help-service.js";
 import { HelpAssetError, uploadHelpCenterAsset } from "./help-assets.js";
+import { SeedanceVideoError, createSeedanceVideoGeneration } from "./seedance-video.js";
+import { getSeedanceVideoConfig, saveSeedanceVideoConfig } from "./seedance-config.js";
+import {
+  NotificationError,
+  createEcommerceJobFinishedNotification,
+  getNotificationClientConfig,
+  listNotifications,
+  markAllNotificationsRead,
+  markNotificationRead,
+  registerNotificationDevice,
+  unreadNotificationCount
+} from "./notifications.js";
 
 const MAX_PROJECT_SNAPSHOT_BYTES = 100 * 1024 * 1024;
 const MAX_PROJECT_NAME_LENGTH = 120;
@@ -211,7 +253,24 @@ type ResolvedEcommerceBatchGenerateRequest = Omit<
   stylePresetId: StylePresetId;
   categoryKitPlannerPending?: boolean;
   plannedImages?: EcommerceCategoryKitPlanItem[];
+  categoryKit?: EcommerceCategoryKitPreparationResponse;
 };
+
+type ResolvedCategoryKitPreparationRequest = Pick<
+  ResolvedEcommerceBatchGenerateRequest,
+  | "product"
+  | "platform"
+  | "market"
+  | "textLanguage"
+  | "categoryPath"
+  | "categoryName"
+  | "strategyId"
+  | "strategy"
+  | "assets"
+  | "missingInputs"
+  | "referenceImage"
+  | "extraDirection"
+>;
 
 interface EcommerceBatchJob {
   jobId: string;
@@ -236,6 +295,9 @@ app.onError((error, c) => {
   if (error instanceof BillingError) {
     return c.json(errorResponse(error.code, error.message), error.status as 400 | 401 | 402 | 403 | 404 | 409 | 500);
   }
+  if (error instanceof RedemptionCodeError) {
+    return c.json(errorResponse(error.code, error.message), error.status as 400 | 401 | 402 | 403 | 404 | 409 | 500);
+  }
   if (error instanceof InvoiceError) {
     return c.json(errorResponse(error.code, error.message), error.status as 400 | 401 | 402 | 403 | 404 | 409 | 500);
   }
@@ -247,6 +309,12 @@ app.onError((error, c) => {
   }
   if (error instanceof DemoCanvasAssetError) {
     return c.json(errorResponse(error.code, error.message), error.status as 400 | 401 | 403 | 404 | 409 | 413 | 500 | 502);
+  }
+  if (error instanceof CategoryKitStrategyError) {
+    return c.json(errorResponse(error.code, error.message), error.status as 400 | 404 | 409 | 500);
+  }
+  if (error instanceof NotificationError) {
+    return c.json(errorResponse(error.code, error.message), error.status as 400 | 401 | 403 | 404 | 409 | 500);
   }
 
   console.error(error);
@@ -277,7 +345,8 @@ app.get("/api/config", async (c) => {
     stylePresets: STYLE_PRESETS,
     qualities: IMAGE_QUALITIES,
     outputFormats: OUTPUT_FORMATS,
-    counts: GENERATION_COUNTS
+    counts: GENERATION_COUNTS,
+    notifications: await getNotificationClientConfig()
   };
 
   return c.json(config);
@@ -553,7 +622,7 @@ app.use("/api/*", async (c, next) => {
     return;
   }
 
-  return c.json(errorResponse("unauthorized", "请先登录，并使用 Authorization: Bearer <JWT> 访问接口。"), 401);
+  return c.json(errorResponse("unauthorized", "请先登录账号。"), 401);
 });
 
 async function getAssetQueryTokenSession(c: Context): Promise<AuthSession | undefined> {
@@ -843,6 +912,52 @@ app.post("/api/images/edit", async (c) => {
   }
 });
 
+app.post("/api/images/prompt/optimize", async (c) => {
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+
+  const parsed = parsePromptOptimizePayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  try {
+    return c.json(await optimizeImagePrompt(parsed.value));
+  } catch (error) {
+    if (error instanceof ProviderError) {
+      return providerErrorJson(c, error);
+    }
+
+    throw error;
+  }
+});
+
+app.post("/api/videos/seedance", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  let formData: FormData;
+  try {
+    formData = await c.req.raw.formData();
+  } catch {
+    return c.json(errorResponse("invalid_request_body", "无法读取视频生成表单。"), 400);
+  }
+
+  try {
+    return c.json(await createSeedanceVideoGeneration(await requestTenant(c), formData, c.req.raw.signal));
+  } catch (error) {
+    if (error instanceof SeedanceVideoError) {
+      return c.json(errorResponse(error.code, error.message), error.status as 400 | 401 | 402 | 403 | 404 | 409 | 413 | 429 | 500 | 502 | 503 | 504);
+    }
+
+    throw error;
+  }
+});
+
 app.post("/api/ecommerce/images/batch-generate", async (c) => {
   const payload = await readJson(c.req.raw);
   if (!payload.ok) {
@@ -880,7 +995,7 @@ app.post("/api/ecommerce/images/batch-generate", async (c) => {
   try {
     charge = await reserveGenerationCharge({
       tenant,
-      imageCount: input.sceneTemplateIds.length * input.countPerScene
+      imageCount: getEcommerceBatchSceneCount(input) * input.countPerScene
     });
     await attachGenerationToCharge(charge.transactionId, jobId);
   } catch (error) {
@@ -888,6 +1003,15 @@ app.post("/api/ecommerce/images/batch-generate", async (c) => {
       status: "failed",
       message: errorToMessage(error),
       completedAt: new Date().toISOString()
+    });
+    await notifyEcommerceJobFinished({
+      tenant,
+      jobId,
+      status: "failed",
+      productTitle: input.product.title,
+      totalScenes: getEcommerceBatchSceneCount(input),
+      completedScenes: 0,
+      records: []
     });
     throw error;
   }
@@ -897,7 +1021,7 @@ app.post("/api/ecommerce/images/batch-generate", async (c) => {
     tenant,
     input,
     providerConfigs,
-    totalScenes: input.sceneTemplateIds.length,
+    totalScenes: getEcommerceBatchSceneCount(input),
     completedScenes: 0,
     records: []
   };
@@ -905,6 +1029,39 @@ app.post("/api/ecommerce/images/batch-generate", async (c) => {
   void runEcommerceBatchJob(job.jobId);
 
   return c.json(response, 202);
+});
+
+app.post("/api/ecommerce/images/category-kit-prepare", async (c) => {
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+
+  const parsed = parseCategoryKitPreparationPayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+  if (!parsed.value.referenceImage) {
+    return c.json(errorResponse("invalid_reference_image", "品类套图预检需要至少一张主商品图。"), 400);
+  }
+
+  const strategy = await resolveCategoryKitStrategyForRequest(parsed.value);
+  return c.json(
+    await prepareCategoryKitPlanRequest({
+      product: parsed.value.product,
+      platform: parsed.value.platform,
+      market: parsed.value.market,
+      textLanguage: parsed.value.textLanguage,
+      categoryPath: parsed.value.categoryPath,
+      categoryName: parsed.value.categoryName,
+      strategyId: parsed.value.strategyId,
+      strategy,
+      assets: parsed.value.assets,
+      missingInputs: parsed.value.missingInputs,
+      referenceImage: parsed.value.referenceImage,
+      extraDirection: parsed.value.extraDirection
+    })
+  );
 });
 
 app.post("/api/ecommerce/images/category-kit-generate", async (c) => {
@@ -957,7 +1114,7 @@ app.post("/api/ecommerce/images/category-kit-generate", async (c) => {
     tenant,
     input,
     providerConfigs,
-    totalScenes: input.sceneTemplateIds.length,
+    totalScenes: getEcommerceBatchSceneCount(input),
     completedScenes: 0,
     records: []
   };
@@ -1001,6 +1158,34 @@ app.get("/api/ecommerce/stats", async (c) => {
   return c.json(response);
 });
 
+app.get("/api/notifications", async (c) => {
+  return c.json(await listNotifications(await requestTenant(c), parseListLimit(c.req.query("limit"))));
+});
+
+app.get("/api/notifications/unread-count", async (c) => {
+  return c.json({ unreadCount: await unreadNotificationCount(await requestTenant(c)) });
+});
+
+app.post("/api/notifications/read-all", async (c) => {
+  return c.json(await markAllNotificationsRead(await requestTenant(c)));
+});
+
+app.post("/api/notifications/:id/read", async (c) => {
+  return c.json(await markNotificationRead(await requestTenant(c), c.req.param("id")));
+});
+
+app.post("/api/notifications/devices", async (c) => {
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+  const parsed = parseNotificationDevicePayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+  return c.json(await registerNotificationDevice(await requestTenant(c), parsed.value));
+});
+
 app.get("/api/billing/transactions", async (c) => {
   return c.json(await listUserBillingTransactions(await requestTenant(c), parseListLimit(c.req.query("limit"))));
 });
@@ -1011,6 +1196,18 @@ app.get("/api/billing/orders", async (c) => {
 
 app.get("/api/billing/summary", async (c) => {
   return c.json(await getBillingSummary(await requestTenant(c)));
+});
+
+app.post("/api/redemption-codes/redeem", async (c) => {
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+  const parsed = parseRedeemCodePayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+  return c.json(await redeemCode(await requestTenant(c), parsed.value));
 });
 
 app.get("/api/billing/invoice/applications", async (c) => {
@@ -1307,6 +1504,35 @@ app.get("/api/admin/billing/settings", async (c) => {
   return c.json(await getBillingSettings());
 });
 
+app.get("/api/admin/redemption-codes", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return c.json(await listAdminRedemptionCodes(parseListLimit(c.req.query("limit"))));
+});
+
+app.post("/api/admin/redemption-codes", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+
+  const parsed = parseAdminRedemptionCodesPayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  const session = authSessions.get(c) ?? (await requireAdminSession(c.req.raw.headers));
+  return c.json(await createAdminRedemptionCodes(session.user.id, parsed.value), 201);
+});
+
 app.put("/api/admin/billing/settings", async (c) => {
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
@@ -1445,6 +1671,160 @@ app.put("/api/admin/ecommerce/category-kit-planner", async (c) => {
   }
 
   return c.json(await saveCategoryKitPlannerConfig(parsed.value));
+});
+
+app.get("/api/admin/ecommerce/category-kit-strategies", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return c.json(await listCategoryKitStrategies(parseCategoryKitStrategyQuery(c)));
+});
+
+app.get("/api/admin/ecommerce/category-strategies", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return c.json(await listCategoryKitStrategies(parseCategoryKitStrategyQuery(c)));
+});
+
+app.get("/api/admin/ecommerce/category-kit-strategies/:strategyId", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return c.json(await getCategoryKitStrategy(c.req.param("strategyId")));
+});
+
+app.get("/api/admin/ecommerce/category-strategies/:strategyId", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return c.json(await getCategoryKitStrategy(c.req.param("strategyId")));
+});
+
+app.post("/api/admin/ecommerce/category-kit-strategies", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+  const parsed = parseCategoryKitStrategyPayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  return c.json(await createCategoryKitStrategy(parsed.value), 201);
+});
+
+app.post("/api/admin/ecommerce/category-strategies", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+  const parsed = parseCategoryKitStrategyPayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  return c.json(await createCategoryKitStrategy(parsed.value), 201);
+});
+
+app.put("/api/admin/ecommerce/category-kit-strategies/:strategyId", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+  const parsed = parseCategoryKitStrategyPayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  return c.json(await updateCategoryKitStrategy(c.req.param("strategyId"), parsed.value));
+});
+
+app.put("/api/admin/ecommerce/category-strategies/:strategyId", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+  const parsed = parseCategoryKitStrategyPayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  return c.json(await updateCategoryKitStrategy(c.req.param("strategyId"), parsed.value));
+});
+
+app.delete("/api/admin/ecommerce/category-kit-strategies/:strategyId", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return c.json(await deleteCategoryKitStrategy(c.req.param("strategyId")));
+});
+
+app.delete("/api/admin/ecommerce/category-strategies/:strategyId", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return c.json(await deleteCategoryKitStrategy(c.req.param("strategyId")));
+});
+
+app.get("/api/admin/video/seedance", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return c.json(await getSeedanceVideoConfig());
+});
+
+app.put("/api/admin/video/seedance", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+
+  const parsed = parseSeedanceVideoConfigPayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  return c.json(await saveSeedanceVideoConfig(parsed.value));
 });
 
 app.get("/api/admin/image-generation/concurrency", async (c) => {
@@ -1887,6 +2267,7 @@ async function runEcommerceBatchJob(jobId: string): Promise<void> {
       if (!job.input.referenceImage) {
         throw new Error("品类套图需要至少一张参考图。");
       }
+      const categoryKitReferenceImage = job.input.referenceImage;
 
       logEcommerceCategoryKit("planner-stage-start", {
         jobId,
@@ -1896,13 +2277,56 @@ async function runEcommerceBatchJob(jobId: string): Promise<void> {
         sceneTemplateCount: job.input.sceneTemplateIds.length
       });
 
+      const strategy = await resolveCategoryKitStrategyForRequest(job.input);
+      const categoryKit = await prepareCategoryKitPlanRequest({
+        product: job.input.product,
+        platform: job.input.platform,
+        market: job.input.market,
+        textLanguage: job.input.textLanguage,
+        categoryPath: job.input.categoryPath,
+        categoryName: job.input.categoryName,
+        strategyId: job.input.strategyId,
+        strategy,
+        assets: job.input.assets,
+        missingInputs: job.input.missingInputs,
+        referenceImage: categoryKitReferenceImage,
+        extraDirection: job.input.extraDirection
+      });
+      job.input = {
+        ...job.input,
+        categoryKit
+      };
+      logEcommerceCategoryKit("strategy-prepared", {
+        jobId,
+        workspaceId: job.tenant.workspaceId,
+        categoryPath: categoryKit.categoryPath,
+        categoryName: categoryKit.categoryName,
+        strategyId: categoryKit.strategy?.id,
+        missingInputCount: categoryKit.missingInputs?.length ?? 0,
+        assetCount: categoryKit.assets?.length ?? 0
+      });
+      await updateEcommerceBatchJob(job.tenant, job.jobId, {
+        status: "running",
+        input: job.input,
+        message: categoryKit.strategy
+          ? `已匹配品类策略「${categoryKit.categoryName ?? categoryKit.strategy.categoryName}」，正在调用文本模型规划套图。`
+          : "已准备品类上下文，正在调用文本模型规划套图。"
+      });
+
       const plan = await generateCategoryKitPlan(
         {
           product: job.input.product,
           platform: job.input.platform,
           market: job.input.market,
           textLanguage: job.input.textLanguage,
-          referenceImage: job.input.referenceImage,
+          requestedImageCount: job.input.sceneTemplateIds.length,
+          requestedSceneTemplateIds: job.input.sceneTemplateIds,
+          categoryPath: categoryKit.categoryPath,
+          categoryName: categoryKit.categoryName,
+          strategy: categoryKit.strategy,
+          assets: categoryKit.assets,
+          missingInputs: categoryKit.missingInputs,
+          referenceImage: categoryKitReferenceImage,
           extraDirection: job.input.extraDirection
         },
         { jobId }
@@ -1922,6 +2346,10 @@ async function runEcommerceBatchJob(jobId: string): Promise<void> {
         },
         categoryKitPlannerPending: false,
         plannedImages: plan.imagePlan,
+        categoryKit: {
+          ...categoryKit,
+          productSummary: plan.productSummary || categoryKit.productSummary
+        },
         countPerScene: 1
       };
       job.totalScenes = plan.imagePlan.length;
@@ -1963,9 +2391,17 @@ async function runEcommerceBatchJob(jobId: string): Promise<void> {
 
     type SceneItem =
       | { index: number; kind: "planned"; plannedImage: EcommerceCategoryKitPlanItem }
+      | { index: number; kind: "reference"; referenceImage: EcommerceBatchReferenceImage; sceneTemplateId: EcommerceSceneTemplateId }
       | { index: number; kind: "template"; sceneTemplateId: EcommerceSceneTemplateId };
     const sceneItems: SceneItem[] = job.input.plannedImages?.length
       ? job.input.plannedImages.map((plannedImage, index) => ({ index, kind: "planned" as const, plannedImage }))
+      : job.input.referenceImages?.length
+        ? job.input.referenceImages.map((referenceImage, index) => ({
+            index,
+            kind: "reference" as const,
+            referenceImage,
+            sceneTemplateId: job.input.sceneTemplateIds[0]
+          }))
       : job.input.sceneTemplateIds.map((sceneTemplateId, index) => ({ index, kind: "template" as const, sceneTemplateId }));
     const records = new Array<EcommerceBatchGenerateResponse["records"][number] | undefined>(sceneItems.length);
 
@@ -1978,7 +2414,10 @@ async function runEcommerceBatchJob(jobId: string): Promise<void> {
             sceneItem.kind === "planned"
               ? composePlannedCategoryKitPrompt(sceneItem.plannedImage)
               : composeEcommercePrompt({
-                product: job.input.product,
+                product: {
+                  ...job.input.product,
+                  title: sceneItem.kind === "reference" && sceneItem.referenceImage.title ? sceneItem.referenceImage.title : job.input.product.title
+                },
                 platform: job.input.platform,
                 market: job.input.market,
                 textLanguage: job.input.textLanguage,
@@ -1986,22 +2425,42 @@ async function runEcommerceBatchJob(jobId: string): Promise<void> {
                 removeWatermarkAndLogo: job.input.removeWatermarkAndLogo,
                 brandOverlayPlacement: job.input.brandOverlayPlacement,
                 sceneTemplateId: sceneItem.sceneTemplateId,
-                extraDirection: job.input.extraDirection
+                extraDirection: [job.input.extraDirection, sceneItem.kind === "reference" ? sceneItem.referenceImage.extraDirection : ""]
+                  .filter(Boolean)
+                  .join("\n\n")
               });
+          const referenceImage =
+            sceneItem.kind === "reference"
+              ? sceneItem.referenceImage.referenceImage
+              : sceneItem.kind === "planned"
+                ? selectCategoryKitReferenceImage(job.input, sceneItem.plannedImage)
+                : job.input.referenceImage;
+          const additionalReferenceImages = [
+            ...(referenceImage?.additionalReferenceImages ?? []),
+            ...(sceneItem.kind === "reference" ? sceneItem.referenceImage.additionalReferenceImages ?? [] : []),
+            ...(job.input.additionalReferenceImages ?? [])
+          ];
+          const editReferenceImage = referenceImage
+            ? {
+                ...referenceImage,
+                additionalReferenceImages: additionalReferenceImages.length ? additionalReferenceImages : referenceImage.additionalReferenceImages
+              }
+            : undefined;
+          const size = sceneItem.kind === "reference" && sceneItem.referenceImage.size ? sceneItem.referenceImage.size : job.input.size;
           const generationInput = {
             originalPrompt: prompt,
             presetId: job.input.stylePresetId ?? "product",
             prompt: composePrompt(prompt, job.input.stylePresetId ?? "product"),
-            size: job.input.size,
-            sizeApiValue: `${job.input.size.width}x${job.input.size.height}`,
+            size,
+            sizeApiValue: `${size.width}x${size.height}`,
             quality: job.input.quality ?? "auto",
             outputFormat: job.input.outputFormat ?? "png",
             count: job.input.countPerScene ?? 1
           };
-          const response = job.input.referenceImage
+          const response = editReferenceImage
             ? await runReferenceImageGenerationWithFallback(
                 job.tenant,
-                { ...generationInput, referenceImage: job.input.referenceImage },
+                { ...generationInput, referenceImage: editReferenceImage },
                 job.providerConfigs,
                 undefined,
                 { skipCharge: true, createComparisonCollage: job.input.createComparisonCollage === true }
@@ -2026,8 +2485,9 @@ async function runEcommerceBatchJob(jobId: string): Promise<void> {
 
     const failedCount = job.records.filter((record) => record.status === "failed").length;
     const succeededCount = job.records.length - failedCount;
+    const finishedStatus = succeededCount > 0 && failedCount > 0 ? "partial" : succeededCount > 0 ? "succeeded" : "failed";
     await updateEcommerceBatchJob(job.tenant, job.jobId, {
-      status: succeededCount > 0 && failedCount > 0 ? "partial" : succeededCount > 0 ? "succeeded" : "failed",
+      status: finishedStatus,
       message:
         succeededCount > 0 && failedCount > 0
           ? `批量生成部分完成：${succeededCount} 个场景成功，${failedCount} 个失败。`
@@ -2037,6 +2497,15 @@ async function runEcommerceBatchJob(jobId: string): Promise<void> {
       completedScenes: job.completedScenes,
       records: job.records,
       completedAt: new Date().toISOString()
+    });
+    await notifyEcommerceJobFinished({
+      tenant: job.tenant,
+      jobId: job.jobId,
+      status: finishedStatus,
+      productTitle: job.input.product.title,
+      totalScenes: job.totalScenes,
+      completedScenes: job.completedScenes,
+      records: job.records
     });
   } catch (error) {
     logEcommerceCategoryKit("planner-stage-failed", {
@@ -2052,8 +2521,44 @@ async function runEcommerceBatchJob(jobId: string): Promise<void> {
       records: job.records,
       completedAt: new Date().toISOString()
     });
+    await notifyEcommerceJobFinished({
+      tenant: job.tenant,
+      jobId: job.jobId,
+      status: "failed",
+      productTitle: job.input.product.title,
+      totalScenes: job.totalScenes,
+      completedScenes: job.completedScenes,
+      records: job.records
+    });
   } finally {
     runningEcommerceBatchJobs.delete(jobId);
+  }
+}
+
+async function notifyEcommerceJobFinished(input: {
+  tenant: RequestTenant;
+  jobId: string;
+  status: EcommerceBatchJobStatus;
+  productTitle?: string;
+  totalScenes: number;
+  completedScenes: number;
+  records: EcommerceBatchGenerateResponse["records"];
+}): Promise<void> {
+  const failedScenes = input.records.filter((record) => record.status === "failed").length;
+  const succeededScenes = Math.max(0, input.records.length - failedScenes);
+  try {
+    await createEcommerceJobFinishedNotification({
+      tenant: input.tenant,
+      jobId: input.jobId,
+      status: input.status,
+      productTitle: input.productTitle,
+      totalScenes: input.totalScenes,
+      completedScenes: input.completedScenes,
+      succeededScenes,
+      failedScenes
+    });
+  } catch (error) {
+    console.warn(`[notifications] failed to create ecommerce completion notification jobId=${input.jobId}`, error);
   }
 }
 
@@ -2063,11 +2568,32 @@ function logEcommerceCategoryKit(event: string, details: Record<string, unknown>
 
 function composePlannedCategoryKitPrompt(plannedImage: EcommerceCategoryKitPlanItem): string {
   const notes = plannedImage.notes?.trim();
-  if (!notes) {
-    return plannedImage.prompt;
-  }
+  const roles = plannedImage.sourceImageRoles?.length
+    ? `Use the provided reference image role(s) for this scene: ${plannedImage.sourceImageRoles.join(", ")}.`
+    : "";
+  const parts = [plannedImage.prompt, roles, notes ? `Text / layout notes: ${notes}` : ""].filter(Boolean);
+  return parts.join("\n\n");
+}
 
-  return `${plannedImage.prompt}\n\nText / layout notes: ${notes}`;
+function selectCategoryKitReferenceImage(
+  input: ResolvedEcommerceBatchGenerateRequest,
+  plannedImage: EcommerceCategoryKitPlanItem
+): ReferenceImageInput | undefined {
+  const assets = input.categoryKit?.assets ?? input.assets;
+  const requestedRoles = plannedImage.sourceImageRoles?.map((role) => String(role).toLowerCase()) ?? [];
+  if (assets?.length && requestedRoles.length) {
+    const matched = assets.find((asset) => {
+      const role = String(asset.role).toLowerCase();
+      if (!requestedRoles.includes(role)) {
+        return false;
+      }
+      return Boolean(asset.referenceImage);
+    });
+    if (matched?.referenceImage) {
+      return matched.referenceImage;
+    }
+  }
+  return input.referenceImage;
 }
 
 function resolveCategoryKitProductTitle(inputTitle: string, productSummary: string): string {
@@ -2081,13 +2607,21 @@ function resolveCategoryKitProductTitle(inputTitle: string, productSummary: stri
 
 function failedEcommerceSceneRecord(
   input: ResolvedEcommerceBatchGenerateRequest,
-  sceneItem: { index: number; sceneTemplateId?: EcommerceSceneTemplateId; plannedImage?: EcommerceCategoryKitPlanItem },
+  sceneItem: {
+    index: number;
+    sceneTemplateId?: EcommerceSceneTemplateId;
+    plannedImage?: EcommerceCategoryKitPlanItem;
+    referenceImage?: EcommerceBatchReferenceImage;
+  },
   message: string
 ): EcommerceBatchGenerateResponse["records"][number] {
   const prompt = sceneItem.plannedImage
     ? sceneItem.plannedImage.prompt
     : composeEcommercePrompt({
-        product: input.product,
+        product: {
+          ...input.product,
+          title: sceneItem.referenceImage?.title || input.product.title
+        },
         platform: input.platform,
         market: input.market,
         textLanguage: input.textLanguage,
@@ -2095,15 +2629,16 @@ function failedEcommerceSceneRecord(
         removeWatermarkAndLogo: input.removeWatermarkAndLogo,
         brandOverlayPlacement: input.brandOverlayPlacement,
         sceneTemplateId: sceneItem.sceneTemplateId as EcommerceSceneTemplateId,
-        extraDirection: input.extraDirection
+        extraDirection: [input.extraDirection, sceneItem.referenceImage?.extraDirection].filter(Boolean).join("\n\n")
       });
+  const size = sceneItem.referenceImage?.size ?? input.size;
   return {
     id: randomUUID(),
-    mode: input.referenceImage ? "edit" : "generate",
+    mode: input.referenceImage || sceneItem.referenceImage ? "edit" : "generate",
     prompt,
     effectivePrompt: composePrompt(prompt, input.stylePresetId ?? "product"),
     presetId: input.stylePresetId ?? "product",
-    size: input.size,
+    size,
     quality: input.quality ?? "auto",
     outputFormat: input.outputFormat ?? "png",
     count: input.countPerScene ?? 1,
@@ -2245,7 +2780,7 @@ async function requestTenant(c: Context): Promise<RequestTenant> {
     return fallbackTenant;
   }
 
-  throw new AuthError("unauthorized", "请先登录，并使用 Authorization: Bearer <JWT> 访问接口。", 401);
+  throw new AuthError("unauthorized", "请先登录账号。", 401);
 }
 
 async function assetReadTenant(c: Context, assetId: string): Promise<RequestTenant> {
@@ -3233,6 +3768,169 @@ function parseBalanceAdjustmentPayload(input: unknown): ParseResult<AdminAdjustB
   };
 }
 
+function parseRedeemCodePayload(input: unknown): ParseResult<RedemptionCodeRedeemRequest> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_redemption_code", "兑换码内容必须是 JSON 对象。")
+    };
+  }
+
+  const code = parseLimitedString(input.code, 64);
+  if (!code) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_redemption_code", "请输入有效兑换码。")
+    };
+  }
+
+  return {
+    ok: true,
+    value: { code }
+  };
+}
+
+function parseNotificationDevicePayload(input: unknown): ParseResult<NotificationDeviceRegisterRequest> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_notification_device", "通知设备信息必须是 JSON 对象。")
+    };
+  }
+
+  const channel = parseNotificationChannel(input.channel);
+  if (!channel) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_notification_channel", "通知渠道必须是 web、native 或 wechat_miniapp。")
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      channel,
+      deviceId: parseLimitedString(input.deviceId, 255),
+      platform: parseNotificationDevicePlatform(input.platform),
+      provider: parseLimitedString(input.provider, 64),
+      pushToken: parseLimitedString(input.pushToken, 512),
+      userAgent: parseLimitedString(input.userAgent, 1000)
+    }
+  };
+}
+
+function parseNotificationChannel(value: unknown): NotificationDeviceRegisterRequest["channel"] | undefined {
+  return value === "web" || value === "native" || value === "wechat_miniapp" ? value : undefined;
+}
+
+function parseNotificationDevicePlatform(value: unknown): NotificationDeviceRegisterRequest["platform"] {
+  return value === "web" || value === "ios" || value === "android" || value === "wechat_miniapp" || value === "unknown" ? value : undefined;
+}
+
+function parseAdminRedemptionCodesPayload(input: unknown): ParseResult<AdminCreateRedemptionCodesRequest> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_redemption_codes", "兑换码生成内容必须是 JSON 对象。")
+    };
+  }
+
+  const codes = parseAdminRedemptionCodeList(Object.hasOwn(input, "codes") ? input.codes : input.code);
+  if (!codes.ok) {
+    return codes;
+  }
+  const count = codes.value.length > 0 ? codes.value.length : parseNonNegativeInteger(input.count);
+  const maxRedemptions = parseNonNegativeInteger(input.maxRedemptions);
+  const quota = parseNonNegativeInteger(input.quota);
+  const validDays = parseNonNegativeInteger(input.validDays);
+  if (!count || count < 1 || count > 500) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_redemption_code_count", "生成数量必须是 1 到 500 的整数。")
+    };
+  }
+  if (!maxRedemptions || maxRedemptions < 1) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_redemption_code_redemptions", "总可兑换次数必须是正整数。")
+    };
+  }
+  if (!quota || quota < 1) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_redemption_code_quota", "兑换额度必须是正整数。")
+    };
+  }
+  if (!validDays || validDays < 1) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_redemption_code_valid_days", "有效天数必须是正整数。")
+    };
+  }
+
+  const codePrefix = Object.hasOwn(input, "codePrefix") ? parseNullableLimitedString(input.codePrefix, 20) : undefined;
+  if (Object.hasOwn(input, "codePrefix") && codePrefix === undefined) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_redemption_code_prefix", "兑换码前缀不能超过 20 个字符。")
+    };
+  }
+  const note = Object.hasOwn(input, "note") ? parseNullableLimitedString(input.note, 1000) : undefined;
+  if (Object.hasOwn(input, "note") && note === undefined) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_redemption_code_note", "备注不能超过 1000 个字符。")
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      count,
+      maxRedemptions,
+      quota,
+      validDays,
+      codes: codes.value.length > 0 ? codes.value : undefined,
+      codePrefix: codePrefix ?? undefined,
+      note: note ?? undefined
+    }
+  };
+}
+
+function parseAdminRedemptionCodeList(value: unknown): ParseResult<string[]> {
+  if (value === undefined || value === null || value === "") {
+    return { ok: true, value: [] };
+  }
+
+  const rawCodes = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/[\s,，;；]+/u).filter(Boolean)
+      : undefined;
+  if (!rawCodes || rawCodes.some((code) => typeof code !== "string")) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_redemption_code_list", "指定兑换码必须是字符串数组。")
+    };
+  }
+
+  const codes = rawCodes.map((code) => normalizeRedemptionCode(code));
+  if (codes.some((code) => !code)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_redemption_code", "指定兑换码只能包含 4 到 64 位字母、数字、下划线或中划线。")
+    };
+  }
+  if (new Set(codes).size !== codes.length) {
+    return {
+      ok: false,
+      error: errorResponse("duplicate_redemption_code", "指定兑换码中存在重复项。")
+    };
+  }
+
+  return { ok: true, value: codes };
+}
+
 function parseBillingSettingsPayload(input: unknown): ParseResult<SaveBillingSettingsRequest> {
   if (!isRecord(input)) {
     return {
@@ -3416,6 +4114,276 @@ function parseCategoryKitPlannerConfigPayload(input: unknown): ParseResult<SaveC
   };
 }
 
+function parseCategoryKitStrategyQuery(c: Context): CategoryKitStrategyQuery {
+  const platformValue = parseOptionalString(c.req.query("platform"));
+  const marketValue = parseOptionalString(c.req.query("market"));
+  const enabled = parseOptionalBooleanQuery(c.req.query("enabled"));
+  const query: CategoryKitStrategyQuery = {
+    q: parseOptionalString(c.req.query("q")),
+    categoryPath: parseCategoryPathValue(c.req.query("categoryPath")),
+    enabled,
+    limit: c.req.query("limit") ? parseListLimit(c.req.query("limit")) : undefined
+  };
+  if (platformValue && ECOMMERCE_PLATFORMS.some((item) => item.id === platformValue)) {
+    query.platform = platformValue as EcommercePlatform;
+  }
+  if (marketValue && ECOMMERCE_MARKETS.some((item) => item.id === marketValue)) {
+    query.market = marketValue as EcommerceMarket;
+  }
+  return query;
+}
+
+function parseCategoryKitStrategyPayload(input: unknown): ParseResult<SaveCategoryKitStrategyInput> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_category_kit_strategy", "策略内容必须是 JSON 对象。")
+    };
+  }
+
+  const categoryPath = parseCategoryPathValue(input.categoryPath);
+  if (categoryPath.length === 0) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_category_kit_strategy", "categoryPath 至少需要一个类目层级。")
+    };
+  }
+
+  const platform = parseOptionalPlatform(input.platform);
+  if (Object.hasOwn(input, "platform") && input.platform !== undefined && input.platform !== null && input.platform !== "" && !platform) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_category_kit_strategy", "platform 不在支持列表中。")
+    };
+  }
+  const market = parseOptionalMarket(input.market);
+  if (Object.hasOwn(input, "market") && input.market !== undefined && input.market !== null && input.market !== "" && !market) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_category_kit_strategy", "market 不在支持列表中。")
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      ...normalizeCategoryKitStrategyEditorInput(input),
+      id: parseLimitedString(input.id, 64),
+      categoryPath,
+      categoryName: parseLimitedString(input.categoryName, 255) ?? categoryPath[categoryPath.length - 1],
+      platform,
+      market,
+      enabled: input.enabled === false ? false : true,
+      priority: parseNonNegativeInteger(input.priority),
+      version: parseLimitedString(input.version, 64),
+      source: parseLimitedString(input.source, 64)
+    }
+  };
+}
+
+function normalizeCategoryKitStrategyEditorInput(input: Record<string, unknown>): SaveCategoryKitStrategyInput {
+  const rawStrategy = isRecord(input.strategy) ? input.strategy : {};
+  const visualStyle = [
+    ...parseStringListLike(input.visualStyle ?? input.visual_style),
+    ...parseStringListLike(rawStrategy.visualStyle ?? rawStrategy.visual_style)
+  ];
+  const copyStyle = [
+    ...parseStringListLike(input.copyStyle ?? input.copy_style),
+    ...parseStringListLike(rawStrategy.copyStyle ?? rawStrategy.copy_style)
+  ];
+  const sellingPointLogic = [
+    ...parseStringListLike(input.sellingPointLogic ?? input.selling_point_logic),
+    ...parseStringListLike(rawStrategy.sellingPointLogic ?? rawStrategy.selling_point_logic),
+    ...parseStringListLike(rawStrategy.promptRules ?? rawStrategy.prompt_rules)
+  ];
+  const compositionRules = [
+    ...parseStringListLike(input.compositionRules ?? input.composition_rules),
+    ...parseStringListLike(rawStrategy.compositionRules ?? rawStrategy.composition_rules),
+    ...parseStringListLike(rawStrategy.layoutRules ?? rawStrategy.layout_rules)
+  ];
+  const safetyRules = [
+    ...parseStringListLike(input.safetyRules ?? input.safety_rules),
+    ...parseStringListLike(rawStrategy.safetyRules ?? rawStrategy.safety_rules)
+  ];
+  const imageRoles = parseCategoryKitImageRoles(
+    input.imageRoles ?? input.image_roles ?? input.requiredAssets ?? input.required_assets ?? input.assetRoles ?? input.asset_roles,
+    input.missingChecklist ?? input.missing_checklist ?? input.checklist
+  );
+
+  return {
+    ...(input as SaveCategoryKitStrategyInput),
+    aliases: parseStringListLike(input.aliases),
+    visualStyle: visualStyle.length ? visualStyle : undefined,
+    copyStyle: copyStyle.length ? copyStyle : undefined,
+    sellingPointLogic: sellingPointLogic.length ? sellingPointLogic : undefined,
+    compositionRules: compositionRules.length ? compositionRules : undefined,
+    safetyRules: safetyRules.length ? safetyRules : undefined,
+    recommendedFields: parseCategoryKitFields(input.missingChecklist ?? input.missing_checklist ?? input.checklist),
+    imageRoles: imageRoles.length ? imageRoles : undefined,
+    outputScenes: parseCategoryKitOutputScenes(rawStrategy.scenePlan ?? rawStrategy.scene_plan ?? input.outputScenes ?? input.output_scenes),
+    fallbackRules: parseCategoryKitFallbackRules(rawStrategy.fallbackRules ?? rawStrategy.fallback_rules),
+    examples: Array.isArray(rawStrategy.examples) ? rawStrategy.examples as SaveCategoryKitStrategyInput["examples"] : undefined
+  };
+}
+
+function parseStringListLike(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => {
+      if (typeof item === "string" && item.trim()) {
+        return [item.trim()];
+      }
+      if (isRecord(item)) {
+        const text = parseOptionalString(item.title) ?? parseOptionalString(item.label) ?? parseOptionalString(item.name) ?? parseOptionalString(item.text);
+        return text ? [text] : [];
+      }
+      return [];
+    });
+  }
+  const text = parseOptionalString(value);
+  return text ? text.split(/[\n,，]/u).map((item) => item.trim()).filter(Boolean) : [];
+}
+
+function parseCategoryKitFields(value: unknown): SaveCategoryKitStrategyInput["recommendedFields"] {
+  return parseStringListLike(value).map((item, index) => ({
+    id: `custom-field-${index + 1}`,
+    label: item,
+    description: item
+  }));
+}
+
+function parseCategoryKitImageRoles(rolesValue: unknown, checklistValue: unknown): NonNullable<SaveCategoryKitStrategyInput["imageRoles"]> {
+  const labels = parseStringListLike(rolesValue);
+  const checklist = parseStringListLike(checklistValue);
+  const roles = labels.map((label, index) => {
+    const id = categoryKitRoleIdFromLabel(label, index);
+    return {
+      id,
+      label,
+      description: checklist[index] ?? label,
+      required: index === 0 || /主|main/iu.test(label),
+      recommended: index !== 0 && !/主|main/iu.test(label),
+      minCount: index === 0 || /主|main/iu.test(label) ? 1 : undefined,
+      acceptedAssetRoles: [id]
+    };
+  });
+  return roles;
+}
+
+function categoryKitRoleIdFromLabel(label: string, index: number): string {
+  const lower = label.toLowerCase();
+  if (/main|主/u.test(lower)) return "main-product";
+  if (/detail|细节|局部/u.test(lower)) return "detail";
+  if (/package|包装/u.test(lower)) return "package";
+  if (/texture|材质|面料/u.test(lower)) return "texture";
+  if (/size|scale|尺寸|比例/u.test(lower)) return "scale";
+  if (/model|模特|上身|穿着/u.test(lower)) return "model";
+  if (/scene|usage|lifestyle|场景|使用/u.test(lower)) return "lifestyle";
+  return `custom-role-${index + 1}`;
+}
+
+function parseCategoryKitOutputScenes(value: unknown): SaveCategoryKitStrategyInput["outputScenes"] {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const scenes = value.flatMap((item, index) => {
+    if (!isRecord(item)) {
+      return [];
+    }
+    const title = parseLimitedString(item.title ?? item.name, 160);
+    const id = parseLimitedString(item.id, 120) ?? (title ? `scene-${index + 1}` : undefined);
+    if (!id || !title) {
+      return [];
+    }
+    return [
+      {
+        id,
+        title,
+        purpose: parseLimitedString(item.purpose ?? item.goal, 500),
+        imageRoleId: parseLimitedString(item.imageRoleId ?? item.image_role_id, 120),
+        required: parseOptionalBoolean(item.required),
+        recommended: parseOptionalBoolean(item.recommended),
+        priority: parseNonNegativeInteger(item.priority),
+        compositionRules: parseStringListLike(item.compositionRules ?? item.composition_rules),
+        copyRules: parseStringListLike(item.copyRules ?? item.copy_rules),
+        safetyRules: parseStringListLike(item.safetyRules ?? item.safety_rules),
+        examples: parseStringListLike(item.examples)
+      }
+    ];
+  });
+  return scenes.length ? scenes : undefined;
+}
+
+function parseCategoryKitFallbackRules(value: unknown): SaveCategoryKitStrategyInput["fallbackRules"] {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const rules = value.flatMap((item) => {
+    if (!isRecord(item)) {
+      return [];
+    }
+    const when = parseLimitedString(item.when, 500);
+    return when
+      ? [
+          {
+            id: parseLimitedString(item.id, 120),
+            when,
+            use: parseLimitedString(item.use, 1000),
+            avoid: parseLimitedString(item.avoid, 1000),
+            notes: parseLimitedString(item.notes, 1000)
+          }
+        ]
+      : [];
+  });
+  return rules.length ? rules : undefined;
+}
+
+function parseCategoryPathValue(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => {
+      const text = parseLimitedString(item, 80);
+      return text ? [text] : [];
+    }).slice(0, 8);
+  }
+  const text = parseOptionalString(value);
+  if (!text) {
+    return [];
+  }
+  if (text.trim().startsWith("[")) {
+    try {
+      const parsed = JSON.parse(text) as unknown;
+      return parseCategoryPathValue(parsed);
+    } catch {
+      return [];
+    }
+  }
+  return text
+    .split(/[>/|,，、]+/u)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 8);
+}
+
+function parseOptionalBooleanQuery(value: unknown): boolean | undefined {
+  const text = parseOptionalString(value)?.toLowerCase();
+  if (text === "true" || text === "1" || text === "enabled") {
+    return true;
+  }
+  if (text === "false" || text === "0" || text === "disabled") {
+    return false;
+  }
+  return undefined;
+}
+
+function parseOptionalPlatform(value: unknown): EcommercePlatform | undefined {
+  const text = parseOptionalString(value);
+  return text && ECOMMERCE_PLATFORMS.some((item) => item.id === text) ? (text as EcommercePlatform) : undefined;
+}
+
+function parseOptionalMarket(value: unknown): EcommerceMarket | undefined {
+  const text = parseOptionalString(value);
+  return text && ECOMMERCE_MARKETS.some((item) => item.id === text) ? (text as EcommerceMarket) : undefined;
+}
+
 function parseCategoryKitPlannerConfigEntry(input: unknown, index: number): SaveCategoryKitPlannerConfigRequest["models"][number] | undefined {
   if (!isRecord(input)) {
     return undefined;
@@ -3434,15 +4402,76 @@ function parseCategoryKitPlannerConfigEntry(input: unknown, index: number): Save
 
   return {
     id: parseLimitedString(input.id, 64) || undefined,
-    enabled,
-    name,
-    role,
+      enabled,
+      name,
+      provider: parseCategoryKitPlannerProvider(input.provider, input.baseUrl),
+      modules: parseCategoryKitPlannerModules(input.modules),
+      role,
     priority,
     apiKey: typeof input.apiKey === "string" ? input.apiKey : undefined,
     preserveApiKey: typeof input.preserveApiKey === "boolean" ? input.preserveApiKey : undefined,
     baseUrl: parseLimitedString(input.baseUrl, 512),
     model,
     timeoutMs
+  };
+}
+
+function parseCategoryKitPlannerProvider(value: unknown, baseUrl: unknown): SaveCategoryKitPlannerConfigRequest["models"][number]["provider"] {
+  if (value === "deepseek" || value === "openai-compatible-chat" || value === "openai-responses") {
+    return value;
+  }
+  const normalizedBaseUrl = parseOptionalString(baseUrl)?.toLowerCase() ?? "";
+  return normalizedBaseUrl.includes("deepseek") ? "deepseek" : "openai-responses";
+}
+
+function parseCategoryKitPlannerModules(value: unknown): SaveCategoryKitPlannerConfigRequest["models"][number]["modules"] {
+  const allowed = new Set(["prompt-optimizer", "category-kit-planner", "category-classifier"]);
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const raw = value;
+  const modules = raw.filter((item): item is "prompt-optimizer" | "category-kit-planner" | "category-classifier" => typeof item === "string" && allowed.has(item));
+  return Array.from(new Set(modules));
+}
+
+function parseSeedanceVideoConfigPayload(input: unknown): ParseResult<Parameters<typeof saveSeedanceVideoConfig>[0]> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_seedance_config", "Seedance 视频配置内容必须是 JSON 对象。")
+    };
+  }
+
+  const model = Object.hasOwn(input, "model") ? parseLimitedString(input.model, 160) : undefined;
+  if (Object.hasOwn(input, "model") && !model) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_seedance_config", "Seedance 模型 ID 不能为空，且不能超过 160 个字符。")
+    };
+  }
+
+  const baseUrl = Object.hasOwn(input, "baseUrl") ? parseLimitedString(input.baseUrl, 512) : undefined;
+  if (Object.hasOwn(input, "baseUrl") && input.baseUrl !== "" && !baseUrl) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_seedance_config", "Seedance Base URL 不能超过 512 个字符。")
+    };
+  }
+  if (baseUrl && !isHttpUrl(baseUrl)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_seedance_config", "Seedance Base URL 必须是 HTTP(S) URL。")
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      apiKey: typeof input.apiKey === "string" ? input.apiKey : undefined,
+      preserveApiKey: input.preserveApiKey === true,
+      baseUrl,
+      model
+    }
   };
 }
 
@@ -3536,6 +4565,7 @@ function parseWechatMiniAppConfigPayload(input: unknown): ParseResult<SaveWechat
       appId: stringValue(input.appId),
       appSecret: stringValue(input.appSecret),
       preserveAppSecret: input.preserveAppSecret === true,
+      taskCompleteTemplateId: stringValue(input.taskCompleteTemplateId),
       allowBindExistingAccount: input.allowBindExistingAccount !== false,
       allowRegisterNewUser: input.allowRegisterNewUser !== false
     }
@@ -3976,6 +5006,52 @@ function parseBaseImagePayload(input: unknown): ParseResult<ImageProviderInput> 
   };
 }
 
+function parsePromptOptimizePayload(input: unknown): ParseResult<PromptOptimizeRequest> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_request", "请求内容必须是 JSON 对象。")
+    };
+  }
+
+  const prompt = parseLimitedString(input.prompt, 2000);
+  if (!prompt) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_prompt", "请输入需要优化的提示词，且不能超过 2000 个字符。")
+    };
+  }
+
+  const stylePreset = parseStylePreset(input);
+  if (!stylePreset.ok) {
+    return stylePreset;
+  }
+
+  const mode = input.mode === "reference" ? "reference" : "text";
+  const size = isRecord(input.size) ? parseSize(input.size) : undefined;
+  if (size && !size.ok) {
+    return size;
+  }
+  if (size && (!Number.isFinite(size.value.width) || !Number.isFinite(size.value.height))) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_size", "请提供有效的图像尺寸。")
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      prompt,
+      mode,
+      stylePresetId: stylePreset.value,
+      size: size?.value,
+      sizePresetId: parseOptionalString(input.sizePresetId),
+      hasReferenceImage: input.hasReferenceImage === true
+    }
+  };
+}
+
 function parseEcommerceBatchPayload(input: unknown): ParseResult<ResolvedEcommerceBatchGenerateRequest> {
   if (!isRecord(input)) {
     return {
@@ -4048,6 +5124,28 @@ function parseEcommerceBatchPayload(input: unknown): ParseResult<ResolvedEcommer
     return count;
   }
 
+  const referenceImages = parseEcommerceReferenceImages(input.referenceImages);
+  if (!referenceImages.ok) {
+    return referenceImages;
+  }
+  const additionalReferenceImages = parseAdditionalReferenceImages(input.additionalReferenceImages ?? input.additional_reference_images);
+  if (!additionalReferenceImages.ok) {
+    return additionalReferenceImages;
+  }
+  const assets = parseCategoryKitAssets(input.assets);
+  if (!assets.ok) {
+    return assets;
+  }
+  const missingInputs = parseCategoryKitMissingInputs(input.missingInputs ?? input.missing_inputs ?? input.missingItems ?? input.missing_items);
+  if (!missingInputs.ok) {
+    return missingInputs;
+  }
+  const strategy = parseCategoryKitStrategyValue(input.strategy);
+  if (!strategy.ok) {
+    return strategy;
+  }
+  const strategyId = parseLimitedString(input.strategyId ?? input.strategy_id, 64);
+
   return {
     ok: true,
     value: {
@@ -4055,6 +5153,12 @@ function parseEcommerceBatchPayload(input: unknown): ParseResult<ResolvedEcommer
       platform: platform.value,
       market: market.value,
       textLanguage: textLanguage.value,
+      categoryPath: parseCategoryPathValue(input.categoryPath ?? input.category_path),
+      categoryName: parseLimitedString(input.categoryName ?? input.category_name, 255),
+      strategyId,
+      strategy: strategy.value,
+      assets: assets.value,
+      missingInputs: missingInputs.value,
       allowTextRecreation: parseOptionalBoolean(input.allowTextRecreation) ?? true,
       removeWatermarkAndLogo: parseOptionalBoolean(input.removeWatermarkAndLogo) ?? true,
       brandOverlayPlacement: parseBrandOverlayPlacement(input.brandOverlayPlacement),
@@ -4066,10 +5170,230 @@ function parseEcommerceBatchPayload(input: unknown): ParseResult<ResolvedEcommer
       countPerScene: count.value,
       sourcePageUrl: parseOptionalString(input.sourcePageUrl),
       referenceImage: parseEcommerceReferenceImage(input.referenceImage),
+      referenceImages: referenceImages.value,
+      additionalReferenceImages: additionalReferenceImages.value,
       createComparisonCollage: parseOptionalBoolean(input.createComparisonCollage) === true,
       extraDirection: parseOptionalString(input.extraDirection)
     }
   };
+}
+
+function parseCategoryKitPreparationPayload(input: unknown): ParseResult<ResolvedCategoryKitPreparationRequest> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_request", "请求内容必须是 JSON 对象。")
+    };
+  }
+
+  const product = parseEcommerceProductForCategoryKit(input.product);
+  if (!product.ok) {
+    return product;
+  }
+  const platform = parseEcommercePlatform(input.platform);
+  if (!platform.ok) {
+    return platform;
+  }
+  const market = parseEcommerceMarket(input.market);
+  if (!market.ok) {
+    return market;
+  }
+  const textLanguage = parseEcommerceTextLanguage(input.textLanguage);
+  if (!textLanguage.ok) {
+    return textLanguage;
+  }
+  const assets = parseCategoryKitAssets(input.assets);
+  if (!assets.ok) {
+    return assets;
+  }
+  const missingInputs = parseCategoryKitMissingInputs(input.missingInputs ?? input.missing_inputs ?? input.missingItems ?? input.missing_items);
+  if (!missingInputs.ok) {
+    return missingInputs;
+  }
+  const strategy = parseCategoryKitStrategyValue(input.strategy);
+  if (!strategy.ok) {
+    return strategy;
+  }
+
+  return {
+    ok: true,
+    value: {
+      product: product.value,
+      platform: platform.value,
+      market: market.value,
+      textLanguage: textLanguage.value,
+      categoryPath: parseCategoryPathValue(input.categoryPath ?? input.category_path),
+      categoryName: parseLimitedString(input.categoryName ?? input.category_name, 255),
+      strategyId: parseLimitedString(input.strategyId ?? input.strategy_id, 64),
+      strategy: strategy.value,
+      assets: assets.value,
+      missingInputs: missingInputs.value,
+      referenceImage: parseEcommerceReferenceImage(input.referenceImage ?? input.reference_image),
+      extraDirection: parseOptionalString(input.extraDirection ?? input.extra_direction)
+    }
+  };
+}
+
+async function resolveCategoryKitStrategyForRequest(
+  input: Pick<ResolvedCategoryKitPreparationRequest, "strategy" | "strategyId">
+): Promise<EcommerceCategoryKitStrategy | undefined> {
+  if (input.strategy) {
+    return input.strategy;
+  }
+  if (!input.strategyId) {
+    return undefined;
+  }
+  return (await getCategoryKitStrategy(input.strategyId)).strategy;
+}
+
+function parseCategoryKitAssets(value: unknown): ParseResult<EcommerceCategoryKitAssetInput[] | undefined> {
+  if (value === undefined) {
+    return { ok: true, value: undefined };
+  }
+  if (!Array.isArray(value)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_category_kit_assets", "品类套图素材必须是数组。")
+    };
+  }
+  if (value.length > 24) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_category_kit_assets", "单个品类套图任务最多支持 24 张补充素材。")
+    };
+  }
+
+  const assets: EcommerceCategoryKitAssetInput[] = [];
+  for (const [index, item] of value.entries()) {
+    if (!isRecord(item)) {
+      return {
+        ok: false,
+        error: errorResponse("invalid_category_kit_assets", `第 ${index + 1} 张补充素材格式不受支持。`)
+      };
+    }
+    const referenceImage = parseEcommerceReferenceImage(item.referenceImage ?? item.reference_image ?? item);
+    const referenceAssetId = parseLimitedString(item.referenceAssetId ?? item.reference_asset_id, 128);
+    const url = parseLimitedString(item.url, 2000);
+    if (url && !isHttpUrl(url)) {
+      return {
+        ok: false,
+        error: errorResponse("invalid_category_kit_assets", `第 ${index + 1} 张补充素材 URL 必须是 HTTP(S) 地址。`)
+      };
+    }
+    if (!referenceImage && !referenceAssetId && !url) {
+      return {
+        ok: false,
+        error: errorResponse("invalid_category_kit_assets", `第 ${index + 1} 张补充素材缺少图片或资源地址。`)
+      };
+    }
+
+    assets.push({
+      id: parseLimitedString(item.id, 128),
+      role: parseLimitedString(item.role, 80) ?? "other",
+      referenceImage,
+      referenceAssetId,
+      url,
+      fileName: parseLimitedString(item.fileName ?? item.file_name, 255) ?? referenceImage?.fileName,
+      title: parseLimitedString(item.title, 255),
+      description: parseLimitedString(item.description, 1000),
+      required: parseOptionalBoolean(item.required),
+      tags: parseStringArray(item.tags, 24, 80)
+    });
+  }
+
+  return { ok: true, value: assets.length ? assets : undefined };
+}
+
+function parseStringArray(value: unknown, maxItems: number, maxLength: number): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const items = value.flatMap((item) => {
+    const text = parseLimitedString(item, maxLength);
+    return text ? [text] : [];
+  });
+  return items.length ? items.slice(0, maxItems) : undefined;
+}
+
+function parseCategoryKitMissingInputs(value: unknown): ParseResult<EcommerceCategoryKitMissingInput[] | undefined> {
+  if (value === undefined) {
+    return { ok: true, value: undefined };
+  }
+  if (!Array.isArray(value)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_category_kit_missing_inputs", "缺失项必须是数组。")
+    };
+  }
+
+  const items = value.flatMap((item, index): EcommerceCategoryKitMissingInput[] => {
+    if (typeof item === "string") {
+      const label = item.trim();
+      return label ? [{ id: `provided:${index}:${label.slice(0, 40)}`, label, required: false, recommended: true }] : [];
+    }
+    if (!isRecord(item)) {
+      return [];
+    }
+    const label = parseLimitedString(item.label ?? item.name ?? item.title, 255);
+    const id = parseLimitedString(item.id, 128) ?? (label ? `provided:${index}:${label.slice(0, 40)}` : undefined);
+    return id
+      ? [
+          {
+            id,
+            label,
+            description: parseLimitedString(item.description, 1000),
+            role: parseLimitedString(item.role, 80),
+            required: parseOptionalBoolean(item.required),
+            recommended: parseOptionalBoolean(item.recommended),
+            examples: parseStringArray(item.examples, 12, 160)
+          }
+        ]
+      : [];
+  });
+
+  return { ok: true, value: items.length ? items.slice(0, 80) : undefined };
+}
+
+function parseCategoryKitStrategyValue(value: unknown): ParseResult<EcommerceCategoryKitStrategy | undefined> {
+  if (value === undefined || value === null) {
+    return { ok: true, value: undefined };
+  }
+  if (!isRecord(value)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_category_kit_strategy", "内联类目策略必须是 JSON 对象。")
+    };
+  }
+  const categoryPath = parseCategoryPathValue(value.categoryPath ?? value.category_path);
+  if (!parseLimitedString(value.id, 128) || categoryPath.length === 0) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_category_kit_strategy", "内联类目策略缺少 id 或 categoryPath。")
+    };
+  }
+  return {
+    ok: true,
+    value: {
+      ...(value as unknown as EcommerceCategoryKitStrategy),
+      id: parseLimitedString(value.id, 128)!,
+      categoryPath,
+      categoryName: parseLimitedString(value.categoryName ?? value.category_name, 255) ?? categoryPath[categoryPath.length - 1],
+      platform: parseOptionalPlatform(value.platform),
+      market: parseOptionalMarket(value.market)
+    }
+  };
+}
+
+function parseEcommerceProductForCategoryKit(value: unknown): ParseResult<EcommerceProductBrief> {
+  const source = isRecord(value) ? value : {};
+  const product = parseEcommerceProduct({
+    ...source,
+    title: parseOptionalString(source.title) ?? "AI 自拆品类套图"
+  });
+  if (!product.ok) {
+    return product;
+  }
+  return product;
 }
 
 function parseBrandOverlayPlacement(value: unknown): BrandOverlayPlacement | undefined {
@@ -4097,13 +5421,117 @@ function parseEcommerceReferenceImage(value: unknown): ReferenceImageInput | und
   const maskDataUrl = parseOptionalString(value.maskDataUrl);
   const maskedDataUrl = parseOptionalString(value.maskedDataUrl);
   const annotatedDataUrl = parseOptionalString(value.annotatedDataUrl);
+  const additionalReferenceImages = parseAdditionalReferenceImages(value.additionalReferenceImages ?? value.additional_reference_images);
   return {
     dataUrl,
     fileName: typeof fileName === "string" && fileName.trim() ? fileName.trim() : undefined,
     maskDataUrl: maskDataUrl ?? undefined,
     maskedDataUrl: maskedDataUrl ?? undefined,
-    annotatedDataUrl: annotatedDataUrl ?? undefined
+    annotatedDataUrl: annotatedDataUrl ?? undefined,
+    additionalReferenceImages: additionalReferenceImages.ok ? additionalReferenceImages.value : undefined
   };
+}
+
+function parseAdditionalReferenceImages(value: unknown): ParseResult<ReferenceImageInput[] | undefined> {
+  if (value === undefined) {
+    return { ok: true, value: undefined };
+  }
+  if (!Array.isArray(value)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_reference_image", "附加参考图必须是数组。")
+    };
+  }
+  if (value.length > 4) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_reference_image", "单次编辑最多支持 4 张附加参考图。")
+    };
+  }
+
+  const images: ReferenceImageInput[] = [];
+  for (const [index, item] of value.entries()) {
+    const referenceImage = parseEcommerceReferenceImage(item);
+    if (!referenceImage) {
+      return {
+        ok: false,
+        error: errorResponse("invalid_reference_image", `第 ${index + 1} 张附加参考图格式不受支持。`)
+      };
+    }
+    images.push(referenceImage);
+  }
+
+  return { ok: true, value: images.length ? images : undefined };
+}
+
+function parseEcommerceReferenceImages(value: unknown): ParseResult<EcommerceBatchReferenceImage[] | undefined> {
+  if (value === undefined) {
+    return { ok: true, value: undefined };
+  }
+  if (!Array.isArray(value)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_reference_image", "批量参考图必须是数组。")
+    };
+  }
+  if (value.length === 0) {
+    return { ok: true, value: undefined };
+  }
+  if (value.length > 48) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_reference_image", "单个批量任务最多支持 48 张参考图。")
+    };
+  }
+
+  const referenceImages: EcommerceBatchReferenceImage[] = [];
+  for (const [index, item] of value.entries()) {
+    if (!isRecord(item)) {
+      return {
+        ok: false,
+        error: errorResponse("invalid_reference_image", `第 ${index + 1} 张批量参考图格式不受支持。`)
+      };
+    }
+
+    const referenceImage = parseEcommerceReferenceImage(item.referenceImage ?? item);
+    if (!referenceImage) {
+      return {
+        ok: false,
+        error: errorResponse("invalid_reference_image", `第 ${index + 1} 张批量参考图格式不受支持。`)
+      };
+    }
+
+    let size: ImageSize | undefined;
+    if (typeof item.size !== "undefined") {
+      const parsedSize = parseSize(item.size);
+      if (!parsedSize.ok) {
+        return parsedSize;
+      }
+      const resolvedSize = validateSceneImageSize({ size: parsedSize.value });
+      if (!resolvedSize.ok) {
+        return {
+          ok: false,
+          error: errorResponse(resolvedSize.code, resolvedSize.message)
+        };
+      }
+      size = resolvedSize.size;
+    }
+
+    const additionalReferenceImages = parseAdditionalReferenceImages(item.additionalReferenceImages ?? item.additional_reference_images);
+    if (!additionalReferenceImages.ok) {
+      return additionalReferenceImages;
+    }
+
+    referenceImages.push({
+      referenceImage,
+      size,
+      additionalReferenceImages: additionalReferenceImages.value,
+      title: parseOptionalString(item.title),
+      extraDirection: parseOptionalString(item.extraDirection)
+    });
+  }
+
+  return { ok: true, value: referenceImages };
 }
 
 function parseEcommerceProduct(value: unknown): ParseResult<EcommerceProductBrief> {
@@ -4457,6 +5885,15 @@ function parsePositiveConcurrency(value: unknown): number | undefined {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+function isHttpUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 function parseBenefitsJson(input: Record<string, unknown>): ParseResult<string | null | undefined> {

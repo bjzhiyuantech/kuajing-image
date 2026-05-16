@@ -7,6 +7,7 @@ const MODES = [
   { id: "creative", title: "场景创作", desc: "依据主图生成生活方式、模特穿戴和搭配场景。", icon: "🎬" },
   { id: "category-kit", title: "品类套图", desc: "上传参考图和描述，自动拆解整套 Listing Image Kit。", icon: "📦" },
   { id: "single-poster", title: "单品完整海报", desc: "依据产品图自动提炼卖点，生成一张高比例详情长海报。", icon: "长" },
+  { id: "one-click-replace", title: "一键换装/换品", desc: "前面上传模特或场景，最后 1 张上传要换的衣服或商品。", icon: "换" },
   { id: "text-translation", title: "文字翻译", desc: "逐张翻译图片文字，可选择目标语言和是否二创。", icon: "译" }
 ];
 
@@ -28,6 +29,7 @@ const MODE_SCENES = {
     "category-kit-auto-trust"
   ],
   "single-poster": ["single-product-long-poster"],
+  "one-click-replace": ["one-click-replace"],
   "text-translation": ["text-translation"]
 };
 
@@ -35,6 +37,7 @@ const PRESET_TO_MODE = {
   category: "category-kit",
   launch: "enhance",
   localize: "text-translation",
+  replace: "one-click-replace",
   scene: "creative",
   translate: "text-translation",
   watermark: "enhance"
@@ -42,6 +45,7 @@ const PRESET_TO_MODE = {
 
 const SIZE_OPTIONS = [
   { id: "square-1k", label: "方图 1:1", width: 1024, height: 1024 },
+  { id: "ozon-3-4", label: "Ozon 3:4", width: 1536, height: 2048 },
   { id: "poster-landscape", label: "横版 3:2", width: 1536, height: 1024 },
   { id: "poster-portrait", label: "竖版 2:3", width: 1024, height: 1536 },
   { id: "story-9-16", label: "短视频 9:16", width: 1088, height: 1920 },
@@ -53,6 +57,8 @@ const CATEGORY_KEY = "selectedCategoryKitId";
 const RECENT_CREATED_JOBS_KEY = "recentCreatedJobs";
 const DEFAULT_PLATFORM_INDEX = PLATFORMS.findIndex((item) => item.id === "taobao");
 const DEFAULT_MARKET_INDEX = MARKETS.findIndex((item) => item.id === "cn");
+const RUSSIA_MARKET_INDEX = MARKETS.findIndex((item) => item.id === "ru");
+const OZON_SIZE_INDEX = SIZE_OPTIONS.findIndex((item) => item.id === "ozon-3-4");
 const CHINESE_PLATFORM_IDS = new Set(["1688", "taobao", "tmall", "jd", "douyin", "pinduoduo", "xiaohongshu", "kuaishou", "weidian", "dewu"]);
 
 const CATEGORY_KITS = [
@@ -88,6 +94,7 @@ Page({
     extraDirection: "",
     hasTemplate: false,
     images: [],
+    imageLimit: 3,
     languageIndex: 2,
     languageLabels: LANGUAGES.map((item) => item.label),
     marketIndex: DEFAULT_MARKET_INDEX >= 0 ? DEFAULT_MARKET_INDEX : 0,
@@ -144,18 +151,20 @@ Page({
       mode,
       modeDesc: modeMeta.desc,
       modes: MODES.map((item) => ({ ...item, active: item.id === mode })),
-      scenes
-	    };
-	    if (mode === "single-poster" || mode === "category-kit") {
-	      const longPosterSizeIndex = SIZE_OPTIONS.findIndex((item) => item.id === "ecommerce-long-poster");
-	      patch.countIndex = 0;
-	      patch.countPerScene = 1;
-	      if (mode === "single-poster" && longPosterSizeIndex >= 0) {
-	        patch.sizeIndex = longPosterSizeIndex;
-	      }
-	    }
-	    this.setData(patch);
-	  },
+      scenes,
+      imageLimit: mode === "one-click-replace" ? 9 : 3,
+      images: mode === "one-click-replace" ? this.data.images.slice(0, 9) : this.data.images.slice(0, 3)
+    };
+    if (mode === "single-poster" || mode === "category-kit" || mode === "one-click-replace") {
+      const longPosterSizeIndex = SIZE_OPTIONS.findIndex((item) => item.id === "ecommerce-long-poster");
+      patch.countIndex = 0;
+      patch.countPerScene = 1;
+      if (mode === "single-poster" && longPosterSizeIndex >= 0) {
+        patch.sizeIndex = longPosterSizeIndex;
+      }
+    }
+    this.setData(patch);
+  },
 
   selectCategory(event) {
     this.applyCategory(event.currentTarget.dataset.id, true);
@@ -181,13 +190,14 @@ Page({
   },
 
   chooseImages() {
+    const maxImageCount = this.data.imageLimit;
     wx.chooseMedia({
-      count: 3 - this.data.images.length,
+      count: maxImageCount - this.data.images.length,
       mediaType: ["image"],
       sourceType: ["album", "camera"],
       success: (res) => {
         const selected = res.tempFiles.map((file) => ({ path: file.tempFilePath, size: file.size }));
-        this.setData({ images: this.data.images.concat(selected).slice(0, 3) });
+        this.setData({ images: this.data.images.concat(selected).slice(0, maxImageCount) });
       }
     });
   },
@@ -212,6 +222,12 @@ Page({
     const nextData = { platformIndex };
     if (platform && CHINESE_PLATFORM_IDS.has(platform.id) && DEFAULT_MARKET_INDEX >= 0) {
       nextData.marketIndex = DEFAULT_MARKET_INDEX;
+    }
+    if (platform && platform.id === "ozon" && RUSSIA_MARKET_INDEX >= 0) {
+      nextData.marketIndex = RUSSIA_MARKET_INDEX;
+      if (OZON_SIZE_INDEX >= 0) {
+        nextData.sizeIndex = OZON_SIZE_INDEX;
+      }
     }
     this.setData(nextData);
   },
@@ -289,7 +305,7 @@ Page({
 
     const title = this.data.title.trim();
     const sceneTemplateIds = this.data.scenes.filter((item) => item.active && item.visible).map((item) => item.id);
-    const titleOptionalMode = this.data.mode === "single-poster" || this.data.mode === "category-kit";
+    const titleOptionalMode = this.data.mode === "single-poster" || this.data.mode === "category-kit" || this.data.mode === "one-click-replace";
     if (!title && !titleOptionalMode) {
       wx.showToast({ title: "请输入商品标题", icon: "none" });
       return;
@@ -302,6 +318,10 @@ Page({
       wx.showToast({ title: "请上传 1-3 张图片", icon: "none" });
       return;
     }
+    if (this.data.mode === "one-click-replace" && this.data.images.length < 2) {
+      wx.showToast({ title: "请上传目标图和最后一张换品图", icon: "none" });
+      return;
+    }
     if (!sceneTemplateIds.length) {
       wx.showToast({ title: "请选择生成场景", icon: "none" });
       return;
@@ -311,8 +331,9 @@ Page({
     const isTextTranslationMode = this.data.mode === "text-translation";
     const isSinglePosterMode = this.data.mode === "single-poster";
     const isCategoryKitMode = this.data.mode === "category-kit";
-    const countPerScene = isSinglePosterMode || isCategoryKitMode ? 1 : this.data.countPerScene;
-    const stylePresetId = this.data.mode === "creative" ? "photoreal" : isSinglePosterMode ? "poster" : "product";
+    const isOneClickReplaceMode = this.data.mode === "one-click-replace";
+    const countPerScene = isSinglePosterMode || isCategoryKitMode || isOneClickReplaceMode ? 1 : this.data.countPerScene;
+    const stylePresetId = this.data.mode === "creative" || isOneClickReplaceMode ? "photoreal" : isSinglePosterMode ? "poster" : "product";
     const extraDirection = [
       this.data.extraDirection.trim(),
       isCategoryKitMode ? "自动识别商品品类、平台和市场，按当前商品拆解详情页级套图，覆盖整体、细节、卖点、规格、包装、用法、场景、人群和保障注意事项；不要套用固定围巾或丝巾模板。" : "",
@@ -322,37 +343,70 @@ Page({
     this.setData({ submitting: true });
     wx.showLoading({ title: "创建任务中" });
     try {
+      await this.requestTaskCompleteSubscription();
       const jobs = [];
-      for (const [index, image] of this.data.images.entries()) {
-        const dataUrl = await fileToDataUrl(image.path);
-        const payload = {
-          product: {
-            title: title || (isCategoryKitMode ? "AI 自拆品类套图" : "单品完整电商海报"),
-            description: this.data.description.trim(),
-            targetCustomer: this.data.targetCustomer.trim(),
-            usageScene: this.data.usageScene.trim(),
-            material: this.data.material.trim(),
-            color: [this.data.color.trim(), this.data.sku.trim()].filter(Boolean).join(" / ")
-          },
-          platform: isTextTranslationMode ? "other" : PLATFORMS[this.data.platformIndex].id,
-          market: isTextTranslationMode ? "global" : MARKETS[this.data.marketIndex].id,
-          textLanguage: isTextTranslationMode ? LANGUAGES[this.data.languageIndex].id : "none",
-          allowTextRecreation: !isTextTranslationMode,
-          removeWatermarkAndLogo: this.data.removeWatermarkAndLogo,
-          sceneTemplateIds,
-          size: { width: size.width, height: size.height },
-          sizePresetId: size.id,
-          stylePresetId,
-          quality: "auto",
-          outputFormat: "png",
-          countPerScene,
-          referenceImage: {
-            dataUrl,
-            fileName: `reference-${index + 1}.png`
-          },
-          extraDirection
-        };
-        jobs.push(await api.createBatchJob(payload));
+      const targetImages = isOneClickReplaceMode ? this.data.images.slice(0, -1) : this.data.images;
+      const replacementImage = isOneClickReplaceMode ? this.data.images[this.data.images.length - 1] : null;
+      const replacementDataUrl = replacementImage ? await fileToDataUrl(replacementImage.path) : "";
+      const buildPayloadBase = () => ({
+        product: {
+          title: title || (isCategoryKitMode ? "AI 自拆品类套图" : isOneClickReplaceMode ? "一键换装/换品" : "单品完整电商海报"),
+          description: this.data.description.trim(),
+          targetCustomer: this.data.targetCustomer.trim(),
+          usageScene: this.data.usageScene.trim(),
+          material: this.data.material.trim(),
+          color: [this.data.color.trim(), this.data.sku.trim()].filter(Boolean).join(" / ")
+        },
+        platform: isTextTranslationMode ? "other" : PLATFORMS[this.data.platformIndex].id,
+        market: isTextTranslationMode ? "global" : MARKETS[this.data.marketIndex].id,
+        textLanguage: isTextTranslationMode ? LANGUAGES[this.data.languageIndex].id : "none",
+        allowTextRecreation: !isTextTranslationMode,
+        removeWatermarkAndLogo: this.data.removeWatermarkAndLogo,
+        sceneTemplateIds,
+        size: { width: size.width, height: size.height },
+        sizePresetId: size.id,
+        stylePresetId,
+        quality: "auto",
+        outputFormat: "png",
+        countPerScene,
+        extraDirection
+      });
+      if (isOneClickReplaceMode) {
+        const referenceImages = [];
+        for (const [index, image] of targetImages.entries()) {
+          const dataUrl = await fileToDataUrl(image.path);
+          referenceImages.push({
+            referenceImage: {
+              dataUrl,
+              fileName: `target-${index + 1}.png`
+            },
+            additionalReferenceImages: [
+              {
+                dataUrl: replacementDataUrl,
+                fileName: "replacement-product.png"
+              }
+            ],
+            title: title ? `${title} ${index + 1}` : undefined,
+            extraDirection: `目标图 ${index + 1}`
+          });
+        }
+        jobs.push(await api.createBatchJob({
+          ...buildPayloadBase(),
+          referenceImages
+        }));
+      } else {
+        const jobImages = targetImages;
+        for (const [index, image] of jobImages.entries()) {
+          const dataUrl = await fileToDataUrl(image.path);
+          const payload = {
+            ...buildPayloadBase(),
+            referenceImage: {
+              dataUrl,
+              fileName: `reference-${index + 1}.png`
+            }
+          };
+          jobs.push(await api.createBatchJob(payload));
+        }
       }
       wx.setStorageSync(
         RECENT_CREATED_JOBS_KEY,
@@ -361,18 +415,30 @@ Page({
           productTitle: title || "单品完整电商海报",
           createdAt: job.createdAt || new Date().toISOString(),
           status: job.status || "pending",
-          totalScenes: job.totalScenes || sceneTemplateIds.length,
+          totalScenes: job.totalScenes || (isOneClickReplaceMode ? targetImages.length : sceneTemplateIds.length),
           completedScenes: job.completedScenes || 0
         }))
       );
       wx.hideLoading();
-      wx.showToast({ title: `已创建 ${jobs.length} 个任务`, icon: "success" });
+      wx.showToast({ title: isOneClickReplaceMode ? `已创建 ${targetImages.length} 张换装任务` : `已创建 ${jobs.length} 个任务`, icon: "success" });
       wx.switchTab({ url: "/pages/jobs/jobs" });
     } catch (error) {
       wx.hideLoading();
       wx.showToast({ title: error.message, icon: "none" });
     } finally {
       this.setData({ submitting: false });
+    }
+  },
+
+  async requestTaskCompleteSubscription() {
+    if (!wx.requestSubscribeMessage) return;
+    try {
+      const config = await api.getConfig();
+      const templateId = config && config.notifications && config.notifications.wechatMiniAppTaskCompleteTemplateId;
+      if (!templateId) return;
+      await wx.requestSubscribeMessage({ tmplIds: [templateId] });
+    } catch {
+      // 用户拒绝或当前环境不支持时继续创建任务。
     }
   }
 });

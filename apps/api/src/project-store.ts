@@ -127,6 +127,11 @@ export async function getGalleryImages(tenant: RequestTenant): Promise<GalleryRe
     .where(and(eq(generationOutputs.workspaceId, tenant.workspaceId), eq(generationOutputs.status, "succeeded")))
     .orderBy(desc(generationOutputs.createdAt));
 
+  const referenceAssetById = await loadGalleryReferenceAssets(
+    rows.map(({ generation }) => generation.referenceAssetId ?? undefined),
+    tenant
+  );
+
   return {
     items: rows.flatMap(({ output, generation, asset }) => {
       const generatedAsset = toGeneratedAsset(asset);
@@ -152,7 +157,9 @@ export async function getGalleryImages(tenant: RequestTenant): Promise<GalleryRe
         modelProvider: generation.modelProvider ?? undefined,
         modelDisplayName: generation.modelDisplayName ?? undefined,
         createdAt: output.createdAt,
-        asset: generatedAsset
+        asset: generatedAsset,
+        referenceAssetId: generation.referenceAssetId ?? undefined,
+        referenceAsset: generation.referenceAssetId ? referenceAssetById.get(generation.referenceAssetId) : undefined
       }];
     })
   };
@@ -172,6 +179,10 @@ export async function getAdminGalleryImages(): Promise<GalleryResponse> {
     .leftJoin(users, eq(users.id, generationRecords.createdByUserId))
     .where(eq(generationOutputs.status, "succeeded"))
     .orderBy(desc(generationOutputs.createdAt));
+
+  const referenceAssetById = await loadGalleryReferenceAssets(
+    rows.map(({ generation }) => generation.referenceAssetId ?? undefined)
+  );
 
   return {
     items: rows.flatMap(({ output, generation, asset, user }) => {
@@ -205,7 +216,9 @@ export async function getAdminGalleryImages(): Promise<GalleryResponse> {
         modelProvider: generation.modelProvider ?? undefined,
         modelDisplayName: generation.modelDisplayName ?? undefined,
         createdAt: output.createdAt,
-        asset: generatedAsset
+        asset: generatedAsset,
+        referenceAssetId: generation.referenceAssetId ?? undefined,
+        referenceAsset: generation.referenceAssetId ? referenceAssetById.get(generation.referenceAssetId) : undefined
       }];
     })
   };
@@ -281,6 +294,38 @@ export async function getPublicGalleryAssetTenant(assetId: string): Promise<Requ
         userId: row.userId
       }
     : undefined;
+}
+
+async function loadGalleryReferenceAssets(
+  referenceAssetIds: Array<string | undefined>,
+  tenant?: RequestTenant
+): Promise<Map<string, GeneratedAsset>> {
+  const uniqueReferenceAssetIds = Array.from(
+    new Set(referenceAssetIds.filter((value): value is string => typeof value === "string" && value.trim().length > 0))
+  );
+
+  if (uniqueReferenceAssetIds.length === 0) {
+    return new Map();
+  }
+
+  const assetRows = await db
+    .select()
+    .from(assets)
+    .where(
+      tenant
+        ? and(eq(assets.workspaceId, tenant.workspaceId), inArray(assets.id, uniqueReferenceAssetIds))
+        : inArray(assets.id, uniqueReferenceAssetIds)
+    );
+
+  const referenceAssetById = new Map<string, GeneratedAsset>();
+  for (const asset of assetRows) {
+    const generatedAsset = toGeneratedAsset(asset);
+    if (generatedAsset) {
+      referenceAssetById.set(asset.id, generatedAsset);
+    }
+  }
+
+  return referenceAssetById;
 }
 
 export async function updateAdminGalleryPublicStatus(
@@ -471,11 +516,12 @@ function toGeneratedAsset(asset: (typeof assets.$inferSelect) | undefined): Gene
   }
 
   const cdnUrl = buildAssetCdnUrl({ objectKey: asset.cloudObjectKey, provider: asset.cloudProvider, status: asset.cloudStatus });
+  const isImage = asset.mimeType.startsWith("image/");
   return {
     id: asset.id,
     url: cdnUrl || `/api/assets/${asset.id}`,
     cdnUrl,
-    cdnPreviewUrls: buildAssetCdnPreviewUrls({ objectKey: asset.cloudObjectKey, provider: asset.cloudProvider, status: asset.cloudStatus }),
+    cdnPreviewUrls: isImage ? buildAssetCdnPreviewUrls({ objectKey: asset.cloudObjectKey, provider: asset.cloudProvider, status: asset.cloudStatus }) : undefined,
     fileName: asset.fileName,
     mimeType: asset.mimeType,
     width: asset.width,
@@ -502,6 +548,14 @@ function toPublicGeneratedAsset(asset: (typeof assets.$inferSelect) | undefined)
     return generatedAsset;
   }
 
+  if (!asset.mimeType.startsWith("image/")) {
+    return {
+      ...generatedAsset,
+      url: publicAssetUrl(asset.id),
+      cdnPreviewUrls: undefined
+    };
+  }
+
   return {
     ...generatedAsset,
     url: publicAssetUrl(asset.id),
@@ -523,6 +577,12 @@ async function getAdminGalleryImage(outputId: string): Promise<GalleryImageItem 
     .leftJoin(users, eq(users.id, generationRecords.createdByUserId))
     .where(and(eq(generationOutputs.id, outputId), eq(generationOutputs.status, "succeeded")))
     .limit(1);
+
+  if (rows.length === 0) {
+    return undefined;
+  }
+
+  const referenceAssetById = await loadGalleryReferenceAssets([rows[0].generation.referenceAssetId ?? undefined]);
 
   return rows.flatMap(({ output, generation, asset, user }) => {
     const generatedAsset = toGeneratedAsset(asset);
@@ -555,7 +615,9 @@ async function getAdminGalleryImage(outputId: string): Promise<GalleryImageItem 
       modelProvider: generation.modelProvider ?? undefined,
       modelDisplayName: generation.modelDisplayName ?? undefined,
       createdAt: output.createdAt,
-      asset: generatedAsset
+      asset: generatedAsset,
+      referenceAssetId: generation.referenceAssetId ?? undefined,
+      referenceAsset: generation.referenceAssetId ? referenceAssetById.get(generation.referenceAssetId) : undefined
     }];
   })[0];
 }

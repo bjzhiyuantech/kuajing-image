@@ -1,3 +1,4 @@
+(() => {
 const IMAGE_URL_PATTERN = /(?:https?:)?\/\/[^"'()<>\s\\]+?\.(?:jpg|jpeg|png|webp|gif|bmp|avif)(?:[._!-][^"'()<>\s\\?]*)?(?:\?[^"'()<>\s\\]*)?/giu;
 const IMAGE_REQUEST_URL_PATTERN =
   /\.(?:jpg|jpeg|png|webp|gif|bmp|avif)(?:[._!-][^"'()<>\s\\?]*)?(?:[?#]|$)|\/img\/|[?&](?:image|img|pic|picture|photo|src)=/iu;
@@ -51,6 +52,17 @@ const PROPERTY_LABELS = new Set([
   "颜色分类",
   "SKU"
 ]);
+const OWN_WEB_APP_HOSTS = new Set(["ai.neimou.com", "dev.neimou.com", "localhost", "127.0.0.1", "0.0.0.0"]);
+const MAX_TEXT_INSPECTION_LENGTH = 160_000;
+
+function shouldSkipPageCapture(): boolean {
+  const host = window.location.hostname.toLowerCase();
+  return OWN_WEB_APP_HOSTS.has(host);
+}
+
+if (shouldSkipPageCapture()) {
+  return;
+}
 
 interface ProductAttribute {
   label: string;
@@ -73,6 +85,11 @@ function normalizeText(value: string): string {
   return normalize(value).replace(/\s+/gu, " ").trim();
 }
 
+function boundedInspectionText(value: string): string {
+  const source = String(value || "");
+  return source.length > MAX_TEXT_INSPECTION_LENGTH ? source.slice(0, MAX_TEXT_INSPECTION_LENGTH) : source;
+}
+
 function normalizeLabel(value: string): string {
   return normalizeText(value)
     .replace(/[：:]+$/u, "")
@@ -88,16 +105,49 @@ function extract(text: string): string[] {
     .map((match) => match[0]);
 }
 
-function emit(urls: string[], attributes: ProductAttribute[] = []): void {
-  if (urls.length === 0) {
-    if (attributes.length === 0) {
-      return;
+function sanitizeUrls(values: unknown): string[] {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+  return values
+    .filter((value): value is string | number => typeof value === "string" || typeof value === "number")
+    .map((value) => normalize(String(value)))
+    .filter(Boolean)
+    .slice(0, 500);
+}
+
+function sanitizeAttributes(values: unknown): ProductAttribute[] {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+
+  const sanitized: ProductAttribute[] = [];
+  for (const value of values.slice(0, 300)) {
+    if (!value || typeof value !== "object") {
+      continue;
+    }
+    const source = value as Record<string, unknown>;
+    const label = typeof source.label === "string" || typeof source.label === "number" ? normalizeLabel(String(source.label)) : "";
+    const attributeValue = typeof source.value === "string" || typeof source.value === "number" ? normalizeText(String(source.value)) : "";
+    if (label && attributeValue && !sanitized.some((item) => item.label === label && item.value === attributeValue)) {
+      sanitized.push({ label, value: attributeValue });
     }
   }
-  window.postMessage(
-    { source: "kuajing-image-page-hook", type: "kuajing-image:captured-urls", urls, attributes },
-    window.location.origin
-  );
+  return sanitized;
+}
+
+function emit(urls: unknown, attributes: unknown = []): void {
+  const safeUrls = sanitizeUrls(urls);
+  const safeAttributes = sanitizeAttributes(attributes);
+  if (safeUrls.length === 0 && safeAttributes.length === 0) {
+    return;
+  }
+  try {
+    window.postMessage(
+      { source: "kuajing-image-page-hook", type: "kuajing-image:captured-urls", urls: safeUrls, attributes: safeAttributes },
+      window.location.origin
+    );
+  } catch {}
 }
 
 function textLooksInteresting(text: string): boolean {
@@ -234,10 +284,11 @@ function extractAttributesFromText(text: string): ProductAttribute[] {
 }
 
 function inspectText(text: string): void {
-  if (!text || !textLooksInteresting(String(text))) {
+  const boundedText = boundedInspectionText(text);
+  if (!boundedText || !textLooksInteresting(boundedText)) {
     return;
   }
-  emit(extract(text), extractAttributesFromText(text));
+  emit(extract(boundedText), extractAttributesFromText(boundedText));
 }
 
 function requestUrlFromFetchInput(input: RequestInfo | URL): string {
@@ -340,6 +391,9 @@ if (!(window as Window & { __kuajingImagePageHookInstalled?: boolean }).__kuajin
     for (const record of records) {
       for (const node of Array.from(record.addedNodes)) {
         if (node instanceof HTMLScriptElement) {
+          if (node.dataset.source === "kuajing-image-page-hook") {
+            continue;
+          }
           inspectText(node.textContent || "");
           if (node.src) emit([node.src]);
         } else if (node instanceof HTMLElement) {
@@ -359,3 +413,4 @@ if (!(window as Window & { __kuajingImagePageHookInstalled?: boolean }).__kuajin
 interface HookedXMLHttpRequest extends XMLHttpRequest {
   __kuajingImageRequestUrl?: string | URL;
 }
+})();

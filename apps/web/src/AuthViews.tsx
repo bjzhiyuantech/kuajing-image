@@ -28,9 +28,11 @@ import {
   Send,
   ShieldCheck,
   Sparkles,
+  Ticket,
   User,
   UserPlus,
   Users,
+  Video,
   Wallet,
   Upload,
   X
@@ -43,7 +45,9 @@ import { BRAND_TAGLINE, BrandMark, BrandName } from "./Brand";
 import { AdminHelpPanel } from "./HelpCenter";
 import type {
   AdminWechatMiniAppConfigResponse,
+  CategoryKitPlannerModule,
   CategoryKitPlannerModelRole,
+  CategoryKitPlannerProvider,
   EcommerceGenerationConcurrencyConfigResponse,
   CloudStorageProvider,
   DemoCanvasAssetUploadResponse,
@@ -56,20 +60,24 @@ import type {
   SaveCategoryKitPlannerConfigRequest,
   SaveEcommerceGenerationConcurrencyConfigRequest,
   SaveDemoCanvasConfigRequest,
+  SaveSeedanceVideoConfigRequest,
   SaveStorageConfigRequest,
+  SeedanceVideoConfigResponse,
   StorageConfigResponse,
   StorageTestResult,
   StylePresetId
 } from "@gpt-image-canvas/shared";
 
 type AuthMode = "login" | "register";
-type AdminTab = "overview" | "models" | "storage" | "billing" | "extension" | "auth" | "help" | "plans" | "users" | "referral" | "demoCanvas" | "gallery" | "ledger";
+type AdminTab = "overview" | "models" | "categoryStrategies" | "storage" | "billing" | "redemption" | "extension" | "auth" | "help" | "plans" | "users" | "referral" | "demoCanvas" | "gallery" | "ledger";
 
 const adminTabs: Array<{ id: AdminTab; label: string }> = [
   { id: "overview", label: "概览" },
   { id: "models", label: "模型" },
+  { id: "categoryStrategies", label: "类目策略" },
   { id: "storage", label: "云存储" },
   { id: "billing", label: "计费支付" },
+  { id: "redemption", label: "兑换码" },
   { id: "extension", label: "插件发布" },
   { id: "auth", label: "登录" },
   { id: "help", label: "帮助中心" },
@@ -79,6 +87,14 @@ const adminTabs: Array<{ id: AdminTab; label: string }> = [
   { id: "demoCanvas", label: "画布案例" },
   { id: "gallery", label: "公开案例" },
   { id: "ledger", label: "流水" }
+];
+
+const DEFAULT_ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
+const DEFAULT_SEEDANCE_MODEL = "doubao-seedance-2-0-fast-260128";
+const textModelModuleOptions: Array<{ id: CategoryKitPlannerModule; label: string }> = [
+  { id: "prompt-optimizer", label: "提示词优化" },
+  { id: "category-kit-planner", label: "品类套图规划" },
+  { id: "category-classifier", label: "类目识别" }
 ];
 
 const audienceCards = [
@@ -710,6 +726,7 @@ export function AccountPage({
   const [billingAction, setBillingAction] = useState("");
   const [billingActionLoading, setBillingActionLoading] = useState("");
   const [billingError, setBillingError] = useState("");
+  const [redemptionCode, setRedemptionCode] = useState("");
   const [invoice, setInvoice] = useState<InvoiceApplicationsState>(createInvoiceApplicationsState());
   const [invoiceForm, setInvoiceForm] = useState<InvoiceFormState>(createInvoiceFormState(user));
   const [invoiceLoading, setInvoiceLoading] = useState(true);
@@ -1098,6 +1115,57 @@ export function AccountPage({
     }
   }
 
+  async function submitRedemptionCode(): Promise<void> {
+    const code = redemptionCode.trim();
+    if (!code) {
+      setBillingAction("请输入兑换码。");
+      return;
+    }
+    setBillingActionLoading("redemption");
+    setBillingError("");
+    setBillingAction("");
+    try {
+      const response = await authFetch("/api/redemption-codes/redeem", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code })
+      });
+      if (!response.ok) {
+        const detail = await readApiErrorDetail(response, "兑换码兑换失败。");
+        if (detail.code === PHONE_VERIFICATION_REQUIRED_CODE) {
+          setIsPhoneDialogOpen(true);
+          return;
+        }
+        throw new Error(detail.message);
+      }
+      const body = await response.json();
+      const redemption = firstRecord(body, "redemption");
+      const userPatch = firstRecord(body, "user");
+      const quotaGranted = numberFrom(redemption?.quotaGranted ?? redemption?.quota_granted) ?? 0;
+      const expiresAt = stringFrom(redemption?.expiresAt ?? redemption?.expires_at);
+      const quotaTotalPatch = numberFrom(userPatch?.quotaTotal ?? userPatch?.quota_total);
+      const quotaUsedPatch = numberFrom(userPatch?.quotaUsed ?? userPatch?.quota_used);
+      const packageRemainingPatch = numberFrom(userPatch?.packageRemaining ?? userPatch?.package_remaining);
+      const planExpiresAtPatch = stringFrom(userPatch?.planExpiresAt ?? userPatch?.plan_expires_at);
+      if (quotaTotalPatch !== undefined || quotaUsedPatch !== undefined || packageRemainingPatch !== undefined) {
+        onUserUpdated?.({
+          ...user,
+          quotaTotal: quotaTotalPatch ?? user.quotaTotal,
+          quotaUsed: quotaUsedPatch ?? user.quotaUsed,
+          packageRemaining: packageRemainingPatch ?? user.packageRemaining,
+          planExpiresAt: planExpiresAtPatch || user.planExpiresAt
+        });
+      }
+      setRedemptionCode("");
+      setBillingAction(`兑换成功，已增加 ${quotaGranted.toLocaleString("zh-CN")} 张额度${expiresAt ? `，有效期至 ${formatDate(expiresAt)}` : ""}。`);
+      await loadBilling({ preserveNotice: true });
+    } catch (error) {
+      setBillingError(error instanceof Error ? error.message : "兑换码兑换失败。");
+    } finally {
+      setBillingActionLoading("");
+    }
+  }
+
   async function purchasePlan(plan: BillingPlan, paymentMethod: "balance" | "alipay"): Promise<void> {
     if (activePlanBlocksPurchase) {
       setBillingAction("当前套餐未到期且仍有余量，新购无法叠加，只能取高。建议等套餐到期或额度用完后再购买。");
@@ -1232,6 +1300,18 @@ export function AccountPage({
                 <div className="mobile-account-meter"><span style={{ width: `${quotaPercent}%` }} /></div>
               </div>
             </div>
+            <div className="mobile-redeem-card">
+              <label>
+                <span>兑换码</span>
+                <input value={redemptionCode} onChange={(event) => setRedemptionCode(event.target.value.toUpperCase())} placeholder="输入后台发放的兑换码" />
+              </label>
+              <button disabled={billingActionLoading === "redemption"} type="button" onClick={() => void submitRedemptionCode()}>
+                {billingActionLoading === "redemption" ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Ticket className="size-4" aria-hidden="true" />}
+                兑换
+              </button>
+            </div>
+            {billingError ? <p className="billing-alert billing-alert--warning" role="alert">{billingError}</p> : null}
+            {billingAction ? <p className="billing-alert billing-alert--success" role="status">{billingAction}</p> : null}
           </section>
 
           <section className="mobile-account-actions" aria-label="快捷入口">
@@ -1379,6 +1459,17 @@ export function AccountPage({
               <span>套餐余量</span>
               <strong>{quotaRemaining.toLocaleString("zh-CN")} 次</strong>
             </div>
+          </div>
+
+          <div className="redeem-form">
+            <label>
+              <span>兑换码</span>
+              <input value={redemptionCode} onChange={(event) => setRedemptionCode(event.target.value.toUpperCase())} placeholder="输入兑换码领取额度" />
+            </label>
+            <button className="secondary-action h-10" disabled={Boolean(billingActionLoading)} type="button" onClick={() => void submitRedemptionCode()}>
+              {billingActionLoading === "redemption" ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Ticket className="size-4" aria-hidden="true" />}
+              兑换额度
+            </button>
           </div>
 
           <div className="recharge-form">
@@ -1553,6 +1644,10 @@ export function AccountPage({
             <span>{quotaUsed.toLocaleString("zh-CN")} 已用</span>
             <span>{quotaRemaining.toLocaleString("zh-CN")} 剩余</span>
           </div>
+          <div className="quota-panel__redeem">
+            <Ticket className="size-4" aria-hidden="true" />
+            <span>有兑换码可在上方“套餐与余额”中兑换，额度会立即计入这里。</span>
+          </div>
         </section>
 
         <section className="quota-panel" aria-labelledby="storage-title">
@@ -1648,10 +1743,16 @@ export function AdminPage() {
   const [galleryItems, setGalleryItems] = useState<GalleryImageItem[]>([]);
   const [demoCanvasExamples, setDemoCanvasExamples] = useState<DemoCanvasExampleForm[]>([]);
   const [billingSettings, setBillingSettings] = useState<BillingSettingsFormState>(createBillingSettingsForm());
+  const [redemptionCodes, setRedemptionCodes] = useState<RedemptionCodeRow[]>([]);
+  const [redemptionForm, setRedemptionForm] = useState<RedemptionCodeFormState>(createRedemptionCodeForm());
   const [storageSettings, setStorageSettings] = useState<StorageConfigFormState>(createStorageConfigForm());
   const [referralSettings, setReferralSettings] = useState<ReferralSettingsFormState>(createReferralSettingsForm());
   const [imageModels, setImageModels] = useState<ImageModelFormState[]>([]);
   const [categoryKitPlannerModels, setCategoryKitPlannerModels] = useState<CategoryKitPlannerModelFormState[]>([createCategoryKitPlannerForm("primary", 1)]);
+  const [categoryStrategies, setCategoryStrategies] = useState<CategoryStrategyFormState[]>([]);
+  const [categoryStrategyQuery, setCategoryStrategyQuery] = useState("");
+  const [selectedCategoryStrategyId, setSelectedCategoryStrategyId] = useState("");
+  const [seedanceVideoConfig, setSeedanceVideoConfig] = useState<SeedanceVideoConfigFormState>(createSeedanceVideoConfigForm());
   const [ecommerceGenerationConcurrency, setEcommerceGenerationConcurrency] = useState<EcommerceGenerationConcurrencyFormState>(
     createEcommerceGenerationConcurrencyForm()
   );
@@ -1697,10 +1798,13 @@ export function AdminPage() {
         demoCanvasResponse,
         plansResponse,
         billingResponse,
+        redemptionCodesResponse,
         storageResponse,
         referralSettingsResponse,
         imageModelsResponse,
         categoryKitPlannerResponse,
+        categoryStrategiesResponse,
+        seedanceVideoResponse,
         ecommerceConcurrencyResponse,
         extensionReleaseResponse,
         alipayResponse,
@@ -1719,10 +1823,13 @@ export function AdminPage() {
         authFetch("/api/admin/demo-canvas"),
         authFetch("/api/admin/plans"),
         authFetch("/api/admin/billing/settings"),
+        authFetch("/api/admin/redemption-codes?limit=100"),
         authFetch("/api/admin/storage/config"),
         authFetch("/api/admin/referral/settings"),
         authFetch("/api/admin/image-models"),
         authFetch("/api/admin/ecommerce/category-kit-planner"),
+        authFetch("/api/admin/ecommerce/category-strategies"),
+        authFetch("/api/admin/video/seedance"),
         authFetch("/api/admin/image-generation/concurrency"),
         authFetch("/api/admin/extension-release"),
         authFetch("/api/admin/payment/alipay"),
@@ -1751,6 +1858,9 @@ export function AdminPage() {
       if (billingResponse.ok) {
         setBillingSettings(parseBillingSettingsForm(await billingResponse.json()));
       }
+      if (redemptionCodesResponse.ok) {
+        setRedemptionCodes(parseRedemptionCodes(await redemptionCodesResponse.json()));
+      }
       if (storageResponse.ok) {
         setStorageSettings(parseStorageConfigForm(await storageResponse.json()));
       }
@@ -1764,6 +1874,16 @@ export function AdminPage() {
       if (categoryKitPlannerResponse.ok) {
         const parsedCategoryKitPlannerModels = parseCategoryKitPlannerForms(await categoryKitPlannerResponse.json());
         setCategoryKitPlannerModels(parsedCategoryKitPlannerModels);
+      }
+      if (categoryStrategiesResponse.ok) {
+        const parsedStrategies = parseCategoryStrategyForms(await categoryStrategiesResponse.json());
+        setCategoryStrategies(parsedStrategies);
+        setSelectedCategoryStrategyId((current) =>
+          current && parsedStrategies.some((strategy) => strategy.id === current) ? current : parsedStrategies[0]?.id ?? ""
+        );
+      }
+      if (seedanceVideoResponse.ok) {
+        setSeedanceVideoConfig(parseSeedanceVideoConfigForm(await seedanceVideoResponse.json()));
       }
       if (ecommerceConcurrencyResponse.ok) {
         setEcommerceGenerationConcurrency(parseEcommerceGenerationConcurrencyForm(await ecommerceConcurrencyResponse.json()));
@@ -1832,6 +1952,19 @@ export function AdminPage() {
     ],
     [assets, jobs.length, stats.storageBytes, stats.totalAssets, stats.totalJobs, stats.totalUsers, users.length]
   );
+  const filteredCategoryStrategies = useMemo(() => {
+    const query = categoryStrategyQuery.trim().toLowerCase();
+    if (!query) {
+      return categoryStrategies;
+    }
+    return categoryStrategies.filter((strategy) =>
+      [strategy.categoryPath, strategy.categoryName, strategy.platform, strategy.market, strategy.aliasesText]
+        .join(" ")
+        .toLowerCase()
+        .includes(query)
+    );
+  }, [categoryStrategies, categoryStrategyQuery]);
+  const selectedCategoryStrategy = categoryStrategies.find((strategy) => strategy.id === selectedCategoryStrategyId) ?? categoryStrategies[0];
 
   async function savePlan(planId: string): Promise<void> {
     const draft = planId === NEW_PLAN_ID ? newPlan : planDrafts[planId];
@@ -2073,6 +2206,36 @@ export function AdminPage() {
     }
   }
 
+  async function generateRedemptionCodes(): Promise<void> {
+    const payload = redemptionCodeFormToPayload(redemptionForm);
+    if (!payload) {
+      setError("请填写有效的兑换码生成规则。");
+      return;
+    }
+    setSavingBilling("redemption-codes");
+    setError("");
+    setNotice("");
+    try {
+      const response = await authFetch("/api/admin/redemption-codes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "兑换码生成失败。"));
+      }
+      const parsedCodes = parseRedemptionCodes(await response.json());
+      setRedemptionCodes((current) => [...parsedCodes, ...current]);
+      setNotice(`已生成 ${parsedCodes.length} 个兑换码。`);
+      setRedemptionForm(createRedemptionCodeForm());
+      await loadAdminData({ preserveNotice: true });
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "兑换码生成失败。");
+    } finally {
+      setSavingBilling("");
+    }
+  }
+
   async function testStorageSettings(): Promise<void> {
     setSavingBilling("storage-test");
     setError("");
@@ -2201,6 +2364,90 @@ export function AdminPage() {
     }
   }
 
+  async function saveCategoryStrategy(strategy: CategoryStrategyFormState): Promise<void> {
+    const isNewStrategy = strategy.id.startsWith("new-");
+    setSavingBilling(`category-strategy:${strategy.id}`);
+    setError("");
+    setNotice("");
+    try {
+      const response = await authFetch(
+        isNewStrategy
+          ? "/api/admin/ecommerce/category-strategies"
+          : `/api/admin/ecommerce/category-strategies/${encodeURIComponent(strategy.id)}`,
+        {
+          method: isNewStrategy ? "POST" : "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(categoryStrategyToPayload(strategy))
+        }
+      );
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "类目策略保存失败。"));
+      }
+      const parsed = parseCategoryStrategyForms(await response.json());
+      if (parsed.length > 0) {
+        setCategoryStrategies((current) => {
+          const withoutSaved = current.filter((item) => item.id !== strategy.id && !parsed.some((saved) => saved.id === item.id));
+          return [...parsed, ...withoutSaved].sort((a, b) => Number(a.priority || 0) - Number(b.priority || 0));
+        });
+        setSelectedCategoryStrategyId(parsed[0].id);
+      } else {
+        await loadAdminData({ preserveNotice: true });
+      }
+      setNotice("类目策略已保存。");
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "类目策略保存失败。");
+    } finally {
+      setSavingBilling("");
+    }
+  }
+
+  async function deleteCategoryStrategy(strategy: CategoryStrategyFormState): Promise<void> {
+    if (strategy.id.startsWith("new-")) {
+      removeCategoryStrategyDraft(strategy.id);
+      return;
+    }
+    setSavingBilling(`category-strategy-delete:${strategy.id}`);
+    setError("");
+    setNotice("");
+    try {
+      const response = await authFetch(`/api/admin/ecommerce/category-strategies/${encodeURIComponent(strategy.id)}`, {
+        method: "DELETE"
+      });
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "类目策略删除失败。"));
+      }
+      setCategoryStrategies((current) => current.filter((item) => item.id !== strategy.id));
+      setSelectedCategoryStrategyId((current) => (current === strategy.id ? "" : current));
+      setNotice("类目策略已删除。");
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "类目策略删除失败。");
+    } finally {
+      setSavingBilling("");
+    }
+  }
+
+  async function saveSeedanceVideoConfig(): Promise<void> {
+    setSavingBilling("seedance-video");
+    setError("");
+    setNotice("");
+    try {
+      const response = await authFetch("/api/admin/video/seedance", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(seedanceVideoConfigToPayload(seedanceVideoConfig))
+      });
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "Seedance 视频配置保存失败。"));
+      }
+      setSeedanceVideoConfig(parseSeedanceVideoConfigForm(await response.json()));
+      setNotice("Seedance 视频配置已保存，后续生成会立即使用。");
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Seedance 视频配置保存失败。");
+    } finally {
+      setSavingBilling("");
+    }
+  }
+
   async function saveEcommerceGenerationConcurrency(): Promise<void> {
     setSavingBilling("ecommerce-concurrency");
     setError("");
@@ -2271,6 +2518,17 @@ export function AdminPage() {
     setCategoryKitPlannerModels((models) => [...models, createCategoryKitPlannerForm(role, models.length + 1)]);
   }
 
+  function addDeepSeekTextModel(): void {
+    setCategoryKitPlannerModels((models) => [
+      ...models,
+      {
+        ...createCategoryKitPlannerForm(models.some((model) => model.role === "primary") ? "fallback" : "primary", models.length + 1),
+        ...categoryKitPlannerProviderPatch("deepseek"),
+        modules: ["prompt-optimizer", "category-kit-planner"]
+      }
+    ]);
+  }
+
   function updateCategoryKitPlannerModel(id: string, patch: Partial<CategoryKitPlannerModelFormState>): void {
     setCategoryKitPlannerModels((models) => models.map((model) => (model.id === id ? { ...model, ...patch } : model)));
   }
@@ -2289,6 +2547,22 @@ export function AdminPage() {
         priority: String(index + 1)
       }));
     });
+  }
+
+  function createCategoryStrategyDraft(): void {
+    const draft = createCategoryStrategyForm(categoryStrategies.length);
+    setCategoryStrategies((current) => [draft, ...current]);
+    setSelectedCategoryStrategyId(draft.id);
+    setActiveTab("categoryStrategies");
+  }
+
+  function updateCategoryStrategy(id: string, patch: Partial<CategoryStrategyFormState>): void {
+    setCategoryStrategies((strategies) => strategies.map((strategy) => (strategy.id === id ? { ...strategy, ...patch } : strategy)));
+  }
+
+  function removeCategoryStrategyDraft(id: string): void {
+    setCategoryStrategies((strategies) => strategies.filter((strategy) => strategy.id !== id));
+    setSelectedCategoryStrategyId((current) => (current === id ? "" : current));
   }
 
   function updateEcommerceGenerationConcurrency(patch: Partial<EcommerceGenerationConcurrencyFormState>): void {
@@ -2344,6 +2618,7 @@ export function AdminPage() {
           appId: wechatMiniAppSettings.appId,
           appSecret: wechatMiniAppSettings.appSecret,
           preserveAppSecret: !wechatMiniAppSettings.appSecret.trim() && wechatMiniAppSettings.appSecretSaved,
+          taskCompleteTemplateId: wechatMiniAppSettings.taskCompleteTemplateId,
           allowBindExistingAccount: wechatMiniAppSettings.allowBindExistingAccount,
           allowRegisterNewUser: wechatMiniAppSettings.allowRegisterNewUser
         })
@@ -2551,7 +2826,7 @@ export function AdminPage() {
             <Sparkles className="size-4" aria-hidden="true" />
             <h2 id="category-kit-planner-title">品类套图文本模型</h2>
           </div>
-          <p className="admin-panel-note">这里配置的是服务端共用的文本模型。主模型失败时会自动尝试备用模型，扩展和网页端都会读取这份配置。</p>
+          <p className="admin-panel-note">这里配置服务端共用的文本模型。可按提示词优化、品类套图规划、类目识别分别勾选模型；DeepSeek 适合纯文本提示词优化，涉及参考图识别的模块建议保留一个支持视觉输入的 OpenAI/GPT 备用模型。</p>
           <div className="admin-model-list">
             {categoryKitPlannerModels.map((model, index) => (
               <div className="admin-form-panel admin-model-panel" key={model.id}>
@@ -2568,6 +2843,18 @@ export function AdminPage() {
                 <div className="admin-form-grid admin-form-grid--model">
                   <label><span>名称</span><input className="admin-input" value={model.name} onChange={(event) => updateCategoryKitPlannerModel(model.id, { name: event.target.value })} /></label>
                   <label>
+                    <span>接口模式</span>
+                    <select
+                      className="admin-input"
+                      value={model.provider}
+                      onChange={(event) => updateCategoryKitPlannerModel(model.id, categoryKitPlannerProviderPatch(event.target.value as CategoryKitPlannerProvider))}
+                    >
+                      <option value="openai-responses">OpenAI Responses</option>
+                      <option value="openai-compatible-chat">OpenAI 兼容 Chat</option>
+                      <option value="deepseek">DeepSeek Chat</option>
+                    </select>
+                  </label>
+                  <label>
                     <span>角色</span>
                     <select className="admin-input" value={model.role} onChange={(event) => updateCategoryKitPlannerModel(model.id, { role: event.target.value as CategoryKitPlannerModelRole })}>
                       <option value="primary">主模型</option>
@@ -2575,9 +2862,28 @@ export function AdminPage() {
                     </select>
                   </label>
                   <label><span>优先级</span><input className="admin-input" inputMode="numeric" value={model.priority} onChange={(event) => updateCategoryKitPlannerModel(model.id, { priority: event.target.value })} /></label>
-                  <label><span>Base URL</span><input className="admin-input" value={model.baseUrl} onChange={(event) => updateCategoryKitPlannerModel(model.id, { baseUrl: event.target.value })} placeholder="https://api.openai.com/v1" /></label>
+                  <label><span>Base URL</span><input className="admin-input" value={model.baseUrl} onChange={(event) => updateCategoryKitPlannerModel(model.id, { baseUrl: event.target.value })} placeholder={defaultCategoryKitPlannerBaseUrl(model.provider)} /></label>
                   <label><span>模型 ID</span><input className="admin-input" value={model.model} onChange={(event) => updateCategoryKitPlannerModel(model.id, { model: event.target.value })} /></label>
                   <label><span>超时秒数</span><input className="admin-input" inputMode="numeric" value={model.timeoutSeconds} onChange={(event) => updateCategoryKitPlannerModel(model.id, { timeoutSeconds: event.target.value })} /></label>
+                  <fieldset className="admin-input-group" style={{ gridColumn: "1 / -1" }}>
+                    <legend>使用模块</legend>
+                    <div className="admin-check-grid">
+                      {textModelModuleOptions.map((option) => (
+                        <label className="admin-inline-check" key={option.id}>
+                          <input
+                            checked={model.modules.includes(option.id)}
+                            type="checkbox"
+                            onChange={(event) =>
+                              updateCategoryKitPlannerModel(model.id, {
+                                modules: toggleCategoryKitPlannerModule(model.modules, option.id, event.target.checked)
+                              })
+                            }
+                          />
+                          <span>{option.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </fieldset>
                   <label style={{ gridColumn: "1 / -1" }}>
                     <span>API Key {model.apiKeySaved ? "（已保存，留空不覆盖）" : ""}</span>
                     <input className="admin-input" type="password" value={model.apiKey} onChange={(event) => updateCategoryKitPlannerModel(model.id, { apiKey: event.target.value })} />
@@ -2594,10 +2900,64 @@ export function AdminPage() {
               <Plus className="size-4" aria-hidden="true" />
               添加备用模型
             </button>
+            <button className="secondary-action h-10" type="button" onClick={addDeepSeekTextModel}>
+              <Plus className="size-4" aria-hidden="true" />
+              添加 DeepSeek
+            </button>
             <button className="primary-action h-10" disabled={savingBilling === "category-kit-planner"} type="button" onClick={() => void saveCategoryKitPlanner()}>
               {savingBilling === "category-kit-planner" ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Save className="size-4" aria-hidden="true" />}
               保存共享文本模型
             </button>
+          </div>
+        </section>
+        <section className="admin-table-card admin-billing-card" aria-labelledby="seedance-video-config-title">
+          <div className="admin-table-card__title">
+            <Video className="size-4" aria-hidden="true" />
+            <h2 id="seedance-video-config-title">Seedance 视频生成</h2>
+          </div>
+          <p className="admin-panel-note">这里保存火山方舟 Seedance 的服务端密钥。保存后新的视频生成请求会直接读取最新配置，无需重启 API。</p>
+          <div className="admin-form-panel">
+            <div className="admin-form-panel__title-row">
+              <div>
+                <p className="settings-eyebrow">Video Model</p>
+                <h3>{seedanceVideoConfig.model || DEFAULT_SEEDANCE_MODEL}</h3>
+              </div>
+              <span className="loading-pill">{seedanceConfigSourceLabel(seedanceVideoConfig.source)}</span>
+            </div>
+            <div className="admin-form-grid admin-form-grid--model">
+              <label>
+                <span>模型 ID</span>
+                <input
+                  className="admin-input"
+                  value={seedanceVideoConfig.model}
+                  onChange={(event) => setSeedanceVideoConfig({ ...seedanceVideoConfig, model: event.target.value })}
+                />
+              </label>
+              <label>
+                <span>Base URL</span>
+                <input
+                  className="admin-input"
+                  value={seedanceVideoConfig.baseUrl}
+                  onChange={(event) => setSeedanceVideoConfig({ ...seedanceVideoConfig, baseUrl: event.target.value })}
+                  placeholder={DEFAULT_ARK_BASE_URL}
+                />
+              </label>
+              <label style={{ gridColumn: "1 / -1" }}>
+                <span>ARK API Key {seedanceVideoConfig.apiKeySaved ? "（已保存，留空不覆盖）" : ""}</span>
+                <input
+                  className="admin-input"
+                  type="password"
+                  value={seedanceVideoConfig.apiKey}
+                  onChange={(event) => setSeedanceVideoConfig({ ...seedanceVideoConfig, apiKey: event.target.value, apiKeySaved: false })}
+                />
+              </label>
+            </div>
+            <div className="admin-model-actions">
+              <button className="primary-action h-10" disabled={savingBilling === "seedance-video"} type="button" onClick={() => void saveSeedanceVideoConfig()}>
+                {savingBilling === "seedance-video" ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Save className="size-4" aria-hidden="true" />}
+                保存视频配置
+              </button>
+            </div>
           </div>
         </section>
         <section className="admin-table-card admin-billing-card" aria-labelledby="ecommerce-concurrency-title">
@@ -2647,6 +3007,182 @@ export function AdminPage() {
           </div>
         </section>
           </>
+        ) : null}
+
+        {activeTab === "categoryStrategies" ? (
+          <section className="admin-table-card admin-billing-card" aria-labelledby="category-strategies-title">
+            <div className="admin-table-card__title">
+              <Database className="size-4" aria-hidden="true" />
+              <h2 id="category-strategies-title">类目策略库</h2>
+            </div>
+            <div className="admin-category-strategy-toolbar">
+              <label>
+                <span>查询</span>
+                <input
+                  className="admin-input"
+                  placeholder="类目、别名、平台或市场"
+                  value={categoryStrategyQuery}
+                  onChange={(event) => setCategoryStrategyQuery(event.target.value)}
+                />
+              </label>
+              <button className="secondary-action h-10" type="button" onClick={createCategoryStrategyDraft}>
+                <Plus className="size-4" aria-hidden="true" />
+                新建策略
+              </button>
+            </div>
+            <div className="admin-category-strategy-layout">
+              <div className="admin-category-strategy-list" aria-label="类目策略列表">
+                {filteredCategoryStrategies.length > 0 ? (
+                  filteredCategoryStrategies.map((strategy) => (
+                    <button
+                      className="admin-category-strategy-item"
+                      data-active={selectedCategoryStrategy?.id === strategy.id}
+                      key={strategy.id}
+                      type="button"
+                      onClick={() => setSelectedCategoryStrategyId(strategy.id)}
+                    >
+                      <strong>{strategy.categoryPath || strategy.categoryName || "未命名类目"}</strong>
+                      <span>{strategy.platform || "all"} / {strategy.market || "global"}</span>
+                      <small>{strategy.enabled ? "启用" : "关闭"} · P{strategy.priority || "0"}</small>
+                    </button>
+                  ))
+                ) : (
+                  <div className="admin-empty-state">暂无匹配策略</div>
+                )}
+              </div>
+
+              {selectedCategoryStrategy ? (
+                <div className="admin-form-panel admin-category-strategy-editor">
+                  <div className="admin-form-panel__title-row">
+                    <div>
+                      <p className="settings-eyebrow">Category Strategy</p>
+                      <h3>{selectedCategoryStrategy.categoryPath || selectedCategoryStrategy.categoryName || "新类目策略"}</h3>
+                    </div>
+                    <label className="admin-switch">
+                      <input
+                        checked={selectedCategoryStrategy.enabled}
+                        type="checkbox"
+                        onChange={(event) => updateCategoryStrategy(selectedCategoryStrategy.id, { enabled: event.target.checked })}
+                      />
+                      <span>{selectedCategoryStrategy.enabled ? "启用" : "关闭"}</span>
+                    </label>
+                  </div>
+                  <div className="admin-form-grid admin-form-grid--model">
+                    <label>
+                      <span>标准类目路径</span>
+                      <input
+                        className="admin-input"
+                        placeholder="服饰 > 女装 > 连衣裙"
+                        value={selectedCategoryStrategy.categoryPath}
+                        onChange={(event) => updateCategoryStrategy(selectedCategoryStrategy.id, { categoryPath: event.target.value })}
+                      />
+                    </label>
+                    <label>
+                      <span>类目名称</span>
+                      <input
+                        className="admin-input"
+                        placeholder="连衣裙"
+                        value={selectedCategoryStrategy.categoryName}
+                        onChange={(event) => updateCategoryStrategy(selectedCategoryStrategy.id, { categoryName: event.target.value })}
+                      />
+                    </label>
+                    <label>
+                      <span>平台</span>
+                      <input
+                        className="admin-input"
+                        placeholder="amazon / taobao / all"
+                        value={selectedCategoryStrategy.platform}
+                        onChange={(event) => updateCategoryStrategy(selectedCategoryStrategy.id, { platform: event.target.value })}
+                      />
+                    </label>
+                    <label>
+                      <span>市场</span>
+                      <input
+                        className="admin-input"
+                        placeholder="us / cn / global"
+                        value={selectedCategoryStrategy.market}
+                        onChange={(event) => updateCategoryStrategy(selectedCategoryStrategy.id, { market: event.target.value })}
+                      />
+                    </label>
+                    <label>
+                      <span>优先级</span>
+                      <input
+                        className="admin-input"
+                        inputMode="numeric"
+                        value={selectedCategoryStrategy.priority}
+                        onChange={(event) => updateCategoryStrategy(selectedCategoryStrategy.id, { priority: event.target.value })}
+                      />
+                    </label>
+                    <label>
+                      <span>别名</span>
+                      <input
+                        className="admin-input"
+                        placeholder="一行一个，逗号也可"
+                        value={selectedCategoryStrategy.aliasesText}
+                        onChange={(event) => updateCategoryStrategy(selectedCategoryStrategy.id, { aliasesText: event.target.value })}
+                      />
+                    </label>
+                    <label style={{ gridColumn: "1 / -1" }}>
+                      <span>必需素材角色</span>
+                      <textarea
+                        className="admin-input admin-textarea"
+                        placeholder="main&#10;detail&#10;package"
+                        value={selectedCategoryStrategy.requiredAssetsText}
+                        onChange={(event) => updateCategoryStrategy(selectedCategoryStrategy.id, { requiredAssetsText: event.target.value })}
+                      />
+                    </label>
+                    <label style={{ gridColumn: "1 / -1" }}>
+                      <span>缺失检查项</span>
+                      <textarea
+                        className="admin-input admin-textarea"
+                        placeholder="尺寸图&#10;包装图&#10;材质细节"
+                        value={selectedCategoryStrategy.missingChecklistText}
+                        onChange={(event) => updateCategoryStrategy(selectedCategoryStrategy.id, { missingChecklistText: event.target.value })}
+                      />
+                    </label>
+                    <label style={{ gridColumn: "1 / -1" }}>
+                      <span>策略内容 JSON / 多行文本</span>
+                      <textarea
+                        className="admin-input admin-textarea admin-textarea--tall"
+                        value={selectedCategoryStrategy.strategyText}
+                        onChange={(event) => updateCategoryStrategy(selectedCategoryStrategy.id, { strategyText: event.target.value })}
+                      />
+                    </label>
+                    <label style={{ gridColumn: "1 / -1" }}>
+                      <span>备注</span>
+                      <textarea
+                        className="admin-input admin-textarea"
+                        value={selectedCategoryStrategy.notes}
+                        onChange={(event) => updateCategoryStrategy(selectedCategoryStrategy.id, { notes: event.target.value })}
+                      />
+                    </label>
+                  </div>
+                  <div className="admin-model-actions">
+                    <button
+                      className="secondary-action h-10"
+                      disabled={savingBilling === `category-strategy-delete:${selectedCategoryStrategy.id}`}
+                      type="button"
+                      onClick={() => void deleteCategoryStrategy(selectedCategoryStrategy)}
+                    >
+                      {savingBilling === `category-strategy-delete:${selectedCategoryStrategy.id}` ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <X className="size-4" aria-hidden="true" />}
+                      删除
+                    </button>
+                    <button
+                      className="primary-action h-10"
+                      disabled={savingBilling === `category-strategy:${selectedCategoryStrategy.id}`}
+                      type="button"
+                      onClick={() => void saveCategoryStrategy(selectedCategoryStrategy)}
+                    >
+                      {savingBilling === `category-strategy:${selectedCategoryStrategy.id}` ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Save className="size-4" aria-hidden="true" />}
+                      保存策略
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="admin-empty-state admin-empty-state--panel">选择或新建一个类目策略</div>
+              )}
+            </div>
+          </section>
         ) : null}
 
         {activeTab === "storage" ? (
@@ -2851,6 +3387,76 @@ export function AdminPage() {
         </section>
         ) : null}
 
+        {activeTab === "redemption" ? (
+          <section className="admin-table-card admin-billing-card" aria-labelledby="redemption-code-title">
+            <div className="admin-table-card__title">
+              <Ticket className="size-4" aria-hidden="true" />
+              <h2 id="redemption-code-title">兑换码管理</h2>
+            </div>
+            <div className="admin-form-panel">
+              <div className="admin-form-panel__title-row">
+                <div>
+                  <p className="settings-eyebrow">Batch Generate</p>
+                  <h3>批量生成额度兑换码</h3>
+                </div>
+              </div>
+              <div className="admin-form-grid admin-form-grid--six">
+                <label><span>生成数量</span><input className="admin-input" inputMode="numeric" value={redemptionForm.count} onChange={(event) => setRedemptionForm({ ...redemptionForm, count: event.target.value })} /></label>
+                <label><span>总可兑换次数</span><input className="admin-input" inputMode="numeric" value={redemptionForm.maxRedemptions} onChange={(event) => setRedemptionForm({ ...redemptionForm, maxRedemptions: event.target.value })} /></label>
+                <label><span>兑换额度</span><input className="admin-input" inputMode="numeric" value={redemptionForm.quota} onChange={(event) => setRedemptionForm({ ...redemptionForm, quota: event.target.value })} /></label>
+                <label><span>兑换后有效天数</span><input className="admin-input" inputMode="numeric" value={redemptionForm.validDays} onChange={(event) => setRedemptionForm({ ...redemptionForm, validDays: event.target.value })} /></label>
+                <label><span>前缀</span><input className="admin-input" placeholder="可选，如 MAY" value={redemptionForm.codePrefix} onChange={(event) => setRedemptionForm({ ...redemptionForm, codePrefix: event.target.value.toUpperCase() })} /></label>
+                <button className="primary-action h-10" disabled={savingBilling === "redemption-codes"} type="button" onClick={() => void generateRedemptionCodes()}>
+                  {savingBilling === "redemption-codes" ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Plus className="size-4" aria-hidden="true" />}
+                  生成
+                </button>
+              </div>
+              <label>
+                <span>指定兑换码</span>
+                <textarea className="admin-textarea redemption-code-input" placeholder={"888888\n666666"} value={redemptionForm.customCodes} onChange={(event) => setRedemptionForm({ ...redemptionForm, customCodes: event.target.value.toUpperCase() })} />
+              </label>
+              <label>
+                <span>备注</span>
+                <input className="admin-input" placeholder="活动、渠道或发放对象" value={redemptionForm.note} onChange={(event) => setRedemptionForm({ ...redemptionForm, note: event.target.value })} />
+              </label>
+            </div>
+            <div className="admin-table-wrap">
+              <table className="admin-table redemption-code-table">
+                <thead>
+                  <tr>
+                    <th>兑换码</th>
+                    <th>额度</th>
+                    <th>使用人数 / 总次数</th>
+                    <th>有效天数</th>
+                    <th>状态</th>
+                    <th>备注</th>
+                    <th>创建时间</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {redemptionCodes.length > 0 ? (
+                    redemptionCodes.map((code) => (
+                      <tr key={code.id}>
+                        <td><code className="redemption-code-text">{code.code}</code></td>
+                        <td>{code.quota.toLocaleString("zh-CN")} 张</td>
+                        <td>{code.redeemedUserCount.toLocaleString("zh-CN")} / {code.maxRedemptions.toLocaleString("zh-CN")}</td>
+                        <td>{code.validDays.toLocaleString("zh-CN")} 天</td>
+                        <td>{code.status === "active" ? "启用" : "停用"}</td>
+                        <td>{code.note || "-"}</td>
+                        <td>{formatDateTime(code.createdAt)}</td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={7}>暂无兑换码</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        ) : null}
+
         {activeTab === "extension" ? (
         <section className="admin-table-card admin-billing-card" aria-labelledby="extension-release-title">
           <div className="admin-table-card__title">
@@ -2928,6 +3534,15 @@ export function AdminPage() {
                     type="password"
                     value={wechatMiniAppSettings.appSecret}
                     onChange={(event) => setWechatMiniAppSettings({ ...wechatMiniAppSettings, appSecret: event.target.value })}
+                  />
+                </label>
+                <label>
+                  <span>任务完成订阅模板 ID</span>
+                  <input
+                    className="admin-input"
+                    value={wechatMiniAppSettings.taskCompleteTemplateId}
+                    placeholder="用于任务完成提醒"
+                    onChange={(event) => setWechatMiniAppSettings({ ...wechatMiniAppSettings, taskCompleteTemplateId: event.target.value })}
                   />
                 </label>
                 <label className="admin-switch admin-switch--inline">
@@ -3867,7 +4482,11 @@ function AdminPublicGalleryPanel({
                   <tr key={item.outputId}>
                     <td>
                       <div className="admin-public-gallery-work">
-                        <img alt="" src={galleryAssetPreviewUrl(item)} />
+                        {isGalleryVideoItem(item) ? (
+                          <video aria-label={galleryPromptExcerpt(item.prompt)} muted playsInline preload="metadata" src={galleryAssetPreviewUrl(item)} />
+                        ) : (
+                          <img alt="" src={galleryAssetPreviewUrl(item)} />
+                        )}
                         <div>
                           <strong>{galleryPromptExcerpt(item.prompt)}</strong>
                           <span>{galleryOwnerLabel(item)}</span>
@@ -4271,6 +4890,32 @@ interface BillingSettingsFormState {
   currency: string;
 }
 
+interface RedemptionCodeRow {
+  id: string;
+  code: string;
+  batchId?: string;
+  quota: number;
+  maxRedemptions: number;
+  usedCount: number;
+  redeemedUserCount: number;
+  remainingCount: number;
+  validDays: number;
+  status: string;
+  note?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface RedemptionCodeFormState {
+  count: string;
+  maxRedemptions: string;
+  quota: string;
+  validDays: string;
+  customCodes: string;
+  codePrefix: string;
+  note: string;
+}
+
 interface StorageConfigFormState {
   enabled: boolean;
   provider: CloudStorageProvider;
@@ -4314,6 +4959,8 @@ interface CategoryKitPlannerModelFormState {
   id: string;
   enabled: boolean;
   name: string;
+  provider: CategoryKitPlannerProvider;
+  modules: CategoryKitPlannerModule[];
   role: CategoryKitPlannerModelRole;
   priority: string;
   apiKey: string;
@@ -4321,6 +4968,31 @@ interface CategoryKitPlannerModelFormState {
   baseUrl: string;
   model: string;
   timeoutSeconds: string;
+}
+
+interface CategoryStrategyFormState {
+  id: string;
+  enabled: boolean;
+  categoryPath: string;
+  categoryName: string;
+  platform: string;
+  market: string;
+  priority: string;
+  aliasesText: string;
+  requiredAssetsText: string;
+  missingChecklistText: string;
+  strategyText: string;
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface SeedanceVideoConfigFormState {
+  apiKey: string;
+  apiKeySaved: boolean;
+  baseUrl: string;
+  model: string;
+  source: SeedanceVideoConfigResponse["source"];
 }
 
 interface EcommerceGenerationConcurrencyFormState {
@@ -4363,6 +5035,7 @@ interface WechatMiniAppFormState {
   appId: string;
   appSecret: string;
   appSecretSaved: boolean;
+  taskCompleteTemplateId: string;
   allowBindExistingAccount: boolean;
   allowRegisterNewUser: boolean;
 }
@@ -4832,6 +5505,28 @@ function parsePlans(value: unknown): AdminPlanRow[] {
   });
 }
 
+function parseRedemptionCodes(value: unknown): RedemptionCodeRow[] {
+  return arrayFrom(value, ["codes", "items"]).map((item, index) => {
+    const maxRedemptions = numberFrom(item.maxRedemptions ?? item.max_redemptions) ?? 0;
+    const usedCount = numberFrom(item.usedCount ?? item.used_count) ?? 0;
+    return {
+      id: stringFrom(item.id) || stringFrom(item.code) || `redemption-code-${index}`,
+      code: stringFrom(item.code),
+      batchId: stringFrom(item.batchId ?? item.batch_id),
+      quota: numberFrom(item.quota ?? item.quotaGranted ?? item.quota_granted) ?? 0,
+      maxRedemptions,
+      usedCount,
+      redeemedUserCount: numberFrom(item.redeemedUserCount ?? item.redeemed_user_count) ?? usedCount,
+      remainingCount: numberFrom(item.remainingCount ?? item.remaining_count) ?? Math.max(0, maxRedemptions - usedCount),
+      validDays: numberFrom(item.validDays ?? item.valid_days) ?? 0,
+      status: stringFrom(item.status) || "active",
+      note: stringFrom(item.note),
+      createdAt: stringFrom(item.createdAt ?? item.created_at),
+      updatedAt: stringFrom(item.updatedAt ?? item.updated_at)
+    };
+  });
+}
+
 function parseJobs(value: unknown): AdminJobRow[] {
   return arrayFrom(value, ["jobs", "items"]).map((item, index) => ({
     id: stringFrom(item.jobId) || stringFrom(item.id) || `job-${index}`,
@@ -5157,9 +5852,10 @@ function parseCategoryKitPlannerFormItem(value: unknown, index: number): Categor
   const planner = isRecord(value) ? value : {};
   const enabled = booleanFrom(planner.enabled, true);
   const name = stringFrom(planner.name) || (index === 0 ? "品类套图共享文本模型" : "品类套图备用文本模型");
+  const provider = categoryKitPlannerProviderValue(planner.provider, planner.baseUrl);
   const role = stringFrom(planner.role) === "fallback" ? "fallback" : "primary";
   const priority = String(Math.max(1, Math.round(numberFrom(planner.priority) ?? index + 1)));
-  const model = stringFrom(planner.model) || "gpt-5.5";
+  const model = stringFrom(planner.model) || defaultCategoryKitPlannerModel(provider);
   if (!name || !model) {
     return undefined;
   }
@@ -5168,11 +5864,13 @@ function parseCategoryKitPlannerFormItem(value: unknown, index: number): Categor
     id: stringFrom(planner.id) || `category-kit-planner-${index + 1}`,
     enabled,
     name,
+    provider,
+    modules: categoryKitPlannerModulesValue(planner.modules),
     role,
     priority,
     apiKey: "",
     apiKeySaved: booleanFrom(planner.apiKeySaved, false),
-    baseUrl: stringFrom(planner.baseUrl) || "https://api.openai.com/v1",
+    baseUrl: stringFrom(planner.baseUrl) || defaultCategoryKitPlannerBaseUrl(provider),
     model,
     timeoutSeconds: String(Math.max(1, Math.round((numberFrom(planner.timeoutMs) ?? 1200000) / 1000)))
   };
@@ -5186,6 +5884,8 @@ function categoryKitPlannerToPayload(forms: CategoryKitPlannerModelFormState[]):
         id: form.id.startsWith("new-") ? undefined : form.id,
         enabled: form.enabled,
         name: form.name,
+        provider: form.provider,
+        modules: form.modules,
         role: form.role,
         priority: nullableNumber(form.priority) ?? index + 1,
         apiKey: form.apiKey,
@@ -5195,6 +5895,210 @@ function categoryKitPlannerToPayload(forms: CategoryKitPlannerModelFormState[]):
         timeoutMs: timeoutSeconds !== null && timeoutSeconds > 0 ? Math.round(timeoutSeconds * 1000) : undefined
       };
     })
+  };
+}
+
+function categoryKitPlannerProviderValue(value: unknown, baseUrl?: unknown): CategoryKitPlannerProvider {
+  const provider = stringFrom(value);
+  if (provider === "deepseek" || provider === "openai-compatible-chat" || provider === "openai-responses") {
+    return provider;
+  }
+  return stringFrom(baseUrl).toLowerCase().includes("deepseek") ? "deepseek" : "openai-responses";
+}
+
+function categoryKitPlannerModulesValue(value: unknown): CategoryKitPlannerModule[] {
+  const modules = Array.isArray(value)
+    ? value.filter((item): item is CategoryKitPlannerModule => textModelModuleOptions.some((option) => option.id === item))
+    : [];
+  return modules.length > 0 ? Array.from(new Set(modules)) : textModelModuleOptions.map((option) => option.id);
+}
+
+function defaultCategoryKitPlannerBaseUrl(provider: CategoryKitPlannerProvider): string {
+  return provider === "deepseek" ? "https://api.deepseek.com" : "https://api.openai.com/v1";
+}
+
+function defaultCategoryKitPlannerModel(provider: CategoryKitPlannerProvider): string {
+  if (provider === "deepseek") {
+    return "deepseek-v4-flash";
+  }
+  return "gpt-5.5";
+}
+
+function categoryKitPlannerProviderPatch(provider: CategoryKitPlannerProvider): Partial<CategoryKitPlannerModelFormState> {
+  return {
+    provider,
+    name: provider === "deepseek" ? "DeepSeek 文本模型" : provider === "openai-compatible-chat" ? "OpenAI 兼容 Chat 文本模型" : "OpenAI Responses 文本模型",
+    baseUrl: defaultCategoryKitPlannerBaseUrl(provider),
+    model: defaultCategoryKitPlannerModel(provider)
+  };
+}
+
+function toggleCategoryKitPlannerModule(
+  modules: CategoryKitPlannerModule[],
+  module: CategoryKitPlannerModule,
+  checked: boolean
+): CategoryKitPlannerModule[] {
+  const next = checked ? [...modules, module] : modules.filter((item) => item !== module);
+  return Array.from(new Set(next));
+}
+
+function parseCategoryStrategyForms(value: unknown): CategoryStrategyFormState[] {
+  const items = arrayFrom(value, ["strategies", "items"]);
+  const source = items.length > 0 ? items : isRecord(value) ? [firstRecord(value, "strategy") ?? firstRecord(value, "item") ?? value] : [];
+  return source.map(parseCategoryStrategyForm).filter((item): item is CategoryStrategyFormState => Boolean(item));
+}
+
+function parseCategoryStrategyForm(value: unknown, index: number): CategoryStrategyFormState | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const strategyValue = value.strategy ?? value.policy ?? value.content ?? value.rules;
+  const imageRoles = Array.isArray(value.imageRoles ?? value.image_roles) ? value.imageRoles ?? value.image_roles : undefined;
+  const recommendedFields = Array.isArray(value.recommendedFields ?? value.recommended_fields) ? value.recommendedFields ?? value.recommended_fields : undefined;
+  const strategyContent =
+    strategyValue === undefined
+      ? {
+          visualStyle: value.visualStyle ?? value.visual_style,
+          copyStyle: value.copyStyle ?? value.copy_style,
+          sellingPointLogic: value.sellingPointLogic ?? value.selling_point_logic,
+          compositionRules: value.compositionRules ?? value.composition_rules,
+          safetyRules: value.safetyRules ?? value.safety_rules,
+          outputScenes: value.outputScenes ?? value.output_scenes,
+          fallbackRules: value.fallbackRules ?? value.fallback_rules
+        }
+      : strategyValue;
+  const id = stringFrom(value.id ?? value.strategyId ?? value.strategy_id) || `strategy-${index}`;
+  return {
+    id,
+    enabled: booleanFrom(value.enabled ?? value.active, true),
+    categoryPath: categoryPathTextFrom(value.categoryPath ?? value.category_path ?? value.path),
+    categoryName: stringFrom(value.categoryName ?? value.category_name ?? value.name),
+    platform: stringFrom(value.platform) || "all",
+    market: stringFrom(value.market) || "global",
+    priority: String(numberFrom(value.priority ?? value.sortOrder ?? value.sort_order) ?? index + 1),
+    aliasesText: textFromListLike(value.aliases),
+    requiredAssetsText: imageRoles ? roleLabelsText(imageRoles) : textFromListLike(value.requiredAssets ?? value.required_assets ?? value.assetRoles ?? value.asset_roles),
+    missingChecklistText: recommendedFields ? roleLabelsText(recommendedFields) : textFromListLike(value.missingChecklist ?? value.missing_checklist ?? value.checklist),
+    strategyText: stringifyStrategyText(strategyContent),
+    notes: stringFrom(value.notes ?? value.note ?? value.description),
+    createdAt: stringFrom(value.createdAt ?? value.created_at),
+    updatedAt: stringFrom(value.updatedAt ?? value.updated_at)
+  };
+}
+
+function createCategoryStrategyForm(index: number): CategoryStrategyFormState {
+  return {
+    id: `new-category-strategy-${crypto.randomUUID()}`,
+    enabled: true,
+    categoryPath: "",
+    categoryName: "",
+    platform: "all",
+    market: "global",
+    priority: String(index + 1),
+    aliasesText: "",
+    requiredAssetsText: "main\ndetail\npackage",
+    missingChecklistText: "尺寸图\n包装图\n材质细节",
+    strategyText: "{\n  \"scenePlan\": [],\n  \"promptRules\": []\n}",
+    notes: "",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function categoryStrategyToPayload(form: CategoryStrategyFormState): Record<string, unknown> {
+  const strategy = parseStrategyText(form.strategyText);
+  return {
+    enabled: form.enabled,
+    categoryPath: form.categoryPath.trim(),
+    categoryName: form.categoryName.trim(),
+    platform: form.platform.trim() || "all",
+    market: form.market.trim() || "global",
+    priority: nullableNumber(form.priority) ?? 0,
+    aliases: linesFromText(form.aliasesText),
+    requiredAssets: linesFromText(form.requiredAssetsText),
+    missingChecklist: linesFromText(form.missingChecklistText),
+    strategy,
+    notes: form.notes.trim()
+  };
+}
+
+function stringifyStrategyText(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return "";
+  }
+}
+
+function parseStrategyText(value: string): unknown {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return {};
+  }
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return trimmed;
+  }
+}
+
+function textFromListLike(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value.map((item) => stringFrom(item)).filter(Boolean).join("\n");
+  }
+  return stringFrom(value);
+}
+
+function categoryPathTextFrom(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value.map((item) => stringFrom(item)).filter(Boolean).join(" > ");
+  }
+  return stringFrom(value);
+}
+
+function roleLabelsText(value: unknown): string {
+  if (!Array.isArray(value)) {
+    return "";
+  }
+  return value
+    .map((item) => {
+      if (isRecord(item)) {
+        return stringFrom(item.label ?? item.title ?? item.name ?? item.id);
+      }
+      return stringFrom(item);
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function linesFromText(value: string): string[] {
+  return value
+    .split(/[\n,，]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function parseSeedanceVideoConfigForm(value: unknown): SeedanceVideoConfigFormState {
+  const root = (firstRecord(value, "config") ?? (isRecord(value) ? value : {})) as Partial<SeedanceVideoConfigResponse>;
+  const source = stringFrom(root.source);
+  return {
+    apiKey: "",
+    apiKeySaved: booleanFrom(root.apiKeySaved, false),
+    baseUrl: stringFrom(root.baseUrl) || DEFAULT_ARK_BASE_URL,
+    model: stringFrom(root.model) || DEFAULT_SEEDANCE_MODEL,
+    source: source === "saved" || source === "env" ? source : "default"
+  };
+}
+
+function seedanceVideoConfigToPayload(form: SeedanceVideoConfigFormState): SaveSeedanceVideoConfigRequest {
+  return {
+    apiKey: form.apiKey,
+    preserveApiKey: !form.apiKey.trim() && form.apiKeySaved,
+    baseUrl: form.baseUrl,
+    model: form.model
   };
 }
 
@@ -5292,6 +6196,7 @@ function parseWechatMiniAppForm(value: unknown): WechatMiniAppFormState {
     appId: stringFrom(wechat.appId),
     appSecret: "",
     appSecretSaved: booleanFrom(appSecret.hasSecret, false),
+    taskCompleteTemplateId: stringFrom(wechat.taskCompleteTemplateId),
     allowBindExistingAccount: booleanFrom(wechat.allowBindExistingAccount, true),
     allowRegisterNewUser: booleanFrom(wechat.allowRegisterNewUser, true)
   };
@@ -5387,6 +6292,12 @@ function storageLabel(user: Pick<AdminUserRow, "storageQuotaBytes" | "storageUse
   return user.storageQuotaBytes ? `${formatBytes(used)} / ${formatBytes(user.storageQuotaBytes)}` : `${used > 0 ? formatBytes(used) : "未设置"} / 未设置`;
 }
 
+function seedanceConfigSourceLabel(source: SeedanceVideoConfigResponse["source"]): string {
+  if (source === "saved") return "后台配置";
+  if (source === "env") return "环境变量";
+  return "默认配置";
+}
+
 function ownerLabel(item: Pick<AdminJobRow, "userDisplayName" | "userEmail" | "userId">): string {
   const displayName = item.userDisplayName?.trim();
   const email = item.userEmail?.trim();
@@ -5411,6 +6322,10 @@ function galleryPromptExcerpt(prompt: string): string {
 }
 
 function galleryAssetPreviewUrl(item: GalleryImageItem): string {
+  if (isGalleryVideoItem(item)) {
+    return item.asset.cdnUrl || (/^data:|^https?:\/\//iu.test(item.asset.url) || item.asset.url.startsWith("/api/public/") ? item.asset.url : authenticatedAssetUrl(`/api/assets/${encodeURIComponent(item.asset.id)}`));
+  }
+
   return (
     previewUrlForWidth(item.asset.cdnPreviewUrls, 256) ||
     item.asset.cdnUrl ||
@@ -5418,6 +6333,10 @@ function galleryAssetPreviewUrl(item: GalleryImageItem): string {
       ? item.asset.url
       : authenticatedAssetUrl(`/api/assets/${encodeURIComponent(item.asset.id)}/preview?width=256`))
   );
+}
+
+function isGalleryVideoItem(item: GalleryImageItem): boolean {
+  return item.asset.mimeType.toLowerCase().startsWith("video/");
 }
 
 function adminPreviewImageUrl(url: string): string {
@@ -5469,7 +6388,7 @@ function galleryQualityFrom(value: unknown): GalleryImageItem["quality"] {
 
 function galleryOutputFormatFrom(value: unknown): GalleryImageItem["outputFormat"] {
   const outputFormat = stringFrom(value);
-  return outputFormat === "jpeg" || outputFormat === "png" || outputFormat === "webp" ? outputFormat : "png";
+  return outputFormat === "jpeg" || outputFormat === "png" || outputFormat === "webp" || outputFormat === "mp4" ? outputFormat : "png";
 }
 
 function demoStylePresetValue(value: unknown): StylePresetId {
@@ -5493,6 +6412,18 @@ function createBillingSettingsForm(): BillingSettingsFormState {
   return {
     imageUnitPrice: "0",
     currency: "CNY"
+  };
+}
+
+function createRedemptionCodeForm(): RedemptionCodeFormState {
+  return {
+    count: "10",
+    maxRedemptions: "1",
+    quota: "20",
+    validDays: "30",
+    customCodes: "",
+    codePrefix: "",
+    note: ""
   };
 }
 
@@ -5540,11 +6471,23 @@ function createEcommerceGenerationConcurrencyForm(): EcommerceGenerationConcurre
   };
 }
 
+function createSeedanceVideoConfigForm(): SeedanceVideoConfigFormState {
+  return {
+    apiKey: "",
+    apiKeySaved: false,
+    baseUrl: DEFAULT_ARK_BASE_URL,
+    model: DEFAULT_SEEDANCE_MODEL,
+    source: "default"
+  };
+}
+
 function createCategoryKitPlannerForm(role: CategoryKitPlannerModelRole, index: number): CategoryKitPlannerModelFormState {
   return {
     id: `new-${Date.now()}-${index}`,
     enabled: true,
     name: role === "fallback" ? "品类套图备用文本模型" : "品类套图共享文本模型",
+    provider: "openai-responses",
+    modules: textModelModuleOptions.map((option) => option.id),
     role,
     priority: String(index),
     apiKey: "",
@@ -5620,6 +6563,7 @@ function createWechatMiniAppForm(): WechatMiniAppFormState {
     appId: "",
     appSecret: "",
     appSecretSaved: false,
+    taskCompleteTemplateId: "",
     allowBindExistingAccount: true,
     allowRegisterNewUser: true
   };
@@ -5726,6 +6670,30 @@ function planFormToPayload(form: PlanFormState): Record<string, unknown> {
   };
 }
 
+function redemptionCodeFormToPayload(form: RedemptionCodeFormState): Record<string, unknown> | null {
+  const codes = redemptionCodesFromText(form.customCodes);
+  const count = codes.length > 0 ? codes.length : nullableNumber(form.count);
+  const maxRedemptions = nullableNumber(form.maxRedemptions);
+  const quota = nullableNumber(form.quota);
+  const validDays = nullableNumber(form.validDays);
+  if (!count || !maxRedemptions || !quota || !validDays) {
+    return null;
+  }
+  return {
+    count,
+    maxRedemptions,
+    quota,
+    validDays,
+    codes: codes.length > 0 ? codes : undefined,
+    codePrefix: codes.length > 0 ? undefined : form.codePrefix.trim() || undefined,
+    note: form.note.trim() || undefined
+  };
+}
+
+function redemptionCodesFromText(value: string): string[] {
+  return value.split(/[\s,，;；]+/u).map((code) => code.trim().toUpperCase()).filter(Boolean);
+}
+
 function userToQuotaForm(user: AdminUserRow): UserQuotaFormState {
   return {
     planId: user.planId ?? "",
@@ -5770,6 +6738,8 @@ function billingTypeLabel(type: string): string {
   if (type === "admin_adjustment") return "后台调整";
   if (type === "recharge") return "充值";
   if (type === "plan_purchase") return "套餐购买";
+  if (type === "redemption_code") return "兑换码";
+  if (type === "redemption_code_expiration") return "兑换码到期";
   if (type === "referral_register_quota") return "邀请注册奖励";
   if (type === "referral_cashback") return "邀请订单返现";
   return type || "-";

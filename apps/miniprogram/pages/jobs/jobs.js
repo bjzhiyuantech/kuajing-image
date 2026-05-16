@@ -240,6 +240,7 @@ Page({
       }
       const listSummary = this.data.jobs.find((job) => job.jobId === jobId) || this.decorateSummary(detail);
       const currentJob = this.mergeDetail(listSummary, detail, galleryItems);
+      await this.markJobNotificationRead(jobId);
       this.setData({
         currentJob,
         jobs: this.data.jobs.map((job) => (job.jobId === jobId ? currentJob : job))
@@ -253,6 +254,18 @@ Page({
 
   closeGallery() {
     this.setData({ currentJob: null });
+  },
+
+  async markJobNotificationRead(jobId) {
+    try {
+      const data = await api.getNotifications(30);
+      const notification = (data.notifications || []).find((item) => item.payload && item.payload.jobId === jobId && !item.readAt);
+      if (notification) {
+        await api.markNotificationRead(notification.id);
+      }
+    } catch {
+      // 打开相册不应被消息已读状态阻塞。
+    }
   },
 
   noop() {},

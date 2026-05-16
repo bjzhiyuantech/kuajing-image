@@ -18,6 +18,8 @@ Page({
     loading: false,
     remainingQuota: 0,
     user: null,
+    redemptionCode: "",
+    redemptionSaving: false,
     invoiceHeaderTypeIndex: 0,
     invoiceHeaderTypeLabels: HEADER_TYPE_OPTIONS.map((item) => item.label),
     invoiceTitle: "",
@@ -137,6 +139,10 @@ Page({
     wx.navigateTo({ url: "/pages/login/login" });
   },
 
+  goNotifications() {
+    wx.navigateTo({ url: "/pages/notifications/notifications" });
+  },
+
   onEmailInput(event) {
     this.setData({ emailDraft: event.detail.value });
   },
@@ -151,6 +157,37 @@ Page({
 
   onInvoiceInput(event) {
     this.setData({ [event.currentTarget.dataset.field]: event.detail.value });
+  },
+
+  onRedemptionCodeInput(event) {
+    this.setData({ redemptionCode: String(event.detail.value || "").toUpperCase() });
+  },
+
+  async redeemCode() {
+    if (!api.getToken()) {
+      wx.navigateTo({ url: "/pages/login/login" });
+      return;
+    }
+    const code = this.data.redemptionCode.trim();
+    if (!code) {
+      wx.showToast({ title: "请输入兑换码", icon: "none" });
+      return;
+    }
+    this.setData({ redemptionSaving: true });
+    try {
+      const data = await api.redeemCode(code);
+      const redemption = data.redemption || {};
+      wx.showToast({
+        title: `已兑换 ${redemption.quotaGranted || 0} 张`,
+        icon: "success"
+      });
+      this.setData({ redemptionCode: "" });
+      await this.loadProfile();
+    } catch (error) {
+      wx.showToast({ title: error.message, icon: "none" });
+    } finally {
+      this.setData({ redemptionSaving: false });
+    }
   },
 
   async saveProfile() {

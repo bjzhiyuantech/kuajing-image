@@ -84,7 +84,16 @@ export const aliyunSmsRuntimeConfig = {
 export const wechatMiniAppRuntimeConfig = {
   appId: emptyToUndefined(process.env.WECHAT_MINIAPP_APP_ID),
   appSecret: emptyToUndefined(process.env.WECHAT_MINIAPP_APP_SECRET),
+  taskCompleteTemplateId: emptyToUndefined(process.env.WECHAT_MINIAPP_TASK_COMPLETE_TEMPLATE_ID),
   enabled: process.env.WECHAT_MINIAPP_ENABLED === "true"
+};
+
+export const getuiRuntimeConfig = {
+  enabled: process.env.GETUI_ENABLED === "true",
+  appId: emptyToUndefined(process.env.GETUI_APP_ID),
+  appKey: emptyToUndefined(process.env.GETUI_APP_KEY),
+  masterSecret: emptyToUndefined(process.env.GETUI_MASTER_SECRET),
+  baseUrl: (emptyToUndefined(process.env.GETUI_BASE_URL) ?? "https://restapi.getui.com/v2").replace(/\/+$/u, "")
 };
 
 export const extensionReleaseRuntimeConfig = {

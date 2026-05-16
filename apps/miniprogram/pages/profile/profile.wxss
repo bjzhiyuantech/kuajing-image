@@ -71,6 +71,38 @@
   color: #101828;
 }
 
+.redeem-box {
+  margin-top: 24rpx;
+  padding: 22rpx;
+  border-radius: 16rpx;
+  background: #f0fdfa;
+  border: 1rpx solid #99f6e4;
+}
+
+.redeem-title {
+  color: #0f766e;
+  font-size: 28rpx;
+  font-weight: 800;
+}
+
+.redeem-row {
+  display: flex;
+  gap: 14rpx;
+  align-items: center;
+  margin-top: 16rpx;
+}
+
+.redeem-row .login-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.redeem-button {
+  width: 170rpx;
+  margin-top: 0;
+  background: #0f766e;
+}
+
 .two-fields {
   display: flex;
   gap: 18rpx;

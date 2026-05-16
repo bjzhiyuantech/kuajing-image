@@ -28,7 +28,8 @@ export default defineConfig({
         "page-hook": resolve(__dirname, "src/page-hook.ts")
       },
       output: {
-        entryFileNames: (chunk) => (chunk.name === "background" || chunk.name === "content-script" || chunk.name === "page-hook" ? "[name].js" : "assets/[name]-[hash].js")
+        entryFileNames: (chunk: { name: string }) =>
+          chunk.name === "background" || chunk.name === "content-script" || chunk.name === "page-hook" ? "[name].js" : "assets/[name]-[hash].js"
       }
     }
   }

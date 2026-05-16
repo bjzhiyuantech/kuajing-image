@@ -29,7 +29,7 @@ import {
   Wand2,
   X
 } from "lucide-react";
-import type { ChangeEvent, FormEvent, PointerEvent } from "react";
+import type { ChangeEvent, ClipboardEvent, FormEvent, PointerEvent } from "react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   ECOMMERCE_AUTO_CATEGORY_KIT_SCENE_IDS,
@@ -53,10 +53,18 @@ import {
   type GenerationResponse,
   type ImageQuality,
   type OutputFormat,
+  type PromptOptimizeResponse,
   type ReferenceImageInput,
   type StylePresetId
 } from "@gpt-image-canvas/shared";
 import type { AuthUser, BatchFormState, BatchTask, ExtensionAuthState, PageContext, PageProductContext } from "./types";
+
+type ReplacementReferenceItem = {
+  referenceImage: ReferenceImageInput;
+  additionalReferenceImages?: ReferenceImageInput[];
+  title?: string;
+  extraDirection?: string;
+};
 
 const ACTIVE_BATCH_JOB_STORAGE_KEY = "activeBatchJob";
 const AUTH_STORAGE_KEY = "auth";
@@ -68,6 +76,8 @@ const GALLERY_PREVIEW_TAB_STORAGE_KEY = "galleryPreviewTabsByWindow";
 const GALLERY_PREVIEW_TAB_PARAM = "extensionPreviewTab";
 const TEXT_TRANSLATION_SCENE_ID = "text-translation" as const;
 const TEXT_TRANSLATION_CONCURRENCY = 4;
+const TEXT_TRANSLATION_IMAGE_READ_TIMEOUT_MS = 60_000;
+const TEXT_TRANSLATION_SUBMIT_TIMEOUT_MS = 90_000;
 const PHONE_VERIFICATION_REQUIRED_CODE = "phone_verification_required";
 const PHONE_VERIFICATION_REQUIRED_MESSAGE = "为了更好提供服务，请完善手机号。";
 const IMAGE_HOVER_PREVIEW_SIZE = 280;
@@ -120,8 +130,9 @@ type GalleryPreviewTabMap = Record<string, number>;
 type TaskNotificationMap = Record<string, string>;
 
 type ToolTab = "account" | "billing" | "history" | "stats" | "referral" | "about";
+type ReferenceSourceTab = "read" | "upload";
 type AuthMode = "login" | "register";
-type PendingAuthAction = "generate" | "billing" | "history" | "stats" | "referral" | "job";
+type PendingAuthAction = "generate" | "text-translation" | "billing" | "history" | "stats" | "referral" | "job";
 
 interface BrandPreviewOverlayPayload {
   placement: BatchFormState["brandOverlay"]["placement"];
@@ -286,12 +297,28 @@ interface QueuedJobDialogState {
   message: string;
   totalScenes?: number;
   completedScenes?: number;
+  unitLabel?: string;
+  title?: string;
 }
 
 interface UploadedReferenceImage {
   id: string;
   dataUrl: string;
   fileName: string;
+}
+
+type CategoryKitPrepareStatus = "idle" | "loading" | "ready" | "error";
+
+interface CategoryKitPrepareState {
+  status: CategoryKitPrepareStatus;
+  categoryPath: string;
+  categoryName: string;
+  strategyName: string;
+  summary: string;
+  missingItems: string[];
+  requiredAssets: string[];
+  warnings: string[];
+  message: string;
 }
 
 interface ImageHoverPreview {
@@ -360,6 +387,7 @@ const defaultForm: BatchFormState = {
   countPerScene: 1,
   referenceImageUrl: "",
   referenceImageUrls: [],
+  replacementImageUrls: [],
   extraDirection: "",
   categoryKit: {
     categoryId: "auto-category-kit",
@@ -393,12 +421,25 @@ const defaultForm: BatchFormState = {
   }
 };
 
+const emptyCategoryKitPrepare: CategoryKitPrepareState = {
+  status: "idle",
+  categoryPath: "",
+  categoryName: "",
+  strategyName: "",
+  summary: "",
+  missingItems: [],
+  requiredAssets: [],
+  warnings: [],
+  message: "先上传或选择商品主图，再预检类目策略。"
+};
+
 const defaultSceneIdsByMode: Record<EcommerceGenerationMode, EcommerceSceneTemplateId[]> = {
   enhance: ["marketplace-main", "logo-benefit", "feature-benefit"],
   creative: ["lifestyle", "model-wear", "accessory-match"],
   "category-kit": [...detailCategoryKitScenes],
   "marketing-main": [...marketingMainScenes],
   "single-poster": ["single-product-long-poster"],
+  "one-click-replace": ["one-click-replace"],
   "text-translation": [TEXT_TRANSLATION_SCENE_ID]
 };
 
@@ -407,7 +448,8 @@ const generationModes: Array<{ id: EcommerceGenerationMode; label: string; hint:
   { id: "creative", label: "场景创作", hint: "依据主图生成生活方式、模特穿戴和搭配场景。" },
   { id: "category-kit", label: "品类套图", hint: "先识别商品，再由 AI 判断该生成哪些电商图。" },
   { id: "marketing-main", label: "营销主图设计", hint: "按产品、人群、场景、卖点和信任元素设计点击主图。" },
-  { id: "single-poster", label: "单品完整海报", hint: "依据产品图自动归纳卖点，生成一张高比例电商详情长图。" }
+  { id: "single-poster", label: "单品完整海报", hint: "依据产品图自动归纳卖点，生成一张高比例电商详情长图。" },
+  { id: "one-click-replace", label: "一键换装/换品", hint: "目标模特或场景 + 自己的衣服/商品图，一键自然替换。" }
 ];
 
 const textTranslationMode = {
@@ -439,6 +481,7 @@ const styleOptions: Array<{ id: StylePresetId; label: string }> = [
 const SOURCE_ASPECT_SIZE_OPTION = "source-aspect";
 const SOURCE_ASPECT_BASE_SIZE = 1024;
 const MAX_REFERENCE_IMAGE_COUNT = 3;
+const OZON_SIZE_PRESET_ID = "ozon-3-4";
 const CHINESE_ECOMMERCE_PLATFORM_IDS = new Set<BatchFormState["platform"]>([
   "1688",
   "taobao",
@@ -451,6 +494,7 @@ const CHINESE_ECOMMERCE_PLATFORM_IDS = new Set<BatchFormState["platform"]>([
   "weidian",
   "dewu"
 ]);
+const RUSSIAN_ECOMMERCE_PLATFORM_IDS = new Set<BatchFormState["platform"]>(["ozon"]);
 
 const isApiAssetUrl = (url: string): boolean => url.startsWith("/api/assets/");
 
@@ -542,8 +586,11 @@ function imageHoverPreviewPosition(clientX: number, clientY: number): Pick<Image
   };
 }
 
-async function referenceImageFromUrl(url: string): Promise<ReferenceImageInput> {
-  const response = await fetch(url);
+async function referenceImageFromUrl(url: string, timeoutMs?: number): Promise<ReferenceImageInput> {
+  const response =
+    typeof timeoutMs === "number"
+      ? await fetchWithTimeout(url, {}, timeoutMs, "参考图读取超时，请换一张商品主图。")
+      : await fetch(url);
   if (!response.ok) {
     throw new Error("参考图读取失败，请换一张商品主图。");
   }
@@ -591,6 +638,24 @@ function downloadUrl(url: string, fileName: string): void {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, timeoutMs: number, timeoutMessage: string): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal
+    });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error(timeoutMessage);
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
 }
 
 async function mapWithConcurrency<T>(
@@ -695,11 +760,31 @@ async function createZipBlob(files: Array<{ name: string; blob: Blob }>): Promis
   return new Blob([...localParts, ...centralParts, endRecord], { type: "application/zip" });
 }
 
-function imageFromUrl(url: string): Promise<HTMLImageElement> {
+function imageFromUrl(url: string, timeoutMs?: number): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image();
-    image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error("图片载入失败。"));
+    let timeoutId: number | undefined;
+    const cleanup = (): void => {
+      if (timeoutId) {
+        window.clearTimeout(timeoutId);
+      }
+    };
+    image.onload = () => {
+      cleanup();
+      resolve(image);
+    };
+    image.onerror = () => {
+      cleanup();
+      reject(new Error("图片载入失败。"));
+    };
+    if (typeof timeoutMs === "number") {
+      timeoutId = window.setTimeout(() => {
+        image.onload = null;
+        image.onerror = null;
+        image.src = "";
+        reject(new Error("图片载入超时。"));
+      }, timeoutMs);
+    }
     image.src = url;
   });
 }
@@ -772,13 +857,13 @@ async function mergeReferenceImages(images: ReferenceImageInput[]): Promise<Refe
   };
 }
 
-async function referenceImageFromSources(urls: string[]): Promise<ReferenceImageInput | undefined> {
+async function referenceImageFromSources(urls: string[], timeoutMs?: number): Promise<ReferenceImageInput | undefined> {
   const trimmedUrls = urls.map((url) => url.trim()).filter(Boolean).slice(0, 3);
   if (trimmedUrls.length === 0) {
     return undefined;
   }
 
-  const images = await Promise.all(trimmedUrls.map((url) => referenceImageFromUrl(url)));
+  const images = await Promise.all(trimmedUrls.map((url) => referenceImageFromUrl(url, timeoutMs)));
   return mergeReferenceImages(images);
 }
 
@@ -819,6 +904,10 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
+function stringFromUnknown(value: unknown): string {
+  return typeof value === "string" ? value.trim() : typeof value === "number" || typeof value === "boolean" ? String(value) : "";
+}
+
 function firstString(source: Record<string, unknown>, keys: string[]): string | undefined {
   for (const key of keys) {
     const value = source[key];
@@ -827,6 +916,63 @@ function firstString(source: Record<string, unknown>, keys: string[]): string | 
     }
   }
   return undefined;
+}
+
+function stringListFromUnknown(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map(stringFromUnknown).filter(Boolean);
+  }
+  const text = stringFromUnknown(value);
+  return text ? text.split(/[\n,，]/u).map((item) => item.trim()).filter(Boolean) : [];
+}
+
+function categoryPathFromUnknown(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value.map(stringFromUnknown).filter(Boolean).join(" > ");
+  }
+  return stringFromUnknown(value);
+}
+
+function labelListFromUnknown(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return stringListFromUnknown(value);
+  }
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      const text = stringFromUnknown(item);
+      return text ? [text] : [];
+    }
+    const record = asRecord(item);
+    const label = stringFromUnknown(record.label ?? record.title ?? record.name ?? record.id ?? record.role);
+    const required = record.required === true ? "必需" : record.recommended === true ? "建议" : "";
+    return label ? [`${label}${required ? `（${required}）` : ""}`] : [];
+  });
+}
+
+function parseCategoryKitPrepare(value: unknown): CategoryKitPrepareState {
+  const root = asRecord(value);
+  const strategy = asRecord(root.strategy ?? root.policy);
+  const missingItems = labelListFromUnknown(root.missingInputs ?? root.missing_inputs ?? root.missingItems ?? root.missing);
+  const requiredAssets = labelListFromUnknown(root.imageRoles ?? root.image_roles ?? root.requiredAssets ?? root.required_assets ?? strategy.imageRoles);
+  const categoryPath = categoryPathFromUnknown(root.categoryPath ?? root.category_path);
+  const categoryName = stringFromUnknown(root.categoryName ?? root.category_name);
+  const strategyName = stringFromUnknown(strategy.categoryName ?? strategy.name ?? strategy.title);
+  const warnings = stringListFromUnknown(root.warnings);
+  return {
+    status: "ready",
+    categoryPath,
+    categoryName,
+    strategyName,
+    summary: stringFromUnknown(root.productSummary ?? root.product_summary ?? root.notes),
+    missingItems,
+    requiredAssets,
+    warnings,
+    message:
+      warnings[0] ||
+      (missingItems.length > 0
+        ? `已匹配${categoryName || strategyName || "类目策略"}，仍需补充 ${missingItems.slice(0, 3).join("、")}。`
+        : `已匹配${categoryName || strategyName || "类目策略"}，可确认生成。`)
+  };
 }
 
 function firstNumber(source: Record<string, unknown>, keys: string[]): number | undefined {
@@ -1472,6 +1618,7 @@ export function SidePanelApp() {
   const [pendingAuthAction, setPendingAuthAction] = useState<PendingAuthAction | null>(null);
   const [form, setForm] = useState<BatchFormState>(defaultForm);
   const [pageContext, setPageContext] = useState<PageContext | null>(null);
+  const [pageContextLoading, setPageContextLoading] = useState(false);
   const [task, setTask] = useState<BatchTask>({
     id: "idle",
     status: "idle",
@@ -1479,6 +1626,7 @@ export function SidePanelApp() {
     records: []
   });
   const taskNotificationRef = useRef<TaskNotificationMap>({});
+  const translationSubmissionRef = useRef(0);
   const [activeTool, setActiveTool] = useState<ToolTab>("account");
   const [toolPanelOpen, setToolPanelOpen] = useState(false);
   const [historyState, setHistoryState] = useState<RemoteState<EcommerceJobSummary[]>>({
@@ -1535,12 +1683,15 @@ export function SidePanelApp() {
   const [localResultRecords, setLocalResultRecords] = useState<GenerationRecord[]>([]);
   const [editDialog, setEditDialog] = useState<EditImageDialogState | null>(null);
   const [queuedJobDialog, setQueuedJobDialog] = useState<QueuedJobDialogState | null>(null);
+  const [referenceSourceTab, setReferenceSourceTab] = useState<ReferenceSourceTab>("read");
   const [uploadedReferenceImages, setUploadedReferenceImages] = useState<UploadedReferenceImage[]>([]);
+  const [categoryKitPrepare, setCategoryKitPrepare] = useState<CategoryKitPrepareState>(emptyCategoryKitPrepare);
   const [imageHoverPreview, setImageHoverPreview] = useState<ImageHoverPreview | null>(null);
   const [worksViewOpen, setWorksViewOpen] = useState(false);
   const [textTranslationViewOpen, setTextTranslationViewOpen] = useState(false);
   const [translationReturnMode, setTranslationReturnMode] = useState<EcommerceGenerationMode>("enhance");
   const [translationImageUrls, setTranslationImageUrls] = useState<string[]>([]);
+  const [extraDirectionOptimizing, setExtraDirectionOptimizing] = useState(false);
   const [zipDownloadLoading, setZipDownloadLoading] = useState(false);
   const [extensionVersionState, setExtensionVersionState] = useState<ExtensionVersionState>({
     currentVersion: chrome.runtime.getManifest().version,
@@ -1566,13 +1717,15 @@ export function SidePanelApp() {
   );
   const effectiveSceneTemplateIds =
     form.generationMode === "category-kit" ? categoryKitScenesByVersion[form.categoryKit.kitVersion] : form.sceneTemplateIds;
-  const effectiveCountPerScene = form.generationMode === "category-kit" || form.generationMode === "single-poster" ? 1 : form.countPerScene;
+  const effectiveCountPerScene = form.generationMode === "category-kit" || form.generationMode === "single-poster" || form.generationMode === "one-click-replace" ? 1 : form.countPerScene;
   const effectiveSelectedScenes = availableScenes.filter((template) => effectiveSceneTemplateIds.includes(template.id));
 
   const pageImageUrls = useMemo(() => dedupeCandidateImageUrls(pageContext?.imageUrls ?? []), [pageContext?.imageUrls]);
+  const pageContextDisplayUrl = pageContext?.url ? formatSourceUrl(pageContext.url) : "";
   const selectedReferenceImageUrl = form.referenceImageUrl.trim();
   const selectedReferenceImageUrls = form.referenceImageUrls.length > 0 ? form.referenceImageUrls : selectedReferenceImageUrl ? [selectedReferenceImageUrl] : [];
   const selectedReferenceImageUrlsKey = selectedReferenceImageUrls.join("|");
+  const selectedReplacementImageUrls = form.replacementImageUrls.map((url) => url.trim()).filter(Boolean);
   const maxReferenceImageCount = MAX_REFERENCE_IMAGE_COUNT;
   const referenceImageOptions = useMemo(
     () => [
@@ -2032,7 +2185,7 @@ export function SidePanelApp() {
     setActiveTool("account");
     setToolPanelOpen(true);
     setAuthMode("login");
-    setAuthError("请先登录账号，插件会使用你的个人 JWT 访问后端。");
+    setAuthError("请先登录账号。");
     return false;
   }
 
@@ -2068,6 +2221,57 @@ export function SidePanelApp() {
       // Fall through to a friendly generic message.
     }
     return { message: `请求失败，请稍后重试（HTTP ${response.status}）。` };
+  }
+
+  async function optimizeExtraDirection(): Promise<void> {
+    const sourcePrompt = form.extraDirection.trim();
+    if (!sourcePrompt) {
+      setTask((current) => ({
+        ...current,
+        message: "请先填写补充方向后再优化。"
+      }));
+      return;
+    }
+
+    setExtraDirectionOptimizing(true);
+    setTask((current) => ({
+      ...current,
+      message: "正在优化补充方向。"
+    }));
+    try {
+      const response = await fetch(`${apiBaseUrl()}/api/images/prompt/optimize`, {
+        method: "POST",
+        headers: apiHeaders(true),
+        body: JSON.stringify({
+          prompt: sourcePrompt,
+          mode: selectedReferenceImageUrls.length > 0 ? "reference" : "text",
+          stylePresetId: form.stylePresetId,
+          size: form.size,
+          hasReferenceImage: selectedReferenceImageUrls.length > 0
+        })
+      });
+      const body = (await parseResponseOrThrow(response)) as Partial<PromptOptimizeResponse>;
+      const optimizedPrompt = typeof body.optimizedPrompt === "string" ? body.optimizedPrompt.trim() : "";
+      if (!optimizedPrompt) {
+        throw new Error("补充方向优化没有返回可用结果。");
+      }
+
+      setForm((current) => ({
+        ...current,
+        extraDirection: optimizedPrompt
+      }));
+      setTask((current) => ({
+        ...current,
+        message: "补充方向已优化，可以继续微调或直接生成。"
+      }));
+    } catch (error) {
+      setTask((current) => ({
+        ...current,
+        message: error instanceof Error ? error.message : "补充方向优化失败，请稍后重试。"
+      }));
+    } finally {
+      setExtraDirectionOptimizing(false);
+    }
   }
 
   async function fetchAssetAsReferenceImage(asset: GeneratedAsset): Promise<ReferenceImageInput> {
@@ -2223,6 +2427,8 @@ export function SidePanelApp() {
       setPendingAuthAction(null);
       if (action === "generate") {
         void submitBatch(true, nextAuth.token);
+      } else if (action === "text-translation") {
+        void submitTextTranslationBatch(true, nextAuth.token);
       } else if (action === "history") {
         setActiveTool("history");
         void refreshHistory(true, nextAuth.token);
@@ -2338,15 +2544,6 @@ export function SidePanelApp() {
       headers: apiHeaders(false, token)
     });
     return (await parseResponseOrThrow(response)) as EcommerceBatchGenerateResponse;
-  }
-
-  async function waitForBatchJob(jobId: string, token = auth.token): Promise<EcommerceBatchGenerateResponse> {
-    let body = await fetchBatchJob(jobId, token);
-    while (body.status === "pending" || body.status === "running") {
-      await delay(2200);
-      body = await fetchBatchJob(jobId, token);
-    }
-    return body;
   }
 
   async function refreshHistory(authAlreadyChecked = false, token = auth.token): Promise<void> {
@@ -2697,6 +2894,10 @@ export function SidePanelApp() {
 
   function openQueuedJobHistory(): void {
     setQueuedJobDialog(null);
+    if (textTranslationViewOpen) {
+      closeTextTranslationPage();
+    }
+    setWorksViewOpen(false);
     openTool("history");
     window.requestAnimationFrame(() => window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" }));
   }
@@ -2758,6 +2959,14 @@ export function SidePanelApp() {
     });
   }
 
+  function resultImageHoverPreviewItem(item: ResultImageItem): { url: string; label: string } {
+    const fileName = item.asset.fileName || "生成图片";
+    return {
+      url: assetPreviewUrl(item.asset, 1024),
+      label: `${item.asset.width} x ${item.asset.height} · ${fileName}`
+    };
+  }
+
   function renderResultImages(emptyText: string): JSX.Element {
     if (resultImages.length === 0) {
       return <p className="result-empty">{emptyText}</p>;
@@ -2765,40 +2974,147 @@ export function SidePanelApp() {
 
     return (
       <div className="result-grid">
-        {resultImages.map((item) => (
-          <article className="result-image-card" key={item.key}>
-            <button className="result-image-preview" type="button" onClick={() => void openGalleryPreview(item.asset)}>
-              <img alt={item.record.prompt} height={item.asset.height} src={assetPreviewUrl(item.asset)} width={item.asset.width} />
-              {brandOverlayReady ? (
-                <span className={`brand-result-overlay brand-result-overlay-${form.brandOverlay.placement}`}>
-                  {form.brandOverlay.logoDataUrl ? <img alt="" src={form.brandOverlay.logoDataUrl} /> : <strong>{form.brandOverlay.text.trim()}</strong>}
-                </span>
-              ) : null}
-            </button>
-            <div className="result-image-meta">
-              <span>{item.asset.width} x {item.asset.height} · {item.record.outputFormat}</span>
-              <div className="result-actions">
-                <button className="mini-button icon-mini" type="button" title="预览" onClick={() => void openGalleryPreview(item.asset)}>
-                  <ImageIcon size={13} />
-                </button>
-                <button
-                  className="mini-button icon-mini"
-                  type="button"
-                  title={brandOverlayReady ? "下载带品牌图" : "下载"}
-                  onClick={() => void downloadResultImage(item)}
-                >
-                  <Download size={13} />
-                </button>
-                <button className="mini-button icon-mini" type="button" title="修改重新生成" onClick={() => openEditImageDialog(item)}>
-                  <Edit3 size={13} />
-                </button>
-                <button className="mini-button icon-mini danger-mini" type="button" title="从当前列表移除" onClick={() => hideResultImage(item.key)}>
-                  <Trash2 size={13} />
-                </button>
+        {resultImages.map((item) => {
+          const hoverPreviewItem = resultImageHoverPreviewItem(item);
+
+          return (
+            <article className="result-image-card" key={item.key}>
+              <button
+                className="result-image-preview"
+                type="button"
+                onBlur={hideImageHoverPreview}
+                onClick={() => void openGalleryPreview(item.asset)}
+                onFocus={(event) => showImageFocusPreview(event.currentTarget, hoverPreviewItem)}
+                onPointerEnter={(event) => showImageHoverPreview(event, hoverPreviewItem)}
+                onPointerLeave={hideImageHoverPreview}
+                onPointerMove={(event) => showImageHoverPreview(event, hoverPreviewItem)}
+              >
+                <img alt={item.record.prompt} height={item.asset.height} src={assetPreviewUrl(item.asset)} width={item.asset.width} />
+                {brandOverlayReady ? (
+                  <span className={`brand-result-overlay brand-result-overlay-${form.brandOverlay.placement}`}>
+                    {form.brandOverlay.logoDataUrl ? <img alt="" src={form.brandOverlay.logoDataUrl} /> : <strong>{form.brandOverlay.text.trim()}</strong>}
+                  </span>
+                ) : null}
+              </button>
+              <div className="result-image-meta">
+                <span>{item.asset.width} x {item.asset.height} · {item.record.outputFormat}</span>
+                <div className="result-actions">
+                  <button className="mini-button icon-mini" type="button" title="预览" onClick={() => void openGalleryPreview(item.asset)}>
+                    <ImageIcon size={13} />
+                  </button>
+                  <button
+                    className="mini-button icon-mini"
+                    type="button"
+                    title={brandOverlayReady ? "下载带品牌图" : "下载"}
+                    onClick={() => void downloadResultImage(item)}
+                  >
+                    <Download size={13} />
+                  </button>
+                  <button className="mini-button icon-mini" type="button" title="修改重新生成" onClick={() => openEditImageDialog(item)}>
+                    <Edit3 size={13} />
+                  </button>
+                  <button className="mini-button icon-mini danger-mini" type="button" title="从当前列表移除" onClick={() => hideResultImage(item.key)}>
+                    <Trash2 size={13} />
+                  </button>
+                </div>
               </div>
+            </article>
+          );
+        })}
+      </div>
+    );
+  }
+
+  function renderAuthForm(): JSX.Element {
+    return (
+      <form className="auth-form" onSubmit={(event) => void submitAuth(event)}>
+        <div className="auth-switch">
+          <button className={authMode === "login" ? "active" : ""} type="button" onClick={() => setAuthMode("login")}>登录</button>
+          <button className={authMode === "register" ? "active" : ""} type="button" onClick={() => setAuthMode("register")}>注册</button>
+        </div>
+        {authMode === "register" ? (
+          <label>
+            <span>手机号</span>
+            <input autoComplete="tel" inputMode="tel" value={authForm.phone} onChange={(event) => setAuthForm({ ...authForm, phone: event.target.value })} required />
+          </label>
+        ) : (
+          <label>
+            <span>手机号/邮箱</span>
+            <input autoComplete="username" value={authForm.account} onChange={(event) => setAuthForm({ ...authForm, account: event.target.value })} required />
+          </label>
+        )}
+        {authMode === "register" ? (
+          <label>
+            <span>显示名</span>
+            <input autoComplete="name" value={authForm.displayName} onChange={(event) => setAuthForm({ ...authForm, displayName: event.target.value })} />
+          </label>
+        ) : null}
+        {authMode === "register" ? (
+          <label>
+            <span>短信验证码</span>
+            <div className="auth-code-row">
+              <input
+                autoComplete="one-time-code"
+                inputMode="numeric"
+                maxLength={6}
+                value={authForm.smsCode}
+                onChange={(event) => setAuthForm({ ...authForm, smsCode: event.target.value })}
+                required
+              />
+              <button className="mini-button" disabled={authCodeLoading} type="button" onClick={() => void sendAuthSmsCode()}>
+                {authCodeLoading ? <Loader2 className="spin" size={13} /> : <Send size={13} />}
+                发送
+              </button>
             </div>
-          </article>
-        ))}
+          </label>
+        ) : null}
+        {authMode === "register" ? (
+          <label>
+            <span>邀请码</span>
+            <input
+              autoComplete="off"
+              value={authForm.inviteCode}
+              onChange={(event) => setAuthForm({ ...authForm, inviteCode: event.target.value })}
+              placeholder="可选"
+            />
+          </label>
+        ) : null}
+        <label>
+          <span>密码</span>
+          <input autoComplete={authMode === "login" ? "current-password" : "new-password"} type="password" value={authForm.password} onChange={(event) => setAuthForm({ ...authForm, password: event.target.value })} required />
+        </label>
+        {authError ? <p className="tool-error">{authError}</p> : null}
+        {authNotice ? <p className="settings-note">{authNotice}</p> : null}
+        <button className="primary-button auth-submit" disabled={authLoading} type="submit">
+          {authLoading ? <Loader2 className="spin" size={15} /> : <KeyRound size={15} />}
+          {authMode === "login" ? "登录" : "注册并登录"}
+        </button>
+      </form>
+    );
+  }
+
+  function renderAuthDialog(): JSX.Element | null {
+    if (auth.token || activeTool !== "account" || !toolPanelOpen) {
+      return null;
+    }
+
+    return (
+      <div className="auth-dialog-backdrop" role="presentation" onClick={() => setToolPanelOpen(false)}>
+        <section
+          aria-labelledby="extension-auth-dialog-title"
+          aria-modal="true"
+          className="auth-dialog"
+          role="dialog"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="tool-panel-header">
+            <strong id="extension-auth-dialog-title">登录账号</strong>
+            <button className="tool-close" title="关闭" type="button" onClick={() => setToolPanelOpen(false)}>
+              <X size={17} />
+            </button>
+          </div>
+          {renderAuthForm()}
+        </section>
       </div>
     );
   }
@@ -2903,7 +3219,7 @@ export function SidePanelApp() {
         <div className="edit-modal-card queued-job-dialog-card">
           <div className="edit-modal-header">
             <div>
-              <strong id="queued-job-title">任务已进入后端队列</strong>
+              <strong id="queued-job-title">{queuedJobDialog.title ?? "任务已进入后端队列"}</strong>
               <span>按钮已释放，可以继续提交下一组；服务端会继续生成当前任务。</span>
             </div>
             <button className="mini-button icon-mini" type="button" onClick={() => setQueuedJobDialog(null)}>
@@ -2915,7 +3231,7 @@ export function SidePanelApp() {
             <div>
               <strong>{queuedJobDialog.message}</strong>
               <span>
-                {queuedJobDialog.completedScenes ?? 0}/{queuedJobDialog.totalScenes ?? effectiveSelectedScenes.length} 场景 · {queuedJobDialog.jobId}
+                {queuedJobDialog.completedScenes ?? 0}/{queuedJobDialog.totalScenes ?? effectiveSelectedScenes.length} {queuedJobDialog.unitLabel ?? "场景"} · {queuedJobDialog.jobId}
               </span>
             </div>
           </div>
@@ -3095,12 +3411,27 @@ export function SidePanelApp() {
   }
 
   async function refreshPageContext(): Promise<void> {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab.id) {
+    if (pageContextLoading) {
       return;
     }
 
+    setReferenceSourceTab("read");
+    setPageContextLoading(true);
+    setTask((current) => ({
+      ...current,
+      message: "正在读取当前页信息，筛选并去重候选商品图。"
+    }));
+
     try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab.id) {
+        setTask((current) => ({
+          ...current,
+          message: "当前标签页无法读取商品信息，可手动填写。"
+        }));
+        return;
+      }
+
       const context = (await chrome.tabs.sendMessage(tab.id, { type: "kuajing-image:get-page-context" })) as PageContext;
       setPageContext(context);
       const product: PageProductContext = context.product ?? { attributes: [] };
@@ -3127,6 +3458,8 @@ export function SidePanelApp() {
         ...current,
         message: "当前页面暂时无法读取商品信息，可手动填写。"
       }));
+    } finally {
+      setPageContextLoading(false);
     }
   }
 
@@ -3138,15 +3471,7 @@ export function SidePanelApp() {
         ...patch
       }
     }));
-  }
-
-  function updateReferenceImageUrl(url: string): void {
-    const trimmedUrl = url.trim();
-    setForm((current) => ({
-      ...current,
-      referenceImageUrl: url,
-      referenceImageUrls: trimmedUrl ? [trimmedUrl] : []
-    }));
+    setCategoryKitPrepare(emptyCategoryKitPrepare);
   }
 
   function showImageHoverPreview(event: PointerEvent<HTMLButtonElement>, item: { url: string; label: string }): void {
@@ -3162,6 +3487,101 @@ export function SidePanelApp() {
 
   function hideImageHoverPreview(): void {
     setImageHoverPreview(null);
+  }
+
+  function renderImageHoverPreview(): JSX.Element | null {
+    if (!imageHoverPreview) {
+      return null;
+    }
+
+    return (
+      <div
+        className="reference-image-hover-preview"
+        style={{ left: `${imageHoverPreview.x}px`, top: `${imageHoverPreview.y}px` }}
+      >
+        <img alt={imageHoverPreview.label} src={imageHoverPreview.url} />
+        <span>{imageHoverPreview.label}</span>
+      </div>
+    );
+  }
+
+  function categoryKitAssetRoleForIndex(index: number): string {
+    if (index === 0) return "main-product";
+    if (index === 1) return "detail";
+    if (index === 2) return "package";
+    return "other";
+  }
+
+  async function buildCategoryKitPreparationPayload(referenceImage?: ReferenceImageInput): Promise<Record<string, unknown>> {
+    const extraDirection = [
+      form.extraDirection.trim(),
+      "Category kit precheck: identify category, match strategy, and list only missing real inputs or asset roles. Do not invent unknown product facts."
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    const selectedImages = await Promise.all(
+      selectedReferenceImageUrls
+        .slice(0, 3)
+        .map(async (url, index) => ({
+          role: categoryKitAssetRoleForIndex(index),
+          referenceImage: await referenceImageFromUrl(url),
+          fileName: fileNameFromUrl(url),
+          title: index === 0 ? "主商品图" : `补充素材 ${index}`
+        }))
+    );
+    const mainReferenceImage = referenceImage ?? selectedImages[0]?.referenceImage;
+    return {
+      product: {
+        ...form.product,
+        title: form.product.title.trim() || "AI 自拆品类套图"
+      },
+      platform: form.platform,
+      market: form.market,
+      textLanguage: form.textLanguage,
+      referenceImage: mainReferenceImage,
+      assets: selectedImages.length > 1 ? selectedImages.slice(1) : undefined,
+      extraDirection
+    };
+  }
+
+  async function prepareCategoryKitBeforeGenerate(options: { silent?: boolean } = {}): Promise<CategoryKitPrepareState | null> {
+    if (selectedReferenceImageUrls.length === 0) {
+      const message = "请先选择或上传商品主图，再预检类目策略。";
+      setCategoryKitPrepare({ ...emptyCategoryKitPrepare, status: "error", message });
+      if (!options.silent) {
+        setTask((current) => ({ ...current, status: "failed", message }));
+      }
+      return null;
+    }
+
+    setCategoryKitPrepare((current) => ({ ...current, status: "loading", message: "正在识别类目并匹配策略。" }));
+    if (!options.silent) {
+      setTask((current) => ({ ...current, status: "running", message: "正在预检品类策略，会返回缺失信息和建议素材。", records: [] }));
+    }
+
+    try {
+      const payload = await buildCategoryKitPreparationPayload();
+      const response = await fetch(`${apiBaseUrl()}/api/ecommerce/images/category-kit-prepare`, {
+        method: "POST",
+        headers: apiHeaders(true),
+        body: JSON.stringify(payload)
+      });
+      const prepared = parseCategoryKitPrepare(await parseResponseOrThrow(response));
+      setCategoryKitPrepare(prepared);
+      setTask((current) => ({
+        ...current,
+        status: current.status === "running" && current.records.length === 0 ? "idle" : current.status,
+        message: prepared.message
+      }));
+      return prepared;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "品类策略预检失败。";
+      setCategoryKitPrepare({ ...emptyCategoryKitPrepare, status: "error", message });
+      if (!options.silent) {
+        setTask((current) => ({ ...current, status: "failed", message }));
+      }
+      return null;
+    }
   }
 
   async function applySourceAspectSize(urls = selectedReferenceImageUrls, options: { force?: boolean } = {}): Promise<void> {
@@ -3190,8 +3610,8 @@ export function SidePanelApp() {
     }
   }
 
-  async function sizeFromSourceUrl(url: string): Promise<{ width: number; height: number }> {
-    const image = await imageFromUrl(url);
+  async function sizeFromSourceUrl(url: string, timeoutMs?: number): Promise<{ width: number; height: number }> {
+    const image = await imageFromUrl(url, timeoutMs);
     return sizeFromImageAspect(image.naturalWidth, image.naturalHeight);
   }
 
@@ -3207,13 +3627,25 @@ export function SidePanelApp() {
         referenceImageUrls: nextUrls
       };
     });
+    setCategoryKitPrepare(emptyCategoryKitPrepare);
+  }
+
+  function toggleReplacementImage(url: string): void {
+    setForm((current) => {
+      const exists = current.replacementImageUrls.includes(url);
+      const nextUrls = exists ? current.replacementImageUrls.filter((item) => item !== url) : [url];
+      return {
+        ...current,
+        replacementImageUrls: nextUrls
+      };
+    });
   }
 
   function updateTextReplacementMode(value: string): void {
     if (value === "replace") {
       setForm((current) => ({
         ...current,
-        textLanguage: current.textLanguage === "none" ? "ko" : current.textLanguage,
+        textLanguage: current.textLanguage === "none" ? "en" : current.textLanguage,
         sceneTemplateIds: ["logo-benefit"],
         sizeMode: "source",
         countPerScene: 1
@@ -3255,6 +3687,7 @@ export function SidePanelApp() {
         sceneTemplateIds: nextScenes
       };
     });
+    setCategoryKitPrepare(emptyCategoryKitPrepare);
   }
 
   function inferMarketingMainExpression(category: string): string {
@@ -3358,40 +3791,87 @@ export function SidePanelApp() {
     });
   }
 
+  function referenceImageFilesFromClipboard(event: ClipboardEvent<HTMLElement>): File[] {
+    const itemFiles = Array.from(event.clipboardData.items)
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => Boolean(file));
+    if (itemFiles.length > 0) {
+      return itemFiles;
+    }
+    return Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/"));
+  }
+
+  async function addReferenceImageFiles(files: File[], sourceLabel: "上传" | "粘贴"): Promise<void> {
+    const maxReferenceImages = MAX_REFERENCE_IMAGE_COUNT;
+    const imageFiles = files.filter((file) => file.type.startsWith("image/")).slice(0, maxReferenceImages);
+    if (imageFiles.length === 0) {
+      return;
+    }
+
+    const fallbackPrefix = sourceLabel === "粘贴" ? "pasted-reference" : "uploaded-reference";
+    const uploadedImages = await Promise.all(
+      imageFiles.map(async (file, index) => {
+        if (file.size > 50 * 1024 * 1024) {
+          throw new Error("参考图超过 50MB，请换一张较小的图片。");
+        }
+        return {
+          id: createClientId(),
+          dataUrl: await blobToDataUrl(file, "参考图转换失败。"),
+          fileName: file.name || `${fallbackPrefix}-${index + 1}.png`
+        } satisfies UploadedReferenceImage;
+      })
+    );
+    setReferenceSourceTab("upload");
+    setUploadedReferenceImages((current) => [...uploadedImages, ...current].slice(0, 8));
+    setForm((current) => {
+      const nextUrls = [...uploadedImages.map((image) => image.dataUrl), ...current.referenceImageUrls].slice(0, maxReferenceImages);
+      return {
+        ...current,
+        referenceImageUrl: nextUrls[0] ?? "",
+        referenceImageUrls: nextUrls,
+        replacementImageUrls:
+          current.generationMode === "one-click-replace" && current.replacementImageUrls.length === 0 && uploadedImages[1]
+            ? [uploadedImages[1].dataUrl]
+            : current.replacementImageUrls
+      };
+    });
+    setCategoryKitPrepare(emptyCategoryKitPrepare);
+    setTask((current) => ({
+      ...current,
+      message: `已${sourceLabel} ${uploadedImages.length} 张参考图，可在候选区选择。`
+    }));
+  }
+
   async function uploadReferenceImages(event: ChangeEvent<HTMLInputElement>): Promise<void> {
     try {
-      const maxReferenceImages = MAX_REFERENCE_IMAGE_COUNT;
-      const files = Array.from(event.target.files ?? []).filter((file) => file.type.startsWith("image/")).slice(0, maxReferenceImages);
-      event.target.value = "";
-      if (files.length === 0) {
-        return;
-      }
-
-      const uploadedImages = await Promise.all(
-        files.map(async (file) => {
-          if (file.size > 50 * 1024 * 1024) {
-            throw new Error("上传参考图超过 50MB，请换一张较小的图片。");
-          }
-          return {
-            id: createClientId(),
-            dataUrl: await blobToDataUrl(file, "上传参考图转换失败。"),
-            fileName: file.name || "uploaded-reference.png"
-          } satisfies UploadedReferenceImage;
-        })
-      );
-      setUploadedReferenceImages((current) => [...uploadedImages, ...current].slice(0, 8));
-      setForm((current) => {
-        const nextUrls = [...uploadedImages.map((image) => image.dataUrl), ...current.referenceImageUrls].slice(0, maxReferenceImages);
-        return {
-          ...current,
-          referenceImageUrl: nextUrls[0] ?? "",
-          referenceImageUrls: nextUrls
-        };
-      });
+      const files = Array.from(event.currentTarget.files ?? []);
+      event.currentTarget.value = "";
+      await addReferenceImageFiles(files, "上传");
     } catch (error) {
       setTask((current) => ({
         ...current,
         message: error instanceof Error ? error.message : "上传参考图失败。"
+      }));
+    }
+  }
+
+  async function pasteReferenceImages(event: ClipboardEvent<HTMLElement>): Promise<void> {
+    if (referenceSourceTab !== "upload") {
+      return;
+    }
+    const files = referenceImageFilesFromClipboard(event);
+    if (files.length === 0) {
+      return;
+    }
+
+    event.preventDefault();
+    try {
+      await addReferenceImageFiles(files, "粘贴");
+    } catch (error) {
+      setTask((current) => ({
+        ...current,
+        message: error instanceof Error ? error.message : "粘贴参考图失败。"
       }));
     }
   }
@@ -3452,7 +3932,7 @@ export function SidePanelApp() {
       ...current,
       generationMode: "text-translation",
       sceneTemplateIds: defaultSceneIdsByMode["text-translation"],
-      textLanguage: current.textLanguage === "none" ? "ko" : current.textLanguage,
+      textLanguage: current.textLanguage === "none" ? "en" : current.textLanguage,
       allowTextRecreation: true,
       removeWatermarkAndLogo: true,
       sizeMode: "source",
@@ -3596,9 +4076,9 @@ export function SidePanelApp() {
     return attempt;
   }
 
-  async function downloadTranslationArchive(): Promise<void> {
+  async function downloadResultImagesArchive(options: { emptyMessage: string; filePrefix: string; fallbackBaseName: string }): Promise<void> {
     if (resultImages.length === 0) {
-      setTask((current) => ({ ...current, message: "没有可打包的翻译结果。" }));
+      setTask((current) => ({ ...current, message: options.emptyMessage }));
       return;
     }
 
@@ -3612,12 +4092,13 @@ export function SidePanelApp() {
             throw new Error("打包下载时读取图片失败。");
           }
           const blob = await response.blob();
-          const fileName = uniqueArchiveFileName(item.asset.fileName || `translation-${index + 1}.png`, usedNames);
+          const fallbackExtension = item.record.outputFormat === "jpeg" ? "jpg" : item.record.outputFormat || "png";
+          const fileName = uniqueArchiveFileName(item.asset.fileName || `${options.fallbackBaseName}-${index + 1}.${fallbackExtension}`, usedNames);
           return { name: fileName, blob };
         })
       );
       const zipBlob = await createZipBlob(files);
-      downloadBlob(zipBlob, `text-translation-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.zip`);
+      downloadBlob(zipBlob, `${options.filePrefix}-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.zip`);
     } catch (error) {
       setTask((current) => ({
         ...current,
@@ -3626,6 +4107,22 @@ export function SidePanelApp() {
     } finally {
       setZipDownloadLoading(false);
     }
+  }
+
+  async function downloadWorksArchive(): Promise<void> {
+    await downloadResultImagesArchive({
+      emptyMessage: "没有可打包下载的作品。",
+      fallbackBaseName: "generated-work",
+      filePrefix: "generated-works"
+    });
+  }
+
+  async function downloadTranslationArchive(): Promise<void> {
+    await downloadResultImagesArchive({
+      emptyMessage: "没有可打包的翻译结果。",
+      fallbackBaseName: "translation",
+      filePrefix: "text-translation"
+    });
   }
 
   async function drawBrandOverlay(ctx: CanvasRenderingContext2D, width: number, height: number): Promise<void> {
@@ -3706,11 +4203,21 @@ export function SidePanelApp() {
 
   function updatePlatform(platform: BatchFormState["platform"]): void {
     const isChinesePlatform = CHINESE_ECOMMERCE_PLATFORM_IDS.has(platform);
+    const isRussianPlatform = RUSSIAN_ECOMMERCE_PLATFORM_IDS.has(platform);
     setForm((current) => ({
       ...current,
       platform,
-      market: isChinesePlatform ? "cn" : current.market,
-      textLanguage: isChinesePlatform && current.textLanguage === "none" ? "zh-hans" : current.textLanguage
+      market: isChinesePlatform ? "cn" : isRussianPlatform ? "ru" : current.market,
+      size: isRussianPlatform
+        ? SIZE_PRESETS.find((preset) => preset.id === OZON_SIZE_PRESET_ID) ?? current.size
+        : current.size,
+      sizeMode: isRussianPlatform ? "preset" : current.sizeMode,
+      textLanguage:
+        isChinesePlatform && current.textLanguage === "none"
+          ? "zh-hans"
+          : isRussianPlatform && current.textLanguage === "none"
+            ? "ru"
+            : current.textLanguage
     }));
   }
 
@@ -3721,7 +4228,7 @@ export function SidePanelApp() {
       sceneTemplateIds: defaultSceneIdsByMode[generationMode],
       platform: current.platform,
       market: generationMode === "marketing-main" ? "cn" : current.market,
-      sizeMode: generationMode === "category-kit" || generationMode === "single-poster" ? "preset" : current.sizeMode,
+      sizeMode: generationMode === "category-kit" || generationMode === "single-poster" || generationMode === "one-click-replace" ? "preset" : current.sizeMode,
       size:
         generationMode === "category-kit"
           ? { width: 1024, height: 1024 }
@@ -3729,8 +4236,10 @@ export function SidePanelApp() {
             ? { width: 1024, height: 1024 }
             : generationMode === "single-poster"
               ? { width: 1024, height: 3072 }
+              : generationMode === "one-click-replace"
+                ? { width: 1024, height: 1024 }
               : current.size,
-      countPerScene: generationMode === "category-kit" || generationMode === "single-poster" ? 1 : current.countPerScene,
+      countPerScene: generationMode === "category-kit" || generationMode === "single-poster" || generationMode === "one-click-replace" ? 1 : current.countPerScene,
       stylePresetId:
         generationMode === "enhance" || generationMode === "category-kit" || generationMode === "marketing-main" || generationMode === "text-translation"
           ? "product"
@@ -3746,12 +4255,15 @@ export function SidePanelApp() {
               ? "zh-hans"
               : generationMode === "text-translation"
                 ? current.textLanguage === "none"
-                  ? "ko"
+                  ? "en"
                   : current.textLanguage
                 : "none",
       allowTextRecreation: true,
       removeWatermarkAndLogo: generationMode === "enhance" ? current.removeWatermarkAndLogo : true
     }));
+    if (generationMode === "category-kit") {
+      setCategoryKitPrepare(emptyCategoryKitPrepare);
+    }
     setTask((current) => ({
       ...current,
       message:
@@ -3763,9 +4275,11 @@ export function SidePanelApp() {
               ? "营销主图会按产品表达、人群、场景、卖点和信任元素生成点击主图。"
               : generationMode === "single-poster"
                 ? "单品完整海报会依据商品图归纳卖点，并生成一张高比例详情长图。"
-                : generationMode === "text-translation"
-                  ? "文字翻译会逐张输出，每张图都会单独翻译并返回。"
-                  : "场景创作会依据主图重建营销场景。"
+                : generationMode === "one-click-replace"
+                  ? "一键换装/换品会把自己的衣服或商品自然换到目标模特或场景里。"
+                  : generationMode === "text-translation"
+                    ? "文字翻译会逐张输出，每张图都会单独翻译并返回。"
+                    : "场景创作会依据主图重建营销场景。"
     }));
   }
 
@@ -3778,10 +4292,10 @@ export function SidePanelApp() {
     }
     const title = form.product.title.trim();
     const description = form.product.description?.trim() ?? "";
-    const titleOptionalMode = form.generationMode === "category-kit" || form.generationMode === "single-poster";
+    const titleOptionalMode = form.generationMode === "category-kit" || form.generationMode === "single-poster" || form.generationMode === "one-click-replace";
     const effectiveProduct = {
       ...form.product,
-      title: title || (form.generationMode === "category-kit" ? "AI 自拆品类套图" : "单品完整电商海报")
+      title: title || (form.generationMode === "category-kit" ? "AI 自拆品类套图" : form.generationMode === "one-click-replace" ? "一键换装/换品" : "单品完整电商海报")
     };
     if (!title && !titleOptionalMode) {
       setTask({ id: "validation", status: "failed", message: "请先填写商品标题。", records: [] });
@@ -3791,10 +4305,15 @@ export function SidePanelApp() {
       (form.generationMode === "enhance" ||
         form.generationMode === "category-kit" ||
         form.generationMode === "marketing-main" ||
-        form.generationMode === "single-poster") &&
+        form.generationMode === "single-poster" ||
+        form.generationMode === "one-click-replace") &&
       selectedReferenceImageUrls.length === 0
     ) {
-      setTask({ id: "validation", status: "failed", message: "当前模式需要参考图 URL，请先读取商品页、选择候选图，或手动上传商品主图。", records: [] });
+      setTask({ id: "validation", status: "failed", message: form.generationMode === "one-click-replace" ? "请先选择目标模特或场景图。" : "当前模式需要参考图 URL，请先读取商品页、选择候选图，或手动上传商品主图。", records: [] });
+      return;
+    }
+    if (form.generationMode === "one-click-replace" && selectedReplacementImageUrls.length === 0) {
+      setTask({ id: "validation", status: "failed", message: "请再选择一张要换进去的衣服或商品图。", records: [] });
       return;
     }
 
@@ -3817,8 +4336,16 @@ export function SidePanelApp() {
     const effectivePlatform = form.generationMode === "text-translation" ? "other" : form.platform;
     const effectiveMarket = form.generationMode === "text-translation" ? "global" : form.market;
 
-    const fallbackRecords = effectiveSelectedScenes.map((scene): GenerationRecord => ({
-      id: `${taskId}-${scene.id}`,
+    const fallbackSourceItems =
+      form.generationMode === "one-click-replace" && selectedReferenceImageUrls.length > 0
+        ? selectedReferenceImageUrls.map((url, index) => ({
+            id: `${form.sceneTemplateIds[0] || "one-click-replace"}-${index + 1}`,
+            scene: effectiveSelectedScenes[0],
+            extraDirection: `目标图 ${index + 1}`
+          }))
+        : effectiveSelectedScenes.map((scene) => ({ id: scene.id, scene, extraDirection: "" }));
+    const fallbackRecords = fallbackSourceItems.map((item): GenerationRecord => ({
+      id: `${taskId}-${item.id}`,
       mode: selectedReferenceImageUrls.length > 0 ? "edit" : "generate",
       prompt: composeEcommercePrompt({
         product: effectiveProduct,
@@ -3827,11 +4354,11 @@ export function SidePanelApp() {
         textLanguage: form.textLanguage,
         allowTextRecreation: form.allowTextRecreation,
         removeWatermarkAndLogo: form.removeWatermarkAndLogo,
-        sceneTemplateId: scene.id,
+        sceneTemplateId: item.scene?.id ?? "one-click-replace",
         brandOverlayPlacement: form.brandOverlay.enabled ? form.brandOverlay.placement : undefined,
-        extraDirection: effectiveExtraDirection
+        extraDirection: [effectiveExtraDirection, item.extraDirection].filter(Boolean).join("\n\n")
       }),
-      effectivePrompt: scene.prompt,
+      effectivePrompt: item.scene?.prompt ?? "",
       presetId: form.stylePresetId,
       size: form.size,
       quality: form.quality,
@@ -3845,6 +4372,26 @@ export function SidePanelApp() {
     if (form.generationMode === "category-kit") {
       try {
         const referenceImage = await referenceImageFromSources(selectedReferenceImageUrls);
+        if (categoryKitPrepare.status !== "ready") {
+          const prepared = await prepareCategoryKitBeforeGenerate({ silent: true });
+          setBatchGenerationLocked(false);
+          if (prepared) {
+            setTask({
+              id: taskId,
+              status: "idle",
+              message: "类目策略预检完成，请补充缺失信息或再次点击确认生成。",
+              records: []
+            });
+          } else {
+            setTask({
+              id: taskId,
+              status: "failed",
+              message: "类目策略预检失败，请先处理提示后再生成。",
+              records: []
+            });
+          }
+          return;
+        }
         const response = await fetch(`${apiBaseUrl()}/api/ecommerce/images/category-kit-generate`, {
           method: "POST",
           headers: apiHeaders(true, token),
@@ -3853,6 +4400,8 @@ export function SidePanelApp() {
             platform: effectivePlatform,
             market: effectiveMarket,
             textLanguage: form.textLanguage,
+            categoryPath: categoryKitPrepare.categoryPath,
+            categoryName: categoryKitPrepare.categoryName,
             allowTextRecreation: form.allowTextRecreation,
             removeWatermarkAndLogo: form.removeWatermarkAndLogo,
             brandOverlayPlacement: form.brandOverlay.enabled ? form.brandOverlay.placement : undefined,
@@ -3884,7 +4433,34 @@ export function SidePanelApp() {
     }
 
     try {
-      const referenceImage = await referenceImageFromSources(selectedReferenceImageUrls);
+      const replacementReferences =
+        form.generationMode === "one-click-replace"
+          ? await Promise.all(selectedReplacementImageUrls.slice(0, 1).map((url) => referenceImageFromSources([url]))).then((images) =>
+              images.filter((image): image is ReferenceImageInput => Boolean(image))
+            )
+          : [];
+      const referenceImages: ReplacementReferenceItem[] | undefined =
+        form.generationMode === "one-click-replace"
+          ? (
+              await Promise.all(
+                selectedReferenceImageUrls.map(async (url, index): Promise<ReplacementReferenceItem | undefined> => {
+                const referenceImage = await referenceImageFromSources([url]);
+                return referenceImage
+                  ? {
+                      referenceImage,
+                      additionalReferenceImages: replacementReferences.length ? replacementReferences : undefined,
+                      title: title ? `${title} ${index + 1}` : undefined,
+                      extraDirection: `目标图 ${index + 1}`
+                    }
+                  : undefined;
+                })
+              )
+            ).flatMap((item) => (item ? [item] : []))
+          : undefined;
+      if (form.generationMode === "one-click-replace" && (!referenceImages || referenceImages.length === 0)) {
+        throw new Error("目标图读取失败，请重新选择或上传目标图。");
+      }
+      const referenceImage = form.generationMode === "one-click-replace" ? undefined : await referenceImageFromSources(selectedReferenceImageUrls);
       const response = await fetch(`${apiBaseUrl()}/api/ecommerce/images/batch-generate`, {
         method: "POST",
         headers: apiHeaders(true, token),
@@ -3904,6 +4480,7 @@ export function SidePanelApp() {
           outputFormat: form.outputFormat,
           countPerScene: effectiveCountPerScene,
           referenceImage,
+          referenceImages,
           createComparisonCollage: isAdminAccount && createComparisonCollage && Boolean(referenceImage),
           extraDirection: effectiveExtraDirection
         })
@@ -3926,7 +4503,7 @@ export function SidePanelApp() {
     if (batchGenerationLocked) {
       return;
     }
-    if (!token.trim() && !authAlreadyChecked && !requireAuth("generate")) {
+    if (!token.trim() && !authAlreadyChecked && !requireAuth("text-translation")) {
       return;
     }
     if (selectedTranslationImageUrls.length === 0) {
@@ -3935,11 +4512,24 @@ export function SidePanelApp() {
     }
 
     const taskId = createClientId();
-    const targetLanguage = form.textLanguage === "none" ? "ko" : form.textLanguage;
+    const submissionId = translationSubmissionRef.current + 1;
+    translationSubmissionRef.current = submissionId;
+    const isLatestSubmission = (): boolean => translationSubmissionRef.current === submissionId;
+    const targetLanguage = form.textLanguage === "none" ? "en" : form.textLanguage;
     const translationPlatform = "other";
     const translationMarket = "global";
-    const translatedRecordsByIndex: GenerationRecord[][] = selectedTranslationImageUrls.map(() => []);
-    let completedCount = 0;
+    const referenceImagesByIndex: Array<
+      | {
+          referenceImage: ReferenceImageInput;
+          size: { width: number; height: number };
+          title: string;
+          extraDirection: string;
+        }
+      | undefined
+    > = selectedTranslationImageUrls.map(() => undefined);
+    const failedRecordsByIndex: GenerationRecord[][] = selectedTranslationImageUrls.map(() => []);
+    let processedCount = 0;
+    let preparedCount = 0;
     let failedImageCount = 0;
     setBatchGenerationLocked(true);
     setHiddenResultKeys(new Set());
@@ -3947,66 +4537,51 @@ export function SidePanelApp() {
     setTask({
       id: taskId,
       status: "running",
-      message: `正在翻译 ${selectedTranslationImageUrls.length} 张图片，最多 ${TEXT_TRANSLATION_CONCURRENCY} 张并发。`,
+      message: `正在准备 ${selectedTranslationImageUrls.length} 张图片翻译任务，最多 ${TEXT_TRANSLATION_CONCURRENCY} 张并发读取。`,
       records: [],
       totalScenes: selectedTranslationImageUrls.length,
       completedScenes: 0
     });
+    setQueuedJobDialog({
+      jobId: taskId,
+      title: "翻译任务正在提交",
+      message: `已开始在后台准备 ${selectedTranslationImageUrls.length} 张图片，随后会创建 1 个批量翻译任务。`,
+      totalScenes: selectedTranslationImageUrls.length,
+      completedScenes: 0,
+      unitLabel: "张"
+    });
+    setBatchGenerationLocked(false);
 
     try {
       await mapWithConcurrency(selectedTranslationImageUrls, TEXT_TRANSLATION_CONCURRENCY, async (sourceUrl, index) => {
         try {
-          const referenceImage = await referenceImageFromSources([sourceUrl]);
+          const referenceImage = await referenceImageFromSources([sourceUrl], TEXT_TRANSLATION_IMAGE_READ_TIMEOUT_MS);
           if (!referenceImage) {
             throw new Error("翻译参考图读取失败。");
           }
-          const size = form.sizeMode === "source" ? await sizeFromSourceUrl(sourceUrl) : form.size;
-          const requestProduct = {
-            ...form.product,
-            title: form.product.title.trim() || `文字翻译 ${index + 1}`
+          const size = form.sizeMode === "source" ? await sizeFromSourceUrl(sourceUrl, TEXT_TRANSLATION_IMAGE_READ_TIMEOUT_MS) : form.size;
+          referenceImagesByIndex[index] = {
+            referenceImage,
+            size,
+            title: form.product.title.trim() || `文字翻译 ${index + 1}`,
+            extraDirection: [form.extraDirection.trim(), `Source image ${index + 1}/${selectedTranslationImageUrls.length}`].filter(Boolean).join("\n\n")
           };
-	          const response = await fetch(`${apiBaseUrl()}/api/ecommerce/images/batch-generate`, {
-	            method: "POST",
-	            headers: apiHeaders(true, token),
-	            body: JSON.stringify({
-	              product: requestProduct,
-	              platform: translationPlatform,
-	              market: translationMarket,
-	              textLanguage: targetLanguage,
-	              allowTextRecreation: form.allowTextRecreation,
-              removeWatermarkAndLogo: form.removeWatermarkAndLogo,
-              brandOverlayPlacement: form.brandOverlay.enabled ? form.brandOverlay.placement : undefined,
-              sceneTemplateIds: [TEXT_TRANSLATION_SCENE_ID],
-              size,
-              stylePresetId: "product",
-              quality: form.quality,
-              outputFormat: form.outputFormat,
-              countPerScene: 1,
-              referenceImage,
-              extraDirection: [form.extraDirection.trim(), `Source image ${index + 1}/${selectedTranslationImageUrls.length}`].filter(Boolean).join("\n\n")
-            })
-          });
-          const body = (await parseResponseOrThrow(response)) as EcommerceBatchGenerateResponse;
-          const finishedJob = await waitForBatchJob(body.jobId, token);
-          translatedRecordsByIndex[index] = finishedJob.records;
-          if (finishedJob.status === "failed") {
-            failedImageCount += 1;
-          }
+          preparedCount += 1;
         } catch (error) {
           failedImageCount += 1;
-          translatedRecordsByIndex[index] = [
+          failedRecordsByIndex[index] = [
             {
-	              id: `${taskId}-${index + 1}-failed`,
-	              mode: "edit",
-	              prompt: composeEcommercePrompt({
-	                product: {
-	                  ...form.product,
-	                  title: form.product.title.trim() || `文字翻译 ${index + 1}`
-	                },
-	                platform: translationPlatform,
-	                market: translationMarket,
-	                textLanguage: targetLanguage,
-	                allowTextRecreation: form.allowTextRecreation,
+              id: `${taskId}-${index + 1}-failed`,
+              mode: "edit",
+              prompt: composeEcommercePrompt({
+                product: {
+                  ...form.product,
+                  title: form.product.title.trim() || `文字翻译 ${index + 1}`
+                },
+                platform: translationPlatform,
+                market: translationMarket,
+                textLanguage: targetLanguage,
+                allowTextRecreation: form.allowTextRecreation,
                 removeWatermarkAndLogo: form.removeWatermarkAndLogo,
                 sceneTemplateId: TEXT_TRANSLATION_SCENE_ID,
                 brandOverlayPlacement: form.brandOverlay.enabled ? form.brandOverlay.placement : undefined,
@@ -4031,41 +4606,147 @@ export function SidePanelApp() {
             }
           ];
         } finally {
-          completedCount += 1;
-          setTask((current) => ({
-            ...current,
-            status: "running",
-            message: `已完成 ${completedCount}/${selectedTranslationImageUrls.length} 张图片翻译，${Math.min(TEXT_TRANSLATION_CONCURRENCY, selectedTranslationImageUrls.length)} 张并发处理中。`,
-            records: translatedRecordsByIndex.flat(),
-            completedScenes: completedCount,
-            totalScenes: selectedTranslationImageUrls.length
-          }));
+          processedCount += 1;
+          const failureText = failedImageCount > 0 ? `，${failedImageCount} 张准备失败` : "";
+          if (isLatestSubmission()) {
+            setTask((current) => ({
+              ...current,
+              status: "running",
+              message: `已处理 ${processedCount}/${selectedTranslationImageUrls.length} 张准备，成功读取 ${preparedCount} 张${failureText}。`,
+              records: failedRecordsByIndex.flat(),
+              completedScenes: processedCount,
+              totalScenes: selectedTranslationImageUrls.length
+            }));
+            setQueuedJobDialog((current) =>
+              current
+                ? {
+                    ...current,
+                    message: `后台准备中：成功读取 ${preparedCount} 张${failureText}。`,
+                    completedScenes: processedCount
+                  }
+                : current
+            );
+          }
         }
       });
 
-      const translatedRecords = translatedRecordsByIndex.flat();
-      const finalStatus =
-        failedImageCount === 0 ? "succeeded" : failedImageCount === selectedTranslationImageUrls.length ? "failed" : "partial";
-      setTask({
-        id: taskId,
-        status: finalStatus,
-        message:
-          finalStatus === "succeeded"
-            ? `已完成 ${selectedTranslationImageUrls.length} 张图片翻译，可一键打包下载。`
-            : `已完成 ${selectedTranslationImageUrls.length} 张图片翻译，其中 ${failedImageCount} 张失败。`,
-        records: translatedRecords,
-        totalScenes: selectedTranslationImageUrls.length,
-        completedScenes: selectedTranslationImageUrls.length
-      });
+      const referenceImages = referenceImagesByIndex.flatMap((item) => (item ? [item] : []));
+      const failedRecords = failedRecordsByIndex.flat();
+      if (referenceImages.length === 0) {
+        if (isLatestSubmission()) {
+          setTask({
+            id: taskId,
+            status: "failed",
+            message: failedImageCount > 0 ? `${failedImageCount} 张图片准备失败，请稍后重试。` : "文字翻译任务提交失败，请稍后重试。",
+            records: failedRecords,
+            totalScenes: selectedTranslationImageUrls.length,
+            completedScenes: processedCount
+          });
+          setQueuedJobDialog((current) =>
+            current
+              ? {
+                  ...current,
+                  title: "翻译任务提交失败",
+                  message: failedImageCount > 0 ? `${failedImageCount} 张图片准备失败，请稍后重试。` : "文字翻译任务提交失败，请稍后重试。",
+                  completedScenes: processedCount
+                }
+              : current
+          );
+        }
+        return;
+      }
+
+      if (isLatestSubmission()) {
+        setQueuedJobDialog((current) =>
+          current
+            ? {
+                ...current,
+                title: "翻译任务正在入队",
+                message: `已读取 ${referenceImages.length} 张图片，正在创建 1 个批量翻译任务。`,
+                completedScenes: processedCount
+              }
+            : current
+        );
+      }
+
+      const response = await fetchWithTimeout(
+        `${apiBaseUrl()}/api/ecommerce/images/batch-generate`,
+        {
+          method: "POST",
+          headers: apiHeaders(true, token),
+          body: JSON.stringify({
+            product: {
+              ...form.product,
+              title: form.product.title.trim() || "文字翻译批量任务"
+            },
+            platform: translationPlatform,
+            market: translationMarket,
+            textLanguage: targetLanguage,
+            allowTextRecreation: form.allowTextRecreation,
+            removeWatermarkAndLogo: form.removeWatermarkAndLogo,
+            brandOverlayPlacement: form.brandOverlay.enabled ? form.brandOverlay.placement : undefined,
+            sceneTemplateIds: [TEXT_TRANSLATION_SCENE_ID],
+            sourcePageUrl: pageContext?.url,
+            size: form.size,
+            stylePresetId: "product",
+            quality: form.quality,
+            outputFormat: form.outputFormat,
+            countPerScene: 1,
+            referenceImages,
+            extraDirection: form.extraDirection.trim()
+          })
+        },
+        TEXT_TRANSLATION_SUBMIT_TIMEOUT_MS,
+        "文字翻译批量任务提交超时，请稍后重试。"
+      );
+      const body = (await parseResponseOrThrow(response)) as EcommerceBatchGenerateResponse;
+      const submittedMessage =
+        failedImageCount > 0
+          ? `已创建 1 个批量翻译任务：${referenceImages.length}/${selectedTranslationImageUrls.length} 张图片已入队，${failedImageCount} 张准备失败。`
+          : `已创建 1 个批量翻译任务：${referenceImages.length} 张图片已入队。`;
+      if (isLatestSubmission()) {
+        setTask({
+          id: body.jobId,
+          status: body.status,
+          message: `${submittedMessage} 按钮已释放，可以继续提交下一组；结果可在历史任务里查看。`,
+          records: [...body.records, ...failedRecords],
+          totalScenes: body.totalScenes,
+          completedScenes: body.completedScenes
+        });
+        setQueuedJobDialog({
+          jobId: body.jobId,
+          title: "翻译任务已进入后端队列",
+          message: `${submittedMessage} 服务端会继续生成，当前按钮已释放。`,
+          totalScenes: body.totalScenes,
+          completedScenes: body.completedScenes,
+          unitLabel: "张"
+        });
+      }
+      if (auth.token.trim() || token.trim()) {
+        void refreshHistory(true, token);
+        void refreshStats(true, token);
+      }
     } catch (error) {
-      setTask({
-        id: taskId,
-        status: "failed",
-        message: error instanceof Error ? error.message : "文字翻译失败，请稍后重试。",
-        records: translatedRecordsByIndex.flat(),
-        totalScenes: selectedTranslationImageUrls.length,
-        completedScenes: completedCount
-      });
+      if (isLatestSubmission()) {
+        setTask({
+          id: taskId,
+          status: "failed",
+          message: error instanceof Error ? error.message : "文字翻译失败，请稍后重试。",
+          records: failedRecordsByIndex.flat(),
+          totalScenes: selectedTranslationImageUrls.length,
+          completedScenes: processedCount
+        });
+        setQueuedJobDialog((current) =>
+          current
+            ? {
+                ...current,
+                title: "翻译任务提交失败",
+                message: error instanceof Error ? error.message : "文字翻译失败，请稍后重试。",
+                completedScenes: processedCount
+              }
+            : current
+        );
+      }
     } finally {
       setBatchGenerationLocked(false);
     }
@@ -4109,9 +4790,19 @@ export function SidePanelApp() {
             </strong>
           </div>
           {renderResultImages(task.status === "running" ? "图片生成中，完成后会显示在这里。" : "这个历史任务暂无可展示图片。")}
+          {resultImages.length > 0 ? (
+            <div className="archive-download-row">
+              <button className="primary-button archive-download-button" disabled={zipDownloadLoading} type="button" onClick={() => void downloadWorksArchive()}>
+                {zipDownloadLoading ? <Loader2 className="spin" size={15} /> : <Download size={15} />}
+                打包下载（下载本页所有的原图）
+              </button>
+            </div>
+          ) : null}
         </section>
 
+        {renderImageHoverPreview()}
         {renderEditDialog()}
+        {renderAuthDialog()}
       </main>
     );
   }
@@ -4130,15 +4821,25 @@ export function SidePanelApp() {
           </button>
         </header>
 
-        <section className="panel page-panel">
+        <section className={pageContextLoading ? "panel page-panel page-panel-loading" : "panel page-panel"} aria-busy={pageContextLoading}>
           <div>
             <h2>当前页面</h2>
-            <p>{pageContext?.url ?? "可从商品页自动读取图片，也可以手动上传多张图片。"}</p>
-            {pageContext ? <span>{pageImageUrls.length > 0 ? `${pageImageUrls.length} 张候选图可选` : "未发现候选图"}</span> : null}
+            <p className={pageContext ? "page-url" : undefined} title={pageContext?.url || undefined}>
+              {pageContext
+                ? pageContextDisplayUrl
+                : pageContextLoading
+                  ? "正在读取当前标签页..."
+                  : "可从商品页自动读取图片，也可以手动上传多张图片。"}
+            </p>
+            {pageContextLoading ? (
+              <span className="page-read-status" aria-live="polite"><Loader2 className="spin" size={12} />正在筛选并去重候选图片</span>
+            ) : pageContext ? (
+              <span>{pageImageUrls.length > 0 ? `${pageImageUrls.length} 张候选图可选` : "未发现候选图"}</span>
+            ) : null}
           </div>
-          <button className="secondary-button" type="button" onClick={() => void refreshPageContext()}>
-            <RefreshCw size={15} />
-            读取
+          <button className="secondary-button" disabled={pageContextLoading} type="button" onClick={() => void refreshPageContext()}>
+            {pageContextLoading ? <Loader2 className="spin" size={15} /> : <RefreshCw size={15} />}
+            {pageContextLoading ? "读取中" : "读取"}
           </button>
         </section>
 
@@ -4148,7 +4849,7 @@ export function SidePanelApp() {
             <label>
               <span>目标语言</span>
               <select
-                value={form.textLanguage === "none" ? "ko" : form.textLanguage}
+                value={form.textLanguage === "none" ? "en" : form.textLanguage}
                 onChange={(event) => setForm({ ...form, textLanguage: event.target.value as BatchFormState["textLanguage"] })}
               >
                 {ECOMMERCE_TEXT_LANGUAGES.filter((item) => item.id !== "none").map((item) => (
@@ -4247,16 +4948,10 @@ export function SidePanelApp() {
           ) : null}
         </section>
 
-        {imageHoverPreview ? (
-          <div
-            className="reference-image-hover-preview"
-            style={{ left: `${imageHoverPreview.x}px`, top: `${imageHoverPreview.y}px` }}
-          >
-            <img alt={imageHoverPreview.label} src={imageHoverPreview.url} />
-            <span>{imageHoverPreview.label}</span>
-          </div>
-        ) : null}
+        {renderImageHoverPreview()}
+        {renderQueuedJobDialog()}
         {renderEditDialog()}
+        {renderAuthDialog()}
       </main>
     );
   }
@@ -4285,43 +4980,109 @@ export function SidePanelApp() {
         </div>
       </header>
 
-      <section className="panel page-panel" id="page-context-panel">
-        <div>
-          <h2>当前页面</h2>
-          <p>{pageContext?.url ?? "可从商品页自动读取标题、描述和图片。"}</p>
-          {pageContext ? <span>{pageImageUrls.length > 0 ? `${pageImageUrls.length} 张候选图可选` : "未发现候选图"}</span> : null}
+      <section className="panel" id="generation-mode-panel">
+        <h2>生成方式</h2>
+        <div className="mode-grid">
+          {generationModes.map((mode) => (
+            <button
+              className={form.generationMode === mode.id ? "mode-button active" : "mode-button"}
+              key={mode.id}
+              type="button"
+              onClick={() => updateGenerationMode(mode.id)}
+            >
+              <strong>{mode.label}</strong>
+              <span>{mode.hint}</span>
+            </button>
+          ))}
         </div>
-        <button className="secondary-button" type="button" onClick={() => void refreshPageContext()}>
-          <RefreshCw size={15} />
-          读取
+        <button className="translation-entry" type="button" onClick={() => openTextTranslationPage()}>
+          <Languages size={18} />
+          <div>
+            <strong>{textTranslationMode.label}</strong>
+            <span>{textTranslationMode.hint}</span>
+          </div>
         </button>
       </section>
 
-      <section className="panel reference-panel" id="reference-panel">
-        <div className="reference-image-field reference-image-field-standalone">
-          <label>
-	            <span>{form.generationMode === "single-poster" || form.generationMode === "category-kit" ? "商品参考图 URL（1-3 张）" : form.generationMode === "creative" ? "商品主图 URL" : "商品主图 URL（必填）"}</span>
-            <input value={form.referenceImageUrl} onChange={(event) => updateReferenceImageUrl(event.target.value)} />
-          </label>
-          <div className="reference-upload-row">
-            <label className="mini-button reference-upload-button">
-              <Upload size={13} />
-              上传图片
-              <input accept="image/*" multiple type="file" onChange={(event) => void uploadReferenceImages(event)} />
-            </label>
-	            <span>可选 1-3 张，适合主图、细节、包装或使用角度。</span>
+      <section
+        className={referenceSourceTab === "read" && pageContextLoading ? "panel reference-panel page-panel-loading" : "panel reference-panel"}
+        id="reference-panel"
+        aria-busy={referenceSourceTab === "read" && pageContextLoading}
+        onPaste={(event) => void pasteReferenceImages(event)}
+      >
+        <div className="reference-panel-heading">
+          <h2>获取参考图</h2>
+          <div className="reference-source-tabs" role="tablist" aria-label="参考图获取方式">
+            <button
+              className={referenceSourceTab === "read" ? "reference-source-tab active" : "reference-source-tab"}
+              role="tab"
+              type="button"
+              aria-selected={referenceSourceTab === "read"}
+              onClick={() => setReferenceSourceTab("read")}
+            >
+              读取
+            </button>
+            <button
+              className={referenceSourceTab === "upload" ? "reference-source-tab active" : "reference-source-tab"}
+              role="tab"
+              type="button"
+              aria-selected={referenceSourceTab === "upload"}
+              onClick={() => setReferenceSourceTab("upload")}
+            >
+              上传
+            </button>
           </div>
-          {referenceImageOptions.length > 0 ? (
-            <div className="reference-image-picker" aria-label="商品主图候选">
-              <div className="reference-image-picker-header">
-                <strong>从当前页图片选择参考图</strong>
-	                <span>已选 {selectedReferenceImageUrls.length}/{maxReferenceImageCount} 张，第一张作为主体，后续作为细节依据</span>
-              </div>
-              <div className="reference-image-grid">
-                {referenceImageOptions.map((item, index) => (
+        </div>
+
+        {referenceSourceTab === "read" ? (
+          <div className="reference-source-pane page-panel">
+            <div>
+              <p className={pageContext ? "page-url" : undefined} title={pageContext?.url || undefined}>
+                {pageContext
+                  ? pageContextDisplayUrl
+                  : pageContextLoading
+                    ? "正在读取当前标签页..."
+                    : "可从商品页自动读取标题、描述和图片。"}
+              </p>
+              {pageContextLoading ? (
+                <span className="page-read-status" aria-live="polite"><Loader2 className="spin" size={12} />正在筛选并去重候选图片</span>
+              ) : pageContext ? (
+                <span>{pageImageUrls.length > 0 ? `${pageImageUrls.length} 张候选图可选` : "未发现候选图"}</span>
+              ) : null}
+            </div>
+            <button className="secondary-button" disabled={pageContextLoading} type="button" onClick={() => void refreshPageContext()}>
+              {pageContextLoading ? <Loader2 className="spin" size={15} /> : <RefreshCw size={15} />}
+              {pageContextLoading ? "读取中" : "读取"}
+            </button>
+          </div>
+        ) : (
+          <div className="reference-source-pane reference-upload-pane" tabIndex={0}>
+            <div className="reference-upload-row">
+              <label className="mini-button reference-upload-button">
+                <Upload size={13} />
+                上传图片
+                <input accept="image/*" multiple type="file" onChange={(event) => void uploadReferenceImages(event)} />
+              </label>
+              <span>支持多张，最多 {maxReferenceImageCount} 张；也可以复制图片后直接粘贴。</span>
+            </div>
+          </div>
+        )}
+
+        {referenceImageOptions.length > 0 ? (
+          <div className="reference-image-picker" aria-label="参考图候选区">
+            <div className="reference-image-picker-header">
+              <strong>候选区</strong>
+              <span>
+                {form.generationMode === "one-click-replace"
+                  ? `目标图 ${selectedReferenceImageUrls.length ? "已选" : "未选"} · 换入图 ${selectedReplacementImageUrls.length ? "已选" : "未选"}`
+                  : `已选 ${selectedReferenceImageUrls.length}/${maxReferenceImageCount} 张，第一张作为主体，后续作为细节依据`}
+              </span>
+            </div>
+            <div className="reference-image-grid">
+              {referenceImageOptions.map((item, index) => (
+                <div className="reference-image-choice" key={item.key}>
                   <button
                     className={selectedReferenceImageUrls.includes(item.url) ? "reference-image-option active" : "reference-image-option"}
-                    key={item.key}
                     title={item.label}
                     type="button"
                     onBlur={hideImageHoverPreview}
@@ -4334,32 +5095,41 @@ export function SidePanelApp() {
                     <img alt={item.uploaded ? item.label : `候选商品图 ${index + 1}`} loading="lazy" src={item.url} />
                     {selectedReferenceImageUrls.includes(item.url) ? <CheckCircle2 size={16} /> : null}
                   </button>
-                ))}
-              </div>
+                  {form.generationMode === "one-click-replace" ? (
+                    <button
+                      className={selectedReplacementImageUrls.includes(item.url) ? "reference-role-button active" : "reference-role-button"}
+                      type="button"
+                      onClick={() => toggleReplacementImage(item.url)}
+                    >
+                      换入
+                    </button>
+                  ) : null}
+                </div>
+              ))}
             </div>
-          ) : (
-            <div className="reference-image-empty">
-              <ImageIcon size={15} />
-              <span>读取当前页后，这里会显示可选商品图。</span>
-            </div>
-          )}
-        </div>
+          </div>
+        ) : (
+          <div className="reference-image-empty">
+            <ImageIcon size={15} />
+            <span>读取当前页或上传图片后，这里会显示可选参考图。</span>
+          </div>
+        )}
       </section>
 
 	      <section className="panel" id="product-panel">
 	        <h2>商品信息</h2>
 	        <label>
-	          <span>{form.generationMode === "single-poster" || form.generationMode === "category-kit" ? "商品标题（可选）" : "商品标题"}</span>
+	          <span>{form.generationMode === "single-poster" || form.generationMode === "category-kit" || form.generationMode === "one-click-replace" ? "商品标题（可选）" : "商品标题"}</span>
 	          <input
-	            placeholder={form.generationMode === "single-poster" || form.generationMode === "category-kit" ? "可留空，由模型依据产品图和描述归纳" : ""}
+	            placeholder={form.generationMode === "one-click-replace" ? "例如：白色衬衫 / 手提包 / 香薰瓶" : form.generationMode === "single-poster" || form.generationMode === "category-kit" ? "可留空，由模型依据产品图和描述归纳" : ""}
 	            value={form.product.title}
 	            onChange={(event) => updateProduct({ title: event.target.value })}
 	          />
 	        </label>
         <label>
-          <span>商品描述</span>
+          <span>{form.generationMode === "one-click-replace" ? "补充提示词" : "商品描述"}</span>
           <textarea
-            placeholder={form.generationMode === "category-kit" ? "可选：补充卖点、尺寸、包装、使用场景或平台要求；不填也会先看图判断" : ""}
+            placeholder={form.generationMode === "one-click-replace" ? "例如：模特不露脸，保留原背景，衣服自然合身" : form.generationMode === "category-kit" ? "可选：补充卖点、尺寸、包装、使用场景或平台要求；不填也会先看图判断" : ""}
             rows={4}
             value={form.product.description ?? ""}
             onChange={(event) => updateProduct({ description: event.target.value })}
@@ -4411,41 +5181,58 @@ export function SidePanelApp() {
         </section>
       ) : null}
 
-      <section className="panel" id="generation-mode-panel">
-        <h2>生成方式</h2>
-        <div className="mode-grid">
-          {generationModes.map((mode) => (
-            <button
-              className={form.generationMode === mode.id ? "mode-button active" : "mode-button"}
-              key={mode.id}
-              type="button"
-              onClick={() => updateGenerationMode(mode.id)}
-            >
-              <strong>{mode.label}</strong>
-              <span>{mode.hint}</span>
-            </button>
-          ))}
-        </div>
-        <button className="translation-entry" type="button" onClick={() => openTextTranslationPage()}>
-          <Languages size={18} />
-          <div>
-            <strong>{textTranslationMode.label}</strong>
-            <span>{textTranslationMode.hint}</span>
-          </div>
-        </button>
-      </section>
-
       {form.generationMode === "category-kit" ? (
         <section className="panel category-kit-panel" id="scene-panel">
           <div className="kit-heading">
             <div>
               <h2>AI 品类套图策划</h2>
-              <p>后台共享文本模型会先看图识别商品，再动态拆解出图方案并并发生成。</p>
+              <p>先看图识别类目，匹配策略库并提示缺失素材；确认后再进入套图规划和生图队列。</p>
             </div>
-            <span>后台统一规划</span>
+            <span>{categoryKitPrepare.status === "ready" ? "策略已匹配" : "先预检"}</span>
           </div>
-          <p className="kit-version-hint">这里不再手选固定模板，也不再填写模型或 API Key；只要给参考图和商品信息，后台会直接规划适合这个商品的详情页图片清单。</p>
-          <p className="kit-version-hint">图片数量和类型由后台模型动态判断，通常会输出 4 到 12 张，之后再按队列并发提交到现有生图接口。</p>
+          <div className="category-kit-precheck" data-status={categoryKitPrepare.status}>
+            <div>
+              <strong>
+                {categoryKitPrepare.status === "loading"
+                  ? "正在预检"
+                  : categoryKitPrepare.status === "ready"
+                    ? categoryKitPrepare.categoryPath || categoryKitPrepare.categoryName || categoryKitPrepare.strategyName || "策略已匹配"
+                    : categoryKitPrepare.status === "error"
+                      ? "预检失败"
+                      : "等待预检"}
+              </strong>
+              <small>
+                {categoryKitPrepare.status === "ready"
+                  ? categoryKitPrepare.missingItems.length > 0
+                    ? `缺 ${categoryKitPrepare.missingItems.slice(0, 3).join("、")}`
+                    : categoryKitPrepare.summary || "素材和描述可进入生成"
+                  : categoryKitPrepare.message}
+              </small>
+            </div>
+            <button className="secondary-button" disabled={categoryKitPrepare.status === "loading" || batchGenerationLocked} type="button" onClick={() => void prepareCategoryKitBeforeGenerate()}>
+              {categoryKitPrepare.status === "loading" ? <Loader2 className="spin" size={15} /> : <CheckCircle2 size={15} />}
+              预检
+            </button>
+          </div>
+          {categoryKitPrepare.requiredAssets.length > 0 ? (
+            <div className="category-kit-chip-group" aria-label="建议素材">
+              {categoryKitPrepare.requiredAssets.slice(0, 6).map((item) => (
+                <span key={item}>{item}</span>
+              ))}
+            </div>
+          ) : null}
+          {categoryKitPrepare.missingItems.length > 0 ? (
+            <div className="category-kit-missing">
+              <strong>建议补充</strong>
+              <ul>
+                {categoryKitPrepare.missingItems.slice(0, 6).map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          <p className="kit-version-hint">袜子、服饰、鞋子等类目会调用对应策略；未收录类目会走通用兜底，但仍不会编造尺寸、材质、包装或认证。</p>
+          <p className="kit-version-hint">补充素材可在上方参考图区域多选 1 到 3 张：第一张为主商品图，后续会作为细节/包装等素材证据。</p>
         </section>
       ) : form.generationMode === "marketing-main" ? (
         <section className="panel marketing-main-panel" id="scene-panel">
@@ -4666,15 +5453,15 @@ export function SidePanelApp() {
           </label>
 	          {form.generationMode === "category-kit" ? null : (
 	            <label>
-	              <span>{form.generationMode === "single-poster" ? "输出张数" : "每场景数量"}</span>
+	              <span>{form.generationMode === "single-poster" || form.generationMode === "one-click-replace" ? "输出张数" : "每场景数量"}</span>
 	              <select
-	                disabled={form.generationMode === "single-poster"}
-	                value={form.generationMode === "single-poster" ? 1 : form.countPerScene}
+	                disabled={form.generationMode === "single-poster" || form.generationMode === "one-click-replace"}
+	                value={form.generationMode === "single-poster" || form.generationMode === "one-click-replace" ? 1 : form.countPerScene}
 	                onChange={(event) => setForm({ ...form, countPerScene: Number(event.target.value) as 1 | 2 | 4 })}
 	              >
 	                <option value={1}>1</option>
-	                {form.generationMode === "single-poster" ? null : <option value={2}>2</option>}
-	                {form.generationMode === "single-poster" ? null : <option value={4}>4</option>}
+	                {form.generationMode === "single-poster" || form.generationMode === "one-click-replace" ? null : <option value={2}>2</option>}
+	                {form.generationMode === "single-poster" || form.generationMode === "one-click-replace" ? null : <option value={4}>4</option>}
 	              </select>
 	            </label>
 	          )}
@@ -4703,10 +5490,16 @@ export function SidePanelApp() {
             </select>
           </label>
         </div>
-        <label>
-          <span>补充方向</span>
+        <div className="extra-direction-field">
+          <div className="prompt-field-heading">
+            <span>补充方向</span>
+            <button className="prompt-optimize-button" disabled={!form.extraDirection.trim() || extraDirectionOptimizing} type="button" onClick={() => void optimizeExtraDirection()}>
+              {extraDirectionOptimizing ? <Loader2 className="spin" size={13} /> : <Sparkles size={13} />}
+              <span>{extraDirectionOptimizing ? "优化中" : "优化提示词"}</span>
+            </button>
+          </div>
           <textarea rows={3} value={form.extraDirection} onChange={(event) => setForm({ ...form, extraDirection: event.target.value })} />
-        </label>
+        </div>
         {isAdminAccount ? (
           <label className="ops-collage-toggle" title="服务端会额外生成并上传一张原图与生成图拼接的运营素材">
             <input
@@ -4729,8 +5522,8 @@ export function SidePanelApp() {
             </span>
         </div>
         <button className="primary-button" disabled={batchGenerationLocked} type="button" onClick={() => void submitBatch()}>
-          {batchGenerationLocked ? <Loader2 className="spin" size={17} /> : <Send size={17} />}
-          批量生成
+          {batchGenerationLocked ? <Loader2 className="spin" size={17} /> : form.generationMode === "category-kit" && categoryKitPrepare.status !== "ready" ? <CheckCircle2 size={17} /> : <Send size={17} />}
+          {form.generationMode === "category-kit" && categoryKitPrepare.status !== "ready" ? "预检类目" : form.generationMode === "one-click-replace" ? "一键换装/换品" : "批量生成"}
         </button>
       </section>
 
@@ -4856,69 +5649,7 @@ export function SidePanelApp() {
                     </div>
                   </div>
                 ) : (
-                  <form className="auth-form" onSubmit={(event) => void submitAuth(event)}>
-                    <div className="auth-switch">
-                      <button className={authMode === "login" ? "active" : ""} type="button" onClick={() => setAuthMode("login")}>登录</button>
-                      <button className={authMode === "register" ? "active" : ""} type="button" onClick={() => setAuthMode("register")}>注册</button>
-                    </div>
-                    {authMode === "register" ? (
-                      <label>
-                        <span>手机号</span>
-                        <input autoComplete="tel" inputMode="tel" value={authForm.phone} onChange={(event) => setAuthForm({ ...authForm, phone: event.target.value })} required />
-                      </label>
-                    ) : (
-                      <label>
-                        <span>手机号/邮箱</span>
-                        <input autoComplete="username" value={authForm.account} onChange={(event) => setAuthForm({ ...authForm, account: event.target.value })} required />
-                      </label>
-                    )}
-                    {authMode === "register" ? (
-                      <label>
-                        <span>显示名</span>
-                        <input autoComplete="name" value={authForm.displayName} onChange={(event) => setAuthForm({ ...authForm, displayName: event.target.value })} />
-                      </label>
-                    ) : null}
-                    {authMode === "register" ? (
-                      <label>
-                        <span>短信验证码</span>
-                        <div className="auth-code-row">
-                          <input
-                            autoComplete="one-time-code"
-                            inputMode="numeric"
-                            maxLength={6}
-                            value={authForm.smsCode}
-                            onChange={(event) => setAuthForm({ ...authForm, smsCode: event.target.value })}
-                            required
-                          />
-                          <button className="mini-button" disabled={authCodeLoading} type="button" onClick={() => void sendAuthSmsCode()}>
-                            {authCodeLoading ? <Loader2 className="spin" size={13} /> : <Send size={13} />}
-                            发送
-                          </button>
-                        </div>
-                      </label>
-                    ) : null}
-                    {authMode === "register" ? (
-                      <label>
-                        <span>邀请码</span>
-                        <input
-                          autoComplete="off"
-                          value={authForm.inviteCode}
-                          onChange={(event) => setAuthForm({ ...authForm, inviteCode: event.target.value })}
-                          placeholder="可选"
-                        />
-                      </label>
-                    ) : null}
-                    <label>
-                      <span>密码</span>
-                      <input autoComplete={authMode === "login" ? "current-password" : "new-password"} type="password" value={authForm.password} onChange={(event) => setAuthForm({ ...authForm, password: event.target.value })} required />
-                    </label>
-                    {authError ? <p className="tool-error">{authError}</p> : null}
-                    {authNotice ? <p className="settings-note">{authNotice}</p> : null}
-                    <button className="primary-button auth-submit" disabled={authLoading} type="submit">
-                      {authLoading ? <Loader2 className="spin" size={15} /> : <KeyRound size={15} />}
-                      {authMode === "login" ? "登录" : "注册并登录"}
-                    </button>
-                  </form>
+                  renderAuthForm()
                 )}
               </div>
             ) : null}
@@ -5499,15 +6230,7 @@ export function SidePanelApp() {
       ) : null}
       {renderExtensionUpdateDialog()}
       {renderQueuedJobDialog()}
-      {imageHoverPreview ? (
-        <div
-          className="reference-image-hover-preview"
-          style={{ left: `${imageHoverPreview.x}px`, top: `${imageHoverPreview.y}px` }}
-        >
-          <img alt={imageHoverPreview.label} src={imageHoverPreview.url} />
-          <span>{imageHoverPreview.label}</span>
-        </div>
-      ) : null}
+      {renderImageHoverPreview()}
     </main>
   );
 }

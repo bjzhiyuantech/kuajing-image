@@ -1,5 +1,5 @@
 import { createSign, createVerify, randomUUID } from "node:crypto";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import type { RequestTenant } from "./auth-context.js";
 import type {
   AdminAlipayConfigResponse,
@@ -20,7 +20,7 @@ import type {
 import { db } from "./database.js";
 import { ensureUserPlanCurrent, planExpiryFrom } from "./plan-expiration.js";
 import { applyReferralCashback } from "./referral-service.js";
-import { billingOrders, billingTransactions, subscriptionPlans, systemSettings, users } from "./schema.js";
+import { billingOrders, billingTransactions, redemptionCodeRedemptions, subscriptionPlans, systemSettings, users } from "./schema.js";
 import { getSystemSetting, saveSystemSetting } from "./system-settings.js";
 
 const BILLING_SETTINGS_KEY = "billing.imageUnitPrice";
@@ -28,6 +28,7 @@ const ALIPAY_SETTINGS_KEY = "payment.alipay";
 const DEFAULT_CURRENCY = "CNY";
 const DEFAULT_ALIPAY_GATEWAY = "https://openapi.alipay.com/gateway.do";
 const ALIPAY_NOTIFY_SUCCESS = "success";
+type BillingTransactionClient = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 export class BillingError extends Error {
   constructor(
@@ -489,6 +490,7 @@ async function applyPlanPurchaseByBalance(tenant: RequestTenant, plan: typeof su
         updatedAt: now
       })
       .where(eq(users.id, user.id));
+    await settleUserRedemptionGrants(tx, user.id, now);
 
     await tx.insert(billingTransactions).values({
       id: randomUUID(),
@@ -577,6 +579,7 @@ async function applyPaidOrder(
           updatedAt: now
         })
         .where(eq(users.id, user.id));
+      await settleUserRedemptionGrants(tx, user.id, now);
     }
 
     await tx
@@ -641,6 +644,13 @@ async function applyPaidOrder(
       now: paidOrder.now
     });
   }
+}
+
+async function settleUserRedemptionGrants(tx: BillingTransactionClient, userId: string, settledAt: string): Promise<void> {
+  await tx
+    .update(redemptionCodeRedemptions)
+    .set({ settledAt })
+    .where(and(eq(redemptionCodeRedemptions.userId, userId), isNull(redemptionCodeRedemptions.settledAt)));
 }
 
 async function markOrderNotify(outTradeNo: string, payload: Record<string, string>, tradeStatus: string): Promise<void> {
@@ -726,6 +736,7 @@ function toBillingTransaction(row: typeof billingTransactions.$inferSelect, user
     quotaAfter: Number(row.quotaAfter ?? 0),
     quotaConsumed: Number(row.quotaConsumed ?? 0),
     imageCount: Number(row.imageCount ?? 0),
+    quotaCount: Number(row.quotaCount ?? 0),
     unitPriceCents: Number(row.unitPriceCents ?? 0),
     note: row.note ?? undefined,
     status: row.status,

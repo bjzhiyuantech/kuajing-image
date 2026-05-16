@@ -40,6 +40,7 @@ const LANGUAGES = [
   { id: "zh-hant", label: "繁体中文" },
   { id: "en", label: "英文" },
   { id: "pl", label: "波兰文" },
+  { id: "ru", label: "俄文" },
   { id: "de", label: "德文" },
   { id: "fr", label: "法文" },
   { id: "es", label: "西班牙文" },
@@ -50,6 +51,7 @@ const LANGUAGES = [
 const PLATFORMS = [
   { id: "amazon", label: "Amazon" },
   { id: "allegro", label: "Allegro" },
+  { id: "ozon", label: "Ozon" },
   { id: "shopify", label: "Shopify" },
   { id: "tiktok-shop", label: "TikTok Shop" },
   { id: "temu", label: "Temu" },
@@ -75,6 +77,7 @@ const MARKETS = [
   { id: "uk", label: "英国" },
   { id: "eu", label: "欧盟" },
   { id: "pl", label: "波兰" },
+  { id: "ru", label: "俄罗斯" },
   { id: "ca", label: "加拿大" },
   { id: "au", label: "澳大利亚" },
   { id: "jp", label: "日本" },

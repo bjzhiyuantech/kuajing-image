@@ -212,6 +212,52 @@ export const billingTransactions = mysqlTable(
   })
 );
 
+export const redemptionCodes = mysqlTable(
+  "redemption_codes",
+  {
+    id: id("id").primaryKey(),
+    code: shortText("code", 64).notNull(),
+    batchId: id("batch_id"),
+    quota: bigint("quota", { mode: "number" }).notNull(),
+    maxRedemptions: int("max_redemptions").notNull(),
+    usedCount: int("used_count").notNull(),
+    validDays: int("valid_days").notNull(),
+    status: shortText("status", 32).notNull(),
+    note: text("note"),
+    createdByUserId: id("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: isoDate("created_at").notNull(),
+    updatedAt: isoDate("updated_at").notNull()
+  },
+  (table) => ({
+    codeIdx: uniqueIndex("redemption_codes_code_unique_idx").on(table.code),
+    batchCreatedIdx: index("redemption_codes_batch_created_idx").on(table.batchId, table.createdAt),
+    statusCreatedIdx: index("redemption_codes_status_created_idx").on(table.status, table.createdAt)
+  })
+);
+
+export const redemptionCodeRedemptions = mysqlTable(
+  "redemption_code_redemptions",
+  {
+    id: id("id").primaryKey(),
+    codeId: id("code_id")
+      .notNull()
+      .references(() => redemptionCodes.id, { onDelete: "cascade" }),
+    code: shortText("code", 64).notNull(),
+    userId: id("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    quotaGranted: bigint("quota_granted", { mode: "number" }).notNull(),
+    expiresAt: isoDate("expires_at").notNull(),
+    settledAt: isoDate("settled_at"),
+    createdAt: isoDate("created_at").notNull()
+  },
+  (table) => ({
+    codeUserIdx: uniqueIndex("redemption_code_redemptions_code_user_unique_idx").on(table.codeId, table.userId),
+    userCreatedAtIdx: index("redemption_code_redemptions_user_created_at_idx").on(table.userId, table.createdAt),
+    codeCreatedAtIdx: index("redemption_code_redemptions_code_created_at_idx").on(table.codeId, table.createdAt)
+  })
+);
+
 export const billingOrders = mysqlTable(
   "billing_orders",
   {
@@ -476,6 +522,86 @@ export const ecommerceBatchJobs = mysqlTable(
   (table) => ({
     workspaceCreatedAtIdx: index("ecommerce_batch_jobs_workspace_created_at_idx").on(table.workspaceId, table.createdAt),
     workspaceStatusIdx: index("ecommerce_batch_jobs_workspace_status_idx").on(table.workspaceId, table.status)
+  })
+);
+
+export const appNotifications = mysqlTable(
+  "app_notifications",
+  {
+    id: id("id").primaryKey(),
+    workspaceId: id("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    userId: id("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    type: shortText("type", 64).notNull(),
+    severity: shortText("severity", 32).notNull(),
+    title: shortText("title", 255).notNull(),
+    body: text("body").notNull(),
+    actionUrl: text("action_url"),
+    relatedType: shortText("related_type", 64),
+    relatedId: id("related_id"),
+    payloadJson: longtext("payload_json"),
+    createdAt: isoDate("created_at").notNull(),
+    readAt: isoDate("read_at"),
+    deliveredAt: isoDate("delivered_at"),
+    dismissedAt: isoDate("dismissed_at")
+  },
+  (table) => ({
+    userCreatedAtIdx: index("app_notifications_user_created_at_idx").on(table.userId, table.createdAt),
+    userReadIdx: index("app_notifications_user_read_idx").on(table.userId, table.readAt),
+    relatedIdx: index("app_notifications_related_idx").on(table.relatedType, table.relatedId)
+  })
+);
+
+export const notificationDevices = mysqlTable(
+  "notification_devices",
+  {
+    id: id("id").primaryKey(),
+    userId: id("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    channel: shortText("channel", 32).notNull(),
+    platform: shortText("platform", 32).notNull(),
+    provider: shortText("provider", 64),
+    pushToken: shortText("push_token", 512),
+    deviceId: shortText("device_id", 255),
+    userAgent: text("user_agent"),
+    enabled: int("enabled").notNull(),
+    createdAt: isoDate("created_at").notNull(),
+    updatedAt: isoDate("updated_at").notNull(),
+    lastSeenAt: isoDate("last_seen_at").notNull()
+  },
+  (table) => ({
+    userChannelIdx: index("notification_devices_user_channel_idx").on(table.userId, table.channel),
+    pushTokenIdx: uniqueIndex("notification_devices_push_token_idx").on(table.provider, table.pushToken),
+    deviceIdx: uniqueIndex("notification_devices_device_idx").on(table.userId, table.deviceId)
+  })
+);
+
+export const ecommerceCategoryKitStrategies = mysqlTable(
+  "ecommerce_category_kit_strategies",
+  {
+    id: id("id").primaryKey(),
+    categoryPathKey: shortText("category_path_key", 512).notNull(),
+    categoryPathJson: longtext("category_path_json").notNull(),
+    categoryName: shortText("category_name").notNull(),
+    platform: shortText("platform", 64),
+    market: shortText("market", 64),
+    enabled: int("enabled").notNull(),
+    priority: int("priority").notNull(),
+    source: shortText("source", 64).notNull(),
+    version: shortText("version", 64),
+    searchText: longtext("search_text").notNull(),
+    strategyJson: longtext("strategy_json").notNull(),
+    createdAt: isoDate("created_at").notNull(),
+    updatedAt: isoDate("updated_at").notNull()
+  },
+  (table) => ({
+    categoryPathIdx: index("ecommerce_category_kit_strategies_category_path_idx").on(table.categoryPathKey),
+    platformMarketIdx: index("ecommerce_category_kit_strategies_platform_market_idx").on(table.platform, table.market),
+    enabledPriorityIdx: index("ecommerce_category_kit_strategies_enabled_priority_idx").on(table.enabled, table.priority)
   })
 );
 
