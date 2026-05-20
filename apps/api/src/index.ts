@@ -81,6 +81,7 @@ import {
   type EcommerceProductBrief,
   type EcommerceSceneTemplateId,
   type EcommerceTextLanguage,
+  type DeploymentCapabilities,
   type BrandOverlayPlacement,
   type GenerationCount,
   type ImageQuality,
@@ -367,17 +368,43 @@ app.get("/api/config", async (c) => {
 
 app.get("/api/deployment-profile", (c) => c.json(getDeploymentProfile()));
 
-app.get("/api/extension-release", async (c) => c.json(await getExtensionReleaseConfig()));
+app.get("/api/extension-release", async (c) => {
+  const disabled = requireCapability(c, "extension");
+  if (disabled) {
+    return disabled;
+  }
 
-app.get("/api/app-release", async (c) => c.json(await getAppReleaseConfig()));
+  return c.json(await getExtensionReleaseConfig());
+});
+
+app.get("/api/app-release", async (c) => {
+  const disabled = requireCapability(c, "mobileApp");
+  if (disabled) {
+    return disabled;
+  }
+
+  return c.json(await getAppReleaseConfig());
+});
 
 app.get("/api/help", async (c) => c.json(await getHelpCenter()));
 
 app.get("/api/public/demo-canvas", async (c) => c.json(await getDemoCanvasConfig()));
 
-app.get("/api/public/gallery", async (c) => c.json(await getPublicGalleryImages()));
+app.get("/api/public/gallery", async (c) => {
+  const disabled = requireCapability(c, "publicGallery");
+  if (disabled) {
+    return disabled;
+  }
+
+  return c.json(await getPublicGalleryImages());
+});
 
 app.get("/api/public/assets/:id/preview", async (c) => {
+  const disabled = requireCapability(c, "publicGallery");
+  if (disabled) {
+    return disabled;
+  }
+
   const parsedWidth = parsePreviewWidth(c.req.query("width"));
   if (!parsedWidth.ok) {
     return c.json(errorResponse(parsedWidth.code, parsedWidth.message), 400);
@@ -404,6 +431,11 @@ app.get("/api/public/assets/:id/preview", async (c) => {
 });
 
 app.get("/api/public/assets/:id", async (c) => {
+  const disabled = requireCapability(c, "publicGallery");
+  if (disabled) {
+    return disabled;
+  }
+
   const tenant = await getPublicGalleryAssetTenant(c.req.param("id"));
   if (!tenant) {
     return c.json(errorResponse("not_found", "找不到公开展示的图像资源。"), 404);
@@ -425,6 +457,11 @@ app.get("/api/public/assets/:id", async (c) => {
 });
 
 app.get("/api/photoshop/packages/:packageId/:fileName", async (c) => {
+  const disabled = requireCapability(c, "photoshopPackage");
+  if (disabled) {
+    return disabled;
+  }
+
   const file = await readPhotoshopPackageFile(c.req.param("packageId"), c.req.param("fileName"), c.req.query("token"));
   if (!file) {
     return c.json(errorResponse("not_found", "找不到 Photoshop 工作流文件，或访问链接已过期。"), 404);
@@ -658,7 +695,13 @@ app.post("/api/auth/wechat/miniapp/bind", async (c) => {
 });
 
 app.use("/api/*", async (c, next) => {
-  if (new URL(c.req.url).pathname === "/api/billing/alipay/notify") {
+  const path = new URL(c.req.url).pathname;
+  const disabled = await requireCapabilityForPath(c, path);
+  if (disabled) {
+    return disabled;
+  }
+
+  if (path === "/api/billing/alipay/notify") {
     await next();
     return;
   }
@@ -666,7 +709,6 @@ app.use("/api/*", async (c, next) => {
   const session = (await getAuthSession(c.req.raw.headers)) ?? (await getAssetQueryTokenSession(c));
   if (session) {
     authSessions.set(c, session);
-    const path = new URL(c.req.url).pathname;
     if (!session.user.phone && !canAccessWithoutPhoneVerification(path)) {
       return c.json(errorResponse("phone_verification_required", "请先完成手机号验证后再使用账户权益。"), 403);
     }
@@ -997,6 +1039,11 @@ app.post("/api/images/prompt/optimize", async (c) => {
 });
 
 app.post("/api/photoshop/packages", async (c) => {
+  const disabled = requireCapability(c, "photoshopPackage");
+  if (disabled) {
+    return disabled;
+  }
+
   const payload = await readJson(c.req.raw);
   if (!payload.ok) {
     return c.json(payload.error, 400);
@@ -1024,6 +1071,11 @@ app.post("/api/photoshop/packages", async (c) => {
 });
 
 app.post("/api/videos/seedance", async (c) => {
+  const disabled = requireCapability(c, "seedanceVideo");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -1048,6 +1100,11 @@ app.post("/api/videos/seedance", async (c) => {
 });
 
 app.post("/api/videos/seedance/storyboard-plan", async (c) => {
+  const disabled = requireCapability(c, "seedanceVideo");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -1083,6 +1140,10 @@ app.post("/api/ecommerce/images/batch-generate", async (c) => {
   const parsed = parseEcommerceBatchPayload(payload.value);
   if (!parsed.ok) {
     return c.json(parsed.error, 400);
+  }
+  const disabled = requireEcommerceBatchCapabilities(c, parsed.value);
+  if (disabled) {
+    return disabled;
   }
 
   const providerConfigs = await getActiveImageModelConfigs();
@@ -1148,6 +1209,11 @@ app.post("/api/ecommerce/images/batch-generate", async (c) => {
 });
 
 app.post("/api/ecommerce/images/category-kit-prepare", async (c) => {
+  const disabled = requireCapability(c, "categoryKit");
+  if (disabled) {
+    return disabled;
+  }
+
   const payload = await readJson(c.req.raw);
   if (!payload.ok) {
     return c.json(payload.error, 400);
@@ -1181,6 +1247,11 @@ app.post("/api/ecommerce/images/category-kit-prepare", async (c) => {
 });
 
 app.post("/api/ecommerce/images/category-kit-plan", async (c) => {
+  const disabled = requireCapability(c, "categoryKit");
+  if (disabled) {
+    return disabled;
+  }
+
   const payload = await readJson(c.req.raw);
   if (!payload.ok) {
     return c.json(payload.error, 400);
@@ -1246,6 +1317,11 @@ app.post("/api/ecommerce/images/category-kit-plan", async (c) => {
 });
 
 app.post("/api/ecommerce/images/category-kit-generate", async (c) => {
+  const disabled = requireCapability(c, "categoryKit");
+  if (disabled) {
+    return disabled;
+  }
+
   const payload = await readJson(c.req.raw);
   if (!payload.ok) {
     return c.json(payload.error, 400);
@@ -1368,14 +1444,29 @@ app.post("/api/notifications/devices", async (c) => {
 });
 
 app.get("/api/billing/transactions", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
   return c.json(await listUserBillingTransactions(await requestTenant(c), parseListLimit(c.req.query("limit"))));
 });
 
 app.get("/api/billing/orders", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
   return c.json(await listUserBillingOrders(await requestTenant(c), parseListLimit(c.req.query("limit"))));
 });
 
 app.get("/api/billing/summary", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
   return c.json(await getBillingSummary(await requestTenant(c)));
 });
 
@@ -1392,10 +1483,20 @@ app.post("/api/redemption-codes/redeem", async (c) => {
 });
 
 app.get("/api/billing/invoice/applications", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
   return c.json(await getInvoiceApplications(await requestTenant(c)));
 });
 
 app.post("/api/billing/invoice/applications", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
   const payload = await readJson(c.req.raw);
   if (!payload.ok) {
     return c.json(payload.error, 400);
@@ -1408,11 +1509,21 @@ app.post("/api/billing/invoice/applications", async (c) => {
 });
 
 app.get("/api/referral/summary", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
   const origin = new URL(c.req.url).origin;
   return c.json(await getInviteSummary((await requestTenant(c)).userId, origin));
 });
 
 app.post("/api/billing/recharge", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
   const payload = await readJson(c.req.raw);
   if (!payload.ok) {
     return c.json(payload.error, 400);
@@ -1425,6 +1536,11 @@ app.post("/api/billing/recharge", async (c) => {
 });
 
 app.post("/api/billing/plans/:planId/purchase", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
   const payload = await readJson(c.req.raw);
   if (!payload.ok) {
     return c.json(payload.error, 400);
@@ -1438,6 +1554,15 @@ app.post("/api/billing/plans/:planId/purchase", async (c) => {
 });
 
 app.post("/api/billing/apple-iap/verify", async (c) => {
+  const billingDisabled = requireCapability(c, "billing");
+  if (billingDisabled) {
+    return billingDisabled;
+  }
+  const appleIapDisabled = requireCapability(c, "appleIap");
+  if (appleIapDisabled) {
+    return appleIapDisabled;
+  }
+
   const payload = await readJson(c.req.raw);
   if (!payload.ok) {
     return c.json(payload.error, 400);
@@ -1450,6 +1575,11 @@ app.post("/api/billing/apple-iap/verify", async (c) => {
 });
 
 app.post("/api/billing/alipay/notify", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
   const form = await c.req.parseBody();
   const payload: Record<string, string> = {};
   for (const [key, value] of Object.entries(form)) {
@@ -1689,6 +1819,11 @@ app.get("/api/admin/plans", async (c) => {
 });
 
 app.get("/api/admin/billing/settings", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -1727,6 +1862,11 @@ app.post("/api/admin/redemption-codes", async (c) => {
 });
 
 app.put("/api/admin/billing/settings", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -1746,6 +1886,11 @@ app.put("/api/admin/billing/settings", async (c) => {
 });
 
 app.get("/api/admin/extension-release", async (c) => {
+  const disabled = requireCapability(c, "extension");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -1755,6 +1900,11 @@ app.get("/api/admin/extension-release", async (c) => {
 });
 
 app.put("/api/admin/extension-release", async (c) => {
+  const disabled = requireCapability(c, "extension");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -1774,6 +1924,11 @@ app.put("/api/admin/extension-release", async (c) => {
 });
 
 app.get("/api/admin/app-release", async (c) => {
+  const disabled = requireCapability(c, "mobileApp");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -1783,6 +1938,11 @@ app.get("/api/admin/app-release", async (c) => {
 });
 
 app.put("/api/admin/app-release", async (c) => {
+  const disabled = requireCapability(c, "mobileApp");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -1867,6 +2027,11 @@ app.put("/api/admin/image-models", async (c) => {
 });
 
 app.get("/api/admin/ecommerce/category-kit-planner", async (c) => {
+  const disabled = requireCapability(c, "categoryKit");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -1876,6 +2041,11 @@ app.get("/api/admin/ecommerce/category-kit-planner", async (c) => {
 });
 
 app.put("/api/admin/ecommerce/category-kit-planner", async (c) => {
+  const disabled = requireCapability(c, "categoryKit");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -1895,6 +2065,11 @@ app.put("/api/admin/ecommerce/category-kit-planner", async (c) => {
 });
 
 app.get("/api/admin/ecommerce/category-kit-strategies", async (c) => {
+  const disabled = requireCapability(c, "categoryKit");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -1904,6 +2079,11 @@ app.get("/api/admin/ecommerce/category-kit-strategies", async (c) => {
 });
 
 app.get("/api/admin/ecommerce/category-strategies", async (c) => {
+  const disabled = requireCapability(c, "categoryKit");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -1913,6 +2093,11 @@ app.get("/api/admin/ecommerce/category-strategies", async (c) => {
 });
 
 app.get("/api/admin/ecommerce/category-kit-strategies/:strategyId", async (c) => {
+  const disabled = requireCapability(c, "categoryKit");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -1922,6 +2107,11 @@ app.get("/api/admin/ecommerce/category-kit-strategies/:strategyId", async (c) =>
 });
 
 app.get("/api/admin/ecommerce/category-strategies/:strategyId", async (c) => {
+  const disabled = requireCapability(c, "categoryKit");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -1931,6 +2121,11 @@ app.get("/api/admin/ecommerce/category-strategies/:strategyId", async (c) => {
 });
 
 app.post("/api/admin/ecommerce/category-kit-strategies", async (c) => {
+  const disabled = requireCapability(c, "categoryKit");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -1949,6 +2144,11 @@ app.post("/api/admin/ecommerce/category-kit-strategies", async (c) => {
 });
 
 app.post("/api/admin/ecommerce/category-strategies", async (c) => {
+  const disabled = requireCapability(c, "categoryKit");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -1967,6 +2167,11 @@ app.post("/api/admin/ecommerce/category-strategies", async (c) => {
 });
 
 app.put("/api/admin/ecommerce/category-kit-strategies/:strategyId", async (c) => {
+  const disabled = requireCapability(c, "categoryKit");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -1985,6 +2190,11 @@ app.put("/api/admin/ecommerce/category-kit-strategies/:strategyId", async (c) =>
 });
 
 app.put("/api/admin/ecommerce/category-strategies/:strategyId", async (c) => {
+  const disabled = requireCapability(c, "categoryKit");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -2003,6 +2213,11 @@ app.put("/api/admin/ecommerce/category-strategies/:strategyId", async (c) => {
 });
 
 app.delete("/api/admin/ecommerce/category-kit-strategies/:strategyId", async (c) => {
+  const disabled = requireCapability(c, "categoryKit");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -2012,6 +2227,11 @@ app.delete("/api/admin/ecommerce/category-kit-strategies/:strategyId", async (c)
 });
 
 app.delete("/api/admin/ecommerce/category-strategies/:strategyId", async (c) => {
+  const disabled = requireCapability(c, "categoryKit");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -2021,6 +2241,11 @@ app.delete("/api/admin/ecommerce/category-strategies/:strategyId", async (c) => 
 });
 
 app.get("/api/admin/video/seedance", async (c) => {
+  const disabled = requireCapability(c, "seedanceVideo");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -2030,6 +2255,11 @@ app.get("/api/admin/video/seedance", async (c) => {
 });
 
 app.put("/api/admin/video/seedance", async (c) => {
+  const disabled = requireCapability(c, "seedanceVideo");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -2105,6 +2335,11 @@ app.put("/api/admin/ecommerce/concurrency", async (c) => {
 });
 
 app.get("/api/admin/payment/alipay", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -2114,6 +2349,11 @@ app.get("/api/admin/payment/alipay", async (c) => {
 });
 
 app.put("/api/admin/payment/alipay", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -2225,6 +2465,11 @@ app.put("/api/admin/auth/wechat/miniapp", async (c) => {
 });
 
 app.get("/api/admin/billing/transactions", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -2234,6 +2479,11 @@ app.get("/api/admin/billing/transactions", async (c) => {
 });
 
 app.get("/api/admin/billing/orders", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -2243,6 +2493,11 @@ app.get("/api/admin/billing/orders", async (c) => {
 });
 
 app.get("/api/admin/billing/invoice/applications", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -2252,6 +2507,11 @@ app.get("/api/admin/billing/invoice/applications", async (c) => {
 });
 
 app.put("/api/admin/billing/invoice/applications/:applicationId", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -2919,6 +3179,59 @@ function errorResponse(code: string, message: string): ErrorResponseBody {
   };
 }
 
+function requireCapability(c: Context, capability: keyof DeploymentCapabilities): Response | undefined {
+  const enabled = getDeploymentProfile().capabilities[capability];
+  if (enabled === false) {
+    return c.json(errorResponse("feature_disabled", `当前部署版本未开放 ${capability} 能力。`), 403);
+  }
+  return undefined;
+}
+
+async function requireCapabilityForPath(c: Context, path: string): Promise<Response | undefined> {
+  if (path === "/api/ecommerce/images/batch-generate") {
+    return requireEcommerceBatchCapabilitiesForRequest(c);
+  }
+  if (path === "/api/billing/apple-iap/verify") {
+    return requireCapability(c, "billing") ?? requireCapability(c, "appleIap");
+  }
+  for (const rule of PATH_CAPABILITY_RULES) {
+    if (path === rule.path || (rule.prefix && path.startsWith(rule.prefix))) {
+      return requireCapability(c, rule.capability);
+    }
+  }
+  return undefined;
+}
+
+async function requireEcommerceBatchCapabilitiesForRequest(c: Context): Promise<Response | undefined> {
+  if (c.req.method !== "POST") {
+    return undefined;
+  }
+  try {
+    const payload = await c.req.raw.clone().json();
+    const parsed = parseEcommerceBatchPayload(payload);
+    if (!parsed.ok) {
+      return undefined;
+    }
+    return requireEcommerceBatchCapabilities(c, parsed.value);
+  } catch {
+    return undefined;
+  }
+}
+
+function requireEcommerceBatchCapabilities(c: Context, input: ResolvedEcommerceBatchGenerateRequest): Response | undefined {
+  if (!ecommerceBatchUsesCategoryKit(input)) {
+    return undefined;
+  }
+  return requireCapability(c, "categoryKit");
+}
+
+function ecommerceBatchUsesCategoryKit(input: Pick<ResolvedEcommerceBatchGenerateRequest, "sceneTemplateIds">): boolean {
+  return input.sceneTemplateIds.some((sceneTemplateId) => {
+    const template = ECOMMERCE_SCENE_TEMPLATES.find((item) => item.id === sceneTemplateId);
+    return template?.mode === "category-kit" || template?.mode === "single-poster";
+  });
+}
+
 function downloadFileName(fileName: string): string {
   return fileName.replace(/[^a-zA-Z0-9._-]/gu, "_");
 }
@@ -2929,6 +3242,25 @@ interface ErrorResponseBody {
     message: string;
   };
 }
+
+const PATH_CAPABILITY_RULES: Array<{ path?: string; prefix?: string; capability: keyof DeploymentCapabilities }> = [
+  { path: "/api/extension-release", capability: "extension" },
+  { prefix: "/api/admin/extension-release", capability: "extension" },
+  { path: "/api/app-release", capability: "mobileApp" },
+  { prefix: "/api/admin/app-release", capability: "mobileApp" },
+  { path: "/api/public/gallery", capability: "publicGallery" },
+  { prefix: "/api/public/assets/", capability: "publicGallery" },
+  { prefix: "/api/photoshop/packages", capability: "photoshopPackage" },
+  { prefix: "/api/videos/seedance", capability: "seedanceVideo" },
+  { prefix: "/api/admin/video/seedance", capability: "seedanceVideo" },
+  { prefix: "/api/ecommerce/images/category-kit", capability: "categoryKit" },
+  { prefix: "/api/admin/ecommerce/category-kit", capability: "categoryKit" },
+  { prefix: "/api/admin/ecommerce/category-strategies", capability: "categoryKit" },
+  { prefix: "/api/billing/", capability: "billing" },
+  { prefix: "/api/admin/billing/", capability: "billing" },
+  { prefix: "/api/admin/payment/alipay", capability: "billing" },
+  { path: "/api/referral/summary", capability: "billing" }
+];
 
 type ParseResult<T> =
   | {

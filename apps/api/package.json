@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "corepack pnpm --filter @gpt-image-canvas/shared build && tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
+    "check:deployment-gates": "tsx src/scripts/check-deployment-capability-gates.ts",
     "db:generate": "drizzle-kit generate",
     "assets:backfill-oss": "tsx src/scripts/backfill-assets-to-oss.ts",
     "assets:externalize-projects": "tsx src/scripts/externalize-project-inline-assets.ts",
