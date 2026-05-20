@@ -1117,6 +1117,7 @@ export interface ExtensionReleaseTargetConfig {
 }
 
 export interface ExtensionReleaseConfig {
+  local: ExtensionReleaseTargetConfig;
   dev: ExtensionReleaseTargetConfig;
   prod: ExtensionReleaseTargetConfig;
   updatedAt?: string;

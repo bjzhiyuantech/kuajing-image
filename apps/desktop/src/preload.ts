@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld("desktop", {
   getSnapshot: () => ipcRenderer.invoke("desktop:getSnapshot"),
   openDockerDownload: () => ipcRenderer.invoke("desktop:openDockerDownload"),
   openConfigFile: () => ipcRenderer.invoke("desktop:openConfigFile"),
+  openExtensionDir: () => ipcRenderer.invoke("desktop:openExtensionDir"),
+  openExtensionZip: () => ipcRenderer.invoke("desktop:openExtensionZip"),
   openService: () => ipcRenderer.invoke("desktop:openService"),
   openServiceDir: () => ipcRenderer.invoke("desktop:openServiceDir"),
   runAction: (action: DesktopAction) => ipcRenderer.invoke("desktop:runAction", action),

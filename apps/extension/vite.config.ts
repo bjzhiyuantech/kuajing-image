@@ -3,13 +3,20 @@ import react from "@vitejs/plugin-react";
 import { defineConfig, loadEnv } from "vite";
 
 function extensionApiBaseUrl(): string {
-  const target = process.env.EXTENSION_BUILD_TARGET === "dev" ? "dev" : "prod";
+  const rawTarget = process.env.EXTENSION_BUILD_TARGET;
+  const target = rawTarget === "dev" || rawTarget === "prod" ? rawTarget : "local";
   const env = loadEnv("", resolve(__dirname, "../.."), "");
   const processBaseUrl =
-    target === "dev" ? process.env.EXTENSION_DEV_API_BASE_URL || process.env.VITE_EXTENSION_API_BASE_URL : process.env.EXTENSION_PROD_API_BASE_URL || process.env.VITE_EXTENSION_API_BASE_URL;
-  return target === "dev"
-    ? processBaseUrl || env.EXTENSION_DEV_API_BASE_URL || "https://dev.neimou.com"
-    : processBaseUrl || env.EXTENSION_PROD_API_BASE_URL || "https://ai.neimou.com";
+    target === "local"
+      ? process.env.EXTENSION_LOCAL_API_BASE_URL || process.env.VITE_EXTENSION_API_BASE_URL
+      : target === "dev"
+        ? process.env.EXTENSION_DEV_API_BASE_URL || process.env.VITE_EXTENSION_API_BASE_URL
+        : process.env.EXTENSION_PROD_API_BASE_URL || process.env.VITE_EXTENSION_API_BASE_URL;
+  return target === "local"
+    ? processBaseUrl || env.EXTENSION_LOCAL_API_BASE_URL || "http://127.0.0.1:8787"
+    : target === "dev"
+      ? processBaseUrl || env.EXTENSION_DEV_API_BASE_URL || "https://dev.neimou.com"
+      : processBaseUrl || env.EXTENSION_PROD_API_BASE_URL || "https://ai.neimou.com";
 }
 
 export default defineConfig({

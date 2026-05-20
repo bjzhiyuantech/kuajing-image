@@ -172,6 +172,10 @@ h2 {
   line-height: 1.45;
 }
 
+.muted.no-margin {
+  margin-top: 0;
+}
+
 .path {
   overflow: hidden;
   text-overflow: ellipsis;

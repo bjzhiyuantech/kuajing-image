@@ -1444,8 +1444,20 @@ function compareVersions(left: string, right: string): number {
   return 0;
 }
 
-function extensionTarget(): "dev" | "prod" {
-  return chrome.runtime.getManifest().name.toLowerCase().includes("dev") ? "dev" : "prod";
+function extensionTarget(): "local" | "dev" | "prod" {
+  const manifestName = chrome.runtime.getManifest().name.toLowerCase();
+  if (manifestName.includes("dev")) {
+    return "dev";
+  }
+  if (manifestName.includes("本地") || manifestName.includes("local") || DEFAULT_API_BASE_URL.includes("127.0.0.1") || DEFAULT_API_BASE_URL.includes("localhost")) {
+    return "local";
+  }
+  return "prod";
+}
+
+function extensionTargetLabel(): string {
+  const target = extensionTarget();
+  return target === "local" ? "Local" : target === "dev" ? "Dev" : "Prod";
 }
 
 function extensionReleaseConfigUrl(baseUrl: string): string {
@@ -1793,8 +1805,9 @@ export function SidePanelApp() {
   });
   const [extensionUpdateDialogOpen, setExtensionUpdateDialogOpen] = useState(false);
   const [deploymentProfile, setDeploymentProfile] = useState<ExtensionDeploymentProfile | null>(null);
+  const isLocalEdition = deploymentProfile?.edition === "local" || extensionTarget() === "local";
   const canUseCategoryKit = deploymentCapabilityEnabled(deploymentProfile, "categoryKit");
-  const canUseBilling = deploymentCapabilityEnabled(deploymentProfile, "billing");
+  const canUseBilling = !isLocalEdition && deploymentCapabilityEnabled(deploymentProfile, "billing");
   const canUseExtension = deploymentCapabilityEnabled(deploymentProfile, "extension");
   const availableGenerationModes = useMemo(
     () => generationModes.filter((mode) => canUseCategoryKit || (mode.id !== "category-kit" && mode.id !== "single-poster")),
@@ -1878,7 +1891,7 @@ export function SidePanelApp() {
     );
   }, [accountQuota.remaining, auth.user, billingState.data.currentPlan, billingState.data.currentPlanExpiresAt]);
   const currentPlanLabel = auth.token ? billingState.data.currentPlan?.name || auth.user?.planName || auth.user?.planId || "套餐" : "套餐";
-  const requiresPhoneVerification = Boolean(auth.token && auth.user && !auth.user.phone);
+  const requiresPhoneVerification = !isLocalEdition && Boolean(auth.token && auth.user && !auth.user.phone);
 
   useEffect(() => {
     if (requiresPhoneVerification) {
@@ -1991,7 +2004,7 @@ export function SidePanelApp() {
       setBatchGenerationLocked(false);
       return;
     }
-    if (!auth.token) {
+    if (!isLocalEdition && !auth.token) {
       setPendingAuthAction("job");
       setActiveTool("account");
       setToolPanelOpen(true);
@@ -2015,7 +2028,7 @@ export function SidePanelApp() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [auth.token, task.id, task.status, textTranslationViewOpen]);
+  }, [auth.token, isLocalEdition, task.id, task.status, textTranslationViewOpen]);
 
   useEffect(() => {
     if (!toolPanelOpen) {
@@ -2334,7 +2347,7 @@ export function SidePanelApp() {
   }
 
   function requireAuth(action: PendingAuthAction): boolean {
-    if (auth.token.trim()) {
+    if (isLocalEdition || auth.token.trim()) {
       return true;
     }
     setPendingAuthAction(action);
@@ -2695,7 +2708,7 @@ export function SidePanelApp() {
   }
 
   async function pollBatchJob(jobId: string, token = auth.token): Promise<void> {
-    if (!token.trim() && !requireAuth("job")) {
+    if (!isLocalEdition && !token.trim() && !requireAuth("job")) {
       return;
     }
     const body = await fetchBatchJob(jobId, token);
@@ -2710,7 +2723,7 @@ export function SidePanelApp() {
   }
 
   async function refreshHistory(authAlreadyChecked = false, token = auth.token): Promise<void> {
-    if (!token.trim() && !authAlreadyChecked && !requireAuth("history")) {
+    if (!isLocalEdition && !token.trim() && !authAlreadyChecked && !requireAuth("history")) {
       return;
     }
     setHistoryState((current) => ({ ...current, error: "", loading: true }));
@@ -2747,7 +2760,7 @@ export function SidePanelApp() {
   }
 
   async function refreshStats(authAlreadyChecked = false, token = auth.token): Promise<void> {
-    if (!token.trim() && !authAlreadyChecked && !requireAuth("stats")) {
+    if (!isLocalEdition && !token.trim() && !authAlreadyChecked && !requireAuth("stats")) {
       return;
     }
     setStatsState((current) => ({ ...current, error: "", loading: true }));
@@ -3073,7 +3086,7 @@ export function SidePanelApp() {
       setAuthNotice("当前部署未开放支付、充值和邀请返现能力。");
       return;
     }
-    if ((tab === "billing" || tab === "history" || tab === "stats" || tab === "referral") && !auth.token.trim()) {
+    if (!isLocalEdition && (tab === "billing" || tab === "history" || tab === "stats" || tab === "referral") && !auth.token.trim()) {
       setPendingAuthAction(tab);
       setAuthMode("login");
       setAuthError("请先登录账号，再查看个人数据。");
@@ -3396,7 +3409,7 @@ export function SidePanelApp() {
             </ul>
           ) : null}
           <div className="update-dialog-meta">
-            <span>{extensionTarget() === "dev" ? "Dev" : "Prod"} 通道</span>
+            <span>{extensionTargetLabel()} 通道</span>
             <span>{formatBytes(update.sizeBytes)}</span>
           </div>
           <div className="edit-modal-actions">
@@ -3466,7 +3479,7 @@ export function SidePanelApp() {
     if (!editDialog) {
       return;
     }
-    if (!auth.token.trim() && !requireAuth("generate")) {
+    if (!isLocalEdition && !auth.token.trim() && !requireAuth("generate")) {
       return;
     }
 
@@ -4546,7 +4559,7 @@ export function SidePanelApp() {
       setTask({ id: "feature-disabled", status: "failed", message: "当前部署未开放品类套图和单品完整海报。", records: [] });
       return;
     }
-    if (!token.trim() && !authAlreadyChecked && !requireAuth("generate")) {
+    if (!isLocalEdition && !token.trim() && !authAlreadyChecked && !requireAuth("generate")) {
       return;
     }
     const title = form.product.title.trim();
@@ -4771,7 +4784,7 @@ export function SidePanelApp() {
     if (batchGenerationLocked) {
       return;
     }
-    if (!token.trim() && !authAlreadyChecked && !requireAuth("text-translation")) {
+    if (!isLocalEdition && !token.trim() && !authAlreadyChecked && !requireAuth("text-translation")) {
       return;
     }
     if (selectedTranslationImageUrls.length === 0) {
@@ -6354,7 +6367,7 @@ export function SidePanelApp() {
                 <div className="about-contact-grid">
                   <div>
                     <span>官网</span>
-            <strong>ai.neimou.com</strong>
+            <strong>{extensionTarget() === "local" ? "127.0.0.1:8787" : "ai.neimou.com"}</strong>
                   </div>
                   <div>
                     <span>客服微信</span>
@@ -6383,7 +6396,7 @@ export function SidePanelApp() {
                     </div>
                     <div>
                       <span>发布通道</span>
-                      <strong>{extensionTarget() === "dev" ? "Dev" : "Prod"}</strong>
+                      <strong>{extensionTargetLabel()}</strong>
                     </div>
                   </div>
                   {extensionVersionState.update ? (

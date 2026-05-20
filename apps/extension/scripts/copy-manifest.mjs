@@ -7,18 +7,31 @@ loadDotEnv(resolve(".env"));
 const outputDir = process.argv[2] || "dist";
 const manifest = JSON.parse(readFileSync(resolve("manifest.json"), "utf8"));
 const extensionPackage = JSON.parse(readFileSync(resolve("package.json"), "utf8"));
-const buildTarget = process.env.EXTENSION_BUILD_TARGET || "local";
+const rawBuildTarget = process.env.EXTENSION_BUILD_TARGET || "local";
+const buildTarget = rawBuildTarget === "dev" || rawBuildTarget === "prod" ? rawBuildTarget : "local";
 const apiBaseUrl =
   process.env.VITE_EXTENSION_API_BASE_URL ||
-  (buildTarget === "dev" ? process.env.EXTENSION_DEV_API_BASE_URL : process.env.EXTENSION_PROD_API_BASE_URL) ||
-  (buildTarget === "dev" ? "https://dev.neimou.com" : "https://ai.neimou.com");
+  (buildTarget === "local"
+    ? process.env.EXTENSION_LOCAL_API_BASE_URL
+    : buildTarget === "dev"
+      ? process.env.EXTENSION_DEV_API_BASE_URL
+      : process.env.EXTENSION_PROD_API_BASE_URL) ||
+  (buildTarget === "local" ? "http://127.0.0.1:8787" : buildTarget === "dev" ? "https://dev.neimou.com" : "https://ai.neimou.com");
 const extensionName =
   process.env.VITE_EXTENSION_NAME ||
-  (buildTarget === "dev" ? process.env.EXTENSION_DEV_NAME : process.env.EXTENSION_PROD_NAME) ||
-  (buildTarget === "dev" ? `${manifest.name} Dev` : manifest.name);
+  (buildTarget === "local"
+    ? process.env.EXTENSION_LOCAL_NAME
+    : buildTarget === "dev"
+      ? process.env.EXTENSION_DEV_NAME
+      : process.env.EXTENSION_PROD_NAME) ||
+  (buildTarget === "local" ? "商图AI本地助手" : buildTarget === "dev" ? `${manifest.name} Dev` : manifest.name);
 const extensionVersion =
   process.env.VITE_EXTENSION_VERSION ||
-  (buildTarget === "dev" ? process.env.EXTENSION_DEV_VERSION : process.env.EXTENSION_PROD_VERSION) ||
+  (buildTarget === "local"
+    ? process.env.EXTENSION_LOCAL_VERSION
+    : buildTarget === "dev"
+      ? process.env.EXTENSION_DEV_VERSION
+      : process.env.EXTENSION_PROD_VERSION) ||
   extensionPackage.version ||
   manifest.version;
 
@@ -26,7 +39,9 @@ manifest.name = extensionName;
 manifest.short_name = extensionName;
 manifest.version = extensionVersion;
 
-if (buildTarget === "dev") {
+if (buildTarget === "local") {
+  manifest.description = `${manifest.description} 本地单机版，默认连接 127.0.0.1。`;
+} else if (buildTarget === "dev") {
   manifest.description = `${manifest.description} Dev`;
 }
 

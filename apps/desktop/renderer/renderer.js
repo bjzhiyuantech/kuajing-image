@@ -158,13 +158,20 @@ document.querySelector("#open-dir").addEventListener("click", () => {
   void window.desktop.openServiceDir();
 });
 
-document.querySelector("#open-config").addEventListener("click", () => {
-  void window.desktop.openConfigFile();
+document.querySelector("#open-extension-dir").addEventListener("click", () => {
+  void window.desktop.openExtensionDir();
 });
 
-document.querySelector("#generate-secret").addEventListener("click", async () => {
-  const input = elements.form.elements.namedItem("JWT_SECRET");
-  input.value = await window.desktop.generateSecret();
+document.querySelector("#open-extension-folder").addEventListener("click", () => {
+  void window.desktop.openExtensionDir();
+});
+
+document.querySelector("#open-extension-zip-file").addEventListener("click", () => {
+  void window.desktop.openExtensionZip();
+});
+
+document.querySelector("#open-config").addEventListener("click", () => {
+  void window.desktop.openConfigFile();
 });
 
 elements.saveConfig.addEventListener("click", () => {

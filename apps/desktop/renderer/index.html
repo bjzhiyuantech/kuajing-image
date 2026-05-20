@@ -14,7 +14,8 @@
           <h1>商图 AI 单机版</h1>
         </div>
         <div class="top-actions">
-          <button id="open-service" class="primary">打开工作台</button>
+          <button id="open-service" class="primary">进入本地工作台</button>
+          <button id="open-extension-dir">本地插件</button>
           <button id="open-config">高级配置</button>
           <button id="open-dir">运行目录</button>
         </div>
@@ -69,7 +70,7 @@
             <div class="panel-header">
               <div>
                 <h2>界面配置</h2>
-                <p class="muted">填写常用项即可启动；高级参数仍可打开原始配置文件。</p>
+                <p class="muted">单机版只需要模型密钥、模型和本机端口；高级参数会自动生成。</p>
               </div>
               <div class="panel-actions">
                 <button id="reload-config" class="ghost">重载</button>
@@ -91,18 +92,6 @@
                   <span>图像模型</span>
                   <input name="OPENAI_IMAGE_MODEL" type="text" placeholder="gpt-image-2" />
                 </label>
-                <label class="field full">
-                  <span>火山 Ark API Key</span>
-                  <input name="ARK_API_KEY" type="password" autocomplete="off" placeholder="用于视频生成，可先留空" />
-                </label>
-                <label class="field">
-                  <span>Ark Base URL</span>
-                  <input name="ARK_BASE_URL" type="url" placeholder="留空使用火山默认地址" />
-                </label>
-                <label class="field">
-                  <span>Seedance 模型</span>
-                  <input name="SEEDANCE_MODEL" type="text" />
-                </label>
               </fieldset>
 
               <fieldset>
@@ -111,33 +100,13 @@
                   <span>访问端口</span>
                   <input name="PORT" type="number" min="1" max="65535" />
                 </label>
-                <label class="field">
-                  <span>内置 MySQL 密码</span>
-                  <input name="MYSQL_PASSWORD" type="password" autocomplete="off" />
-                </label>
               </fieldset>
 
               <fieldset>
-                <legend>管理员账号</legend>
-                <label class="field">
-                  <span>管理员邮箱</span>
-                  <input name="ADMIN_EMAIL" type="email" placeholder="admin@example.com" />
-                </label>
-                <label class="field">
-                  <span>管理员密码</span>
-                  <input name="ADMIN_PASSWORD" type="password" autocomplete="new-password" />
-                </label>
-                <label class="field">
-                  <span>显示名称</span>
-                  <input name="ADMIN_DISPLAY_NAME" type="text" />
-                </label>
-                <label class="field secret-field">
-                  <span>登录密钥</span>
-                  <div class="inline-field">
-                    <input name="JWT_SECRET" type="password" autocomplete="off" />
-                    <button id="generate-secret" type="button">生成</button>
-                  </div>
-                </label>
+                <legend>本地浏览器插件</legend>
+                <p class="field full muted no-margin">插件默认连接本机服务，可在 Chrome 或 Edge 的扩展管理页加载已解压目录。</p>
+                <button id="open-extension-folder" type="button">打开已解压插件目录</button>
+                <button id="open-extension-zip-file" type="button">定位插件压缩包</button>
               </fieldset>
             </form>
           </section>

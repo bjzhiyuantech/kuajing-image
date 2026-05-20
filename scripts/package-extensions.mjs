@@ -18,6 +18,10 @@ mkdirSync(outputDir, { recursive: true });
 
 const targets = [
   {
+    name: "local",
+    sourceDir: resolve(extensionDir, "dist-local")
+  },
+  {
     name: "dev",
     sourceDir: resolve(extensionDir, "dist-dev")
   },
@@ -27,8 +31,8 @@ const targets = [
   }
 ];
 
-if (!["all", "dev", "prod"].includes(requestedTarget)) {
-  console.error("Usage: node scripts/package-extensions.mjs [outputDir] [all|dev|prod]");
+if (!["all", "local", "dev", "prod"].includes(requestedTarget)) {
+  console.error("Usage: node scripts/package-extensions.mjs [outputDir] [all|local|dev|prod]");
   process.exit(1);
 }
 
@@ -64,7 +68,7 @@ function collectFiles(dir) {
     const stats = statSync(path);
     if (stats.isDirectory()) {
       entries.push(...collectFiles(path));
-    } else if (stats.isFile()) {
+    } else if (stats.isFile() && name !== ".DS_Store") {
       entries.push(path);
     }
   }

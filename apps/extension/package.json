@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json --noEmit && vite build && node scripts/copy-manifest.mjs",
+    "build:local": "tsc -p tsconfig.json --noEmit && EXTENSION_BUILD_TARGET=local vite build --outDir dist-local && EXTENSION_BUILD_TARGET=local node scripts/copy-manifest.mjs dist-local",
     "build:dev": "tsc -p tsconfig.json --noEmit && EXTENSION_BUILD_TARGET=dev vite build --outDir dist-dev && EXTENSION_BUILD_TARGET=dev node scripts/copy-manifest.mjs dist-dev",
     "build:prod": "tsc -p tsconfig.json --noEmit && EXTENSION_BUILD_TARGET=prod vite build --outDir dist-prod && EXTENSION_BUILD_TARGET=prod node scripts/copy-manifest.mjs dist-prod",
     "typecheck": "tsc -p tsconfig.json --noEmit"

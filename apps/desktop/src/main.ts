@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, shell } from "electron";
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { copyFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { copyFile, cp, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 type DesktopAction = "install" | "start" | "stop" | "status" | "logs" | "smoke";
@@ -28,7 +28,10 @@ const DESKTOP_ENV_DEFAULTS: Record<string, string> = {
   DATA_DIR: "./data",
   OPENAI_IMAGE_MODEL: "gpt-image-2",
   OPENAI_IMAGE_TIMEOUT_MS: "1200000",
-  SEEDANCE_MODEL: "doubao-seedance-2-0-fast-260128",
+  EXTENSION_LOCAL_API_BASE_URL: "http://127.0.0.1:8787",
+  EXTENSION_LOCAL_DOWNLOAD_URL: "/downloads/kuajing-image-extension-local-latest.zip",
+  EXTENSION_LOCAL_LATEST_DOWNLOAD_URL: "/downloads/kuajing-image-extension-local-latest.zip",
+  EXTENSION_LOCAL_INSTALL_HELP_URL: "/install-help.html",
   MYSQL_HOST: "mysql",
   MYSQL_PORT: "3306",
   MYSQL_USER: "gpt_image_canvas",
@@ -36,28 +39,18 @@ const DESKTOP_ENV_DEFAULTS: Record<string, string> = {
   MYSQL_DATABASE: "gpt_image_canvas",
   MYSQL_ROOT_PASSWORD: "root",
   JWT_SECRET: "",
-  ADMIN_EMAIL: "",
-  ADMIN_PASSWORD: "",
-  ADMIN_DISPLAY_NAME: "Administrator",
-  ALLOW_DEMO_AUTH: "false"
+  ALLOW_DEMO_AUTH: "true"
 };
 
 const CONFIG_FIELDS = [
   "OPENAI_API_KEY",
   "OPENAI_BASE_URL",
   "OPENAI_IMAGE_MODEL",
-  "ARK_API_KEY",
-  "ARK_BASE_URL",
-  "SEEDANCE_MODEL",
-  "PORT",
-  "ADMIN_EMAIL",
-  "ADMIN_PASSWORD",
-  "ADMIN_DISPLAY_NAME",
-  "JWT_SECRET",
-  "MYSQL_PASSWORD"
+  "PORT"
 ];
 
 let mainWindow: BrowserWindow | null = null;
+let workbenchWindow: BrowserWindow | null = null;
 let activeProcess: ReturnType<typeof spawn> | null = null;
 
 function createWindow() {
@@ -161,9 +154,40 @@ async function ensureStandalone() {
   await mkdir(path.join(targetDir, "data"), { recursive: true });
   await mkdir(path.join(targetDir, "downloads"), { recursive: true });
   await mkdir(path.join(targetDir, "secrets", "apns"), { recursive: true });
+  await syncBundledExtensionAssets(sourceDir, targetDir);
   await normalizeDesktopEnv(envFile);
 
   return { sourceDir, targetDir, envFile };
+}
+
+async function syncBundledExtensionAssets(sourceDir: string, targetDir: string) {
+  const sourceExtensionDir = path.join(sourceDir, "bundled-extension", "local");
+  const targetExtensionDir = path.join(targetDir, "downloads", "extension-local");
+  if (await isDirectory(sourceExtensionDir)) {
+    await rmIfDirectory(targetExtensionDir);
+    await cp(sourceExtensionDir, targetExtensionDir, { recursive: true, force: true });
+  }
+
+  const sourceDownloadsDir = path.join(sourceDir, "downloads");
+  const targetDownloadsDir = path.join(targetDir, "downloads");
+  if (!(await isDirectory(sourceDownloadsDir))) {
+    return;
+  }
+
+  const entries = await readdir(sourceDownloadsDir);
+  for (const entry of entries) {
+    if (!entry.startsWith("kuajing-image-extension-local-")) {
+      continue;
+    }
+    await copyFile(path.join(sourceDownloadsDir, entry), path.join(targetDownloadsDir, entry));
+  }
+}
+
+async function rmIfDirectory(filePath: string) {
+  if (!(await isDirectory(filePath))) {
+    return;
+  }
+  await rm(filePath, { recursive: true, force: true });
 }
 
 function extendedPath() {
@@ -245,15 +269,16 @@ function serializeEnv(values: Map<string, string>) {
   const known = new Set([...Object.keys(DESKTOP_ENV_DEFAULTS), ...CONFIG_FIELDS]);
   const groups: Array<[string, string[]]> = [
     ["# 桌面单机版常用配置", ["DEPLOYMENT_PROFILE", "DEPLOYMENT_PROFILE_NAME", "DEPLOYMENT_TARGET", "HOST", "PORT", "PUBLIC_PORT", "DATA_DIR"]],
-    ["# 模型配置", ["OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_IMAGE_MODEL", "OPENAI_IMAGE_TIMEOUT_MS", "ARK_API_KEY", "ARK_BASE_URL", "SEEDANCE_MODEL"]],
-    ["# 管理员账号", ["JWT_SECRET", "ADMIN_EMAIL", "ADMIN_PASSWORD", "ADMIN_DISPLAY_NAME", "ALLOW_DEMO_AUTH"]],
-    ["# 内置 MySQL", ["MYSQL_HOST", "MYSQL_PORT", "MYSQL_USER", "MYSQL_PASSWORD", "MYSQL_DATABASE", "MYSQL_ROOT_PASSWORD"]],
+    ["# 生图模型", ["OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_IMAGE_MODEL", "OPENAI_IMAGE_TIMEOUT_MS"]],
+    ["# 本地浏览器插件", ["EXTENSION_LOCAL_API_BASE_URL", "EXTENSION_LOCAL_DOWNLOAD_URL", "EXTENSION_LOCAL_LATEST_DOWNLOAD_URL", "EXTENSION_LOCAL_INSTALL_HELP_URL"]],
+    ["# 自动维护：单机免登录", ["JWT_SECRET", "ALLOW_DEMO_AUTH"]],
+    ["# 自动维护：内置 MySQL", ["MYSQL_HOST", "MYSQL_PORT", "MYSQL_USER", "MYSQL_PASSWORD", "MYSQL_DATABASE", "MYSQL_ROOT_PASSWORD"]],
     ["# 其他高级配置", [...values.keys()].filter((key) => !known.has(key)).sort()]
   ];
 
   const lines = [
     "# 由商图 AI 单机版桌面应用生成。",
-    "# 常用配置请优先在桌面应用内修改；高级配置仍可手动编辑本文件。",
+    "# 常用配置请优先在桌面应用内修改；自动维护项通常无需手动编辑。",
     ""
   ];
   const written = new Set<string>();
@@ -270,7 +295,7 @@ function serializeEnv(values: Map<string, string>) {
   }
 
   for (const [key, value] of values) {
-    if (!written.has(key)) lines.push(`${key}=${formatEnvValue(value)}`);
+    if (!written.has(key) && !known.has(key)) lines.push(`${key}=${formatEnvValue(value)}`);
   }
 
   return `${lines.join("\n").trimEnd()}\n`;
@@ -368,6 +393,46 @@ function normalizePort(value: string | undefined) {
 
 function serviceUrlFromEnv(env: Map<string, string>) {
   return `http://127.0.0.1:${normalizePort(env.get("PUBLIC_PORT") || env.get("PORT"))}`;
+}
+
+async function openWorkbench() {
+  const { env } = await readEnvFile();
+  const serviceUrl = serviceUrlFromEnv(env);
+  if (workbenchWindow && !workbenchWindow.isDestroyed()) {
+    workbenchWindow.focus();
+    await workbenchWindow.loadURL(serviceUrl);
+    return { ok: true, url: serviceUrl };
+  }
+
+  workbenchWindow = new BrowserWindow({
+    width: 1440,
+    height: 940,
+    minWidth: 1080,
+    minHeight: 720,
+    title: "商图 AI 本地工作台",
+    backgroundColor: "#0a0a0a",
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  });
+  workbenchWindow.webContents.setWindowOpenHandler(({ url }) => {
+    void shell.openExternal(url);
+    return { action: "deny" };
+  });
+  workbenchWindow.webContents.on("will-navigate", (event, url) => {
+    if (url.startsWith(serviceUrl)) {
+      return;
+    }
+    event.preventDefault();
+    void shell.openExternal(url);
+  });
+  workbenchWindow.on("closed", () => {
+    workbenchWindow = null;
+  });
+  await workbenchWindow.loadURL(serviceUrl);
+  return { ok: true, url: serviceUrl };
 }
 
 function dockerArgs(composeArgs: string[], envFile: string) {
@@ -481,11 +546,7 @@ ipcMain.handle("desktop:getConfig", async () => getConfig());
 ipcMain.handle("desktop:saveConfig", async (_event, values: Record<string, string>) => saveConfig(values));
 ipcMain.handle("desktop:generateSecret", async () => randomBytes(32).toString("hex"));
 ipcMain.handle("desktop:runAction", async (_event, action: DesktopAction) => runAction(action));
-ipcMain.handle("desktop:openService", async () => {
-  const { env } = await readEnvFile();
-  await shell.openExternal(serviceUrlFromEnv(env));
-  return { ok: true };
-});
+ipcMain.handle("desktop:openService", async () => openWorkbench());
 ipcMain.handle("desktop:openDockerDownload", async () => {
   await shell.openExternal("https://www.docker.com/products/docker-desktop/");
   return { ok: true };
@@ -493,6 +554,16 @@ ipcMain.handle("desktop:openDockerDownload", async () => {
 ipcMain.handle("desktop:openServiceDir", async () => {
   const { targetDir } = await ensureStandalone();
   await shell.openPath(targetDir);
+  return { ok: true };
+});
+ipcMain.handle("desktop:openExtensionDir", async () => {
+  const { targetDir } = await ensureStandalone();
+  await shell.openPath(path.join(targetDir, "downloads", "extension-local"));
+  return { ok: true };
+});
+ipcMain.handle("desktop:openExtensionZip", async () => {
+  const { targetDir } = await ensureStandalone();
+  await shell.showItemInFolder(path.join(targetDir, "downloads", "kuajing-image-extension-local-latest.zip"));
   return { ok: true };
 });
 ipcMain.handle("desktop:openConfigFile", async () => {

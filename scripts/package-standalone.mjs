@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { copyFile, cp, mkdir, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -153,6 +153,41 @@ async function includeImageArchive(options, packageDir) {
   return "images/local-images.tar";
 }
 
+async function includeLocalExtension(packageDir) {
+  run("corepack", ["pnpm", "--filter", "@gpt-image-canvas/extension", "build:local"]);
+  const extensionSourceDir = path.join(REPO_ROOT, "apps/extension/dist-local");
+  const extensionDownloadsDir = path.join(REPO_ROOT, "dist/standalone/.extension-downloads");
+  await rm(extensionDownloadsDir, { recursive: true, force: true });
+  await mkdir(extensionDownloadsDir, { recursive: true });
+  run(process.execPath, ["scripts/package-extensions.mjs", path.relative(REPO_ROOT, extensionDownloadsDir), "local"]);
+
+  const downloadsDir = path.join(packageDir, "downloads");
+  const bundledExtensionDir = path.join(packageDir, "bundled-extension", "local");
+  await mkdir(downloadsDir, { recursive: true });
+  await rm(bundledExtensionDir, { recursive: true, force: true });
+  await cp(extensionSourceDir, bundledExtensionDir, {
+    recursive: true,
+    force: true,
+    filter: (item) => path.basename(item) !== ".DS_Store"
+  });
+
+  const manifestPath = path.join(extensionDownloadsDir, "kuajing-image-extension-local-latest.json");
+  const releaseManifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  const zipFileName = typeof releaseManifest.fileName === "string" && releaseManifest.fileName
+    ? releaseManifest.fileName
+    : "kuajing-image-extension-local-latest.zip";
+  const latestZipName = "kuajing-image-extension-local-latest.zip";
+  await copyFile(path.join(extensionDownloadsDir, zipFileName), path.join(downloadsDir, zipFileName));
+  await copyFile(path.join(extensionDownloadsDir, latestZipName), path.join(downloadsDir, latestZipName));
+  await copyFile(manifestPath, path.join(downloadsDir, "kuajing-image-extension-local-latest.json"));
+  return [
+    `downloads/${zipFileName}`,
+    `downloads/${latestZipName}`,
+    "downloads/kuajing-image-extension-local-latest.json",
+    "bundled-extension/local"
+  ];
+}
+
 function archiveTar(outputDir, packageName) {
   const result = spawnSync("tar", ["-czf", `${packageName}.tar.gz`, packageName], {
     cwd: outputDir,
@@ -212,6 +247,7 @@ async function main() {
   await cp(bundleDir, packageDir, { recursive: true, force: true });
 
   const includedFiles = [];
+  includedFiles.push(...(await includeLocalExtension(packageDir)));
   if (options.withImages) {
     includedFiles.push(await includeImageArchive(options, packageDir));
   }

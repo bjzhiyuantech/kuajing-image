@@ -207,6 +207,21 @@ const DEFAULT_DEPLOYMENT_PROFILE: DeploymentProfileResponse = {
     notificationProviders: ["web", "apns", "getui", "wechat-miniapp"]
   }
 };
+const LOCAL_DESKTOP_USER: AuthUser = {
+  id: "local-desktop-user",
+  email: "",
+  phone: "local",
+  phoneVerifiedAt: new Date(0).toISOString(),
+  displayName: "本地工作台",
+  role: "user",
+  planName: "单机版",
+  quotaTotal: 0,
+  quotaUsed: 0,
+  balanceCents: 0,
+  packageRemaining: 0,
+  storageQuotaBytes: 0,
+  storageUsedBytes: 0
+};
 const initialCanvasPreviewWidths = new Map<string, AssetPreviewWidth>();
 const shapeUtils = [GenerationPlaceholderShapeUtil];
 const tldrawOptions = {
@@ -846,6 +861,7 @@ interface ExtensionReleaseTarget {
 }
 
 interface ExtensionReleaseResponse {
+  local?: ExtensionReleaseTarget;
   prod?: ExtensionReleaseTarget;
 }
 
@@ -4673,6 +4689,7 @@ function formatNotificationTime(value: string): string {
 
 function TopNavigation({
   canUsePublicGallery,
+  isLocalEdition,
   route,
   user,
   generationHistoryCount,
@@ -4689,6 +4706,7 @@ function TopNavigation({
   onLogout
 }: {
   canUsePublicGallery: boolean;
+  isLocalEdition: boolean;
   route: AppRoute;
   user: AuthUser;
   generationHistoryCount: number;
@@ -4752,6 +4770,7 @@ function TopNavigation({
             作品库
           </a>
           ) : null}
+          {!isLocalEdition ? (
           <a
             aria-current={route === "account" ? "page" : undefined}
             className="top-navigation__link"
@@ -4766,6 +4785,8 @@ function TopNavigation({
             <User className="size-4" aria-hidden="true" />
             账户
           </a>
+          ) : null}
+          {!isLocalEdition ? (
           <a
             aria-current={route === "help" ? "page" : undefined}
             className="top-navigation__link"
@@ -4780,7 +4801,8 @@ function TopNavigation({
             <BookOpen className="size-4" aria-hidden="true" />
             帮助
           </a>
-          {isAdminUser(user) ? (
+          ) : null}
+          {!isLocalEdition && isAdminUser(user) ? (
             <a
               aria-current={route === "admin" ? "page" : undefined}
               className="top-navigation__link"
@@ -4798,6 +4820,8 @@ function TopNavigation({
           ) : null}
         </nav>
         <div className="top-navigation__ops" aria-label="运营入口">
+          {!isLocalEdition ? (
+          <>
           <button type="button" onClick={() => onNavigate("account")}>
             <User className="size-3.5" aria-hidden="true" />
             账户
@@ -4806,6 +4830,8 @@ function TopNavigation({
             <Sparkles className="size-3.5" aria-hidden="true" />
             额度 {packageRemaining.toLocaleString("zh-CN")}
           </button>
+          </>
+          ) : null}
           {canUsePublicGallery ? (
           <button type="button" onClick={() => onNavigate("gallery")}>
             <ImageIcon className="size-3.5" aria-hidden="true" />
@@ -4819,6 +4845,7 @@ function TopNavigation({
           <span>任务 {ecommerceStats.totalJobs}</span>
           <span>图 {ecommerceStats.generatedImages}</span>
         </div>
+        {!isLocalEdition ? (
         <div className="top-navigation__account">
           <NotificationCenter
             isOpen={isNotificationCenterOpen}
@@ -4855,6 +4882,7 @@ function TopNavigation({
             <LogOut className="size-4" aria-hidden="true" />
           </button>
         </div>
+        ) : null}
       </div>
     </header>
   );
@@ -5921,13 +5949,14 @@ export function App() {
     [browserKind, pluginGuideLinks]
   );
   const pluginBrowserLabel = useMemo(() => browserLabel(browserKind), [browserKind]);
+  const isLocalEdition = deploymentProfile.edition === "local";
   const canUseExtension = deploymentCapabilityEnabled(deploymentProfile, "extension");
   const canUseMobileApp = deploymentCapabilityEnabled(deploymentProfile, "mobileApp");
-  const canUsePublicGallery = deploymentCapabilityEnabled(deploymentProfile, "publicGallery");
+  const canUsePublicGallery = isLocalEdition || deploymentCapabilityEnabled(deploymentProfile, "publicGallery");
   const canUseCategoryKit = deploymentCapabilityEnabled(deploymentProfile, "categoryKit");
   const canUseSeedanceVideoFeature = deploymentCapabilityEnabled(deploymentProfile, "seedanceVideo");
-  const canUseBilling = deploymentCapabilityEnabled(deploymentProfile, "billing");
-  const canUseAdminConsole = deploymentCapabilityEnabled(deploymentProfile, "adminConsole");
+  const canUseBilling = !isLocalEdition && deploymentCapabilityEnabled(deploymentProfile, "billing");
+  const canUseAdminConsole = !isLocalEdition && deploymentCapabilityEnabled(deploymentProfile, "adminConsole");
   const dismissedPluginPromptRef = useRef(false);
   const pluginProbeRequestRef = useRef(0);
   const knownNotificationIdsRef = useRef<Set<string>>(new Set());
@@ -6056,7 +6085,7 @@ export function App() {
     }
 
     const resolvedRoute = route === "admin" && !isAdminUser(currentUser) ? "canvas" : route;
-    const requiresPhoneVerification = !!currentUser && !currentUser.phone && !isAdminUser(currentUser);
+    const requiresPhoneVerification = !isLocalEdition && !!currentUser && !currentUser.phone && !isAdminUser(currentUser);
     const visibleRoute = requiresPhoneVerification && resolvedRoute !== "help" ? "account" : resolvedRoute;
     if (visibleRoute !== "canvas") {
       return;
@@ -6071,7 +6100,7 @@ export function App() {
       pluginProbeRequestRef.current += 1;
       window.clearTimeout(timerId);
     };
-  }, [canUseExtension, currentUser, isAuthenticated, probeAndMaybeShowPluginPrompt, route]);
+  }, [canUseExtension, currentUser, isAuthenticated, isLocalEdition, probeAndMaybeShowPluginPrompt, route]);
 
   useEffect(() => {
     if (sidebarTab === "video" && (!canUseSeedanceVideoFeature || !isAdminUser(currentUser))) {
@@ -6104,7 +6133,7 @@ export function App() {
 
   const refreshNotifications = useCallback(
     async (signal?: AbortSignal): Promise<void> => {
-      if (!isAuthenticated) {
+      if (isLocalEdition || !isAuthenticated) {
         setNotifications([]);
         setNotificationUnreadCount(0);
         setToastNotification(null);
@@ -6118,7 +6147,7 @@ export function App() {
         applyNotificationResponse(data);
       }
     },
-    [applyNotificationResponse, isAuthenticated]
+    [applyNotificationResponse, isAuthenticated, isLocalEdition]
   );
 
   const handleNotificationAction = useCallback(
@@ -6135,13 +6164,13 @@ export function App() {
         navigateToRoute(canUsePublicGallery ? "gallery" : "canvas");
         return;
       }
-      if (notification.actionUrl?.startsWith("/account")) {
+      if (!isLocalEdition && notification.actionUrl?.startsWith("/account")) {
         navigateToRoute("account");
         return;
       }
       navigateToRoute(canUsePublicGallery ? "gallery" : "canvas");
     },
-    [applyNotificationResponse, canUsePublicGallery, navigateToRoute]
+    [applyNotificationResponse, canUsePublicGallery, isLocalEdition, navigateToRoute]
   );
 
   const markAllNotificationsRead = useCallback((): void => {
@@ -6151,7 +6180,7 @@ export function App() {
   }, [applyNotificationResponse]);
 
   useEffect(() => {
-    if (!isAuthenticated) {
+    if (isLocalEdition || !isAuthenticated) {
       setNotifications([]);
       setNotificationUnreadCount(0);
       setToastNotification(null);
@@ -6170,7 +6199,7 @@ export function App() {
       controller.abort();
       window.clearInterval(timerId);
     };
-  }, [isAuthenticated, refreshNotifications]);
+  }, [isAuthenticated, isLocalEdition, refreshNotifications]);
 
   useEffect(() => {
     if (!toastNotification) {
@@ -6197,6 +6226,14 @@ export function App() {
   }, [navigateToRoute, route]);
 
   const handleLogout = useCallback((): void => {
+    if (isLocalEdition) {
+      setCurrentUser(LOCAL_DESKTOP_USER);
+      setAuthStatus("authenticated");
+      if (route !== "canvas") {
+        navigateToRoute("canvas");
+      }
+      return;
+    }
     clearStoredAuthToken();
     setCurrentUser(null);
     setAuthStatus("anonymous");
@@ -6209,9 +6246,15 @@ export function App() {
     if (route !== "canvas") {
       navigateToRoute("canvas");
     }
-  }, [navigateToRoute, route]);
+  }, [isLocalEdition, navigateToRoute, route]);
 
   const restoreStoredSession = useCallback(async (): Promise<void> => {
+    if (deploymentProfile.edition === "local") {
+      clearStoredAuthToken();
+      setCurrentUser(LOCAL_DESKTOP_USER);
+      setAuthStatus("authenticated");
+      return;
+    }
     if (!getStoredAuthToken()) {
       setAuthStatus("anonymous");
       return;
@@ -6226,12 +6269,18 @@ export function App() {
       setCurrentUser(null);
       setAuthStatus("anonymous");
     }
-  }, []);
+  }, [deploymentProfile.edition]);
 
   useEffect(() => {
     let isMounted = true;
 
     async function restoreSession(): Promise<void> {
+      if (deploymentProfile.edition === "local") {
+        clearStoredAuthToken();
+        setCurrentUser(LOCAL_DESKTOP_USER);
+        setAuthStatus("authenticated");
+        return;
+      }
       if (!getStoredAuthToken()) {
         setAuthStatus("anonymous");
         return;
@@ -6259,7 +6308,7 @@ export function App() {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [deploymentProfile.edition]);
 
   useEffect(() => {
     const handleExtensionAuthMessage = (event: MessageEvent): void => {
@@ -6295,7 +6344,14 @@ export function App() {
         }
         const config = (await response.json()) as AppConfig;
         if (!controller.signal.aborted) {
-          setDeploymentProfile(parseDeploymentProfile(config.deployment));
+          const nextProfile = parseDeploymentProfile(config.deployment);
+          setDeploymentProfile(nextProfile);
+          if (nextProfile.edition === "local") {
+            clearStoredAuthToken();
+            setCurrentUser(LOCAL_DESKTOP_USER);
+            setAuthStatus("authenticated");
+            setAuthMode("login");
+          }
         }
       } catch {
         // Keep SaaS-compatible defaults if this endpoint is unavailable in older deployments.
@@ -6326,7 +6382,7 @@ export function App() {
         }
         const manifest = (await response.json()) as ExtensionReleaseResponse;
         if (!controller.signal.aborted) {
-          setPluginGuideLinks(resolveExtensionReleaseLink(manifest.prod));
+          setPluginGuideLinks(resolveExtensionReleaseLink(isLocalEdition ? manifest.local ?? manifest.prod : manifest.prod));
         }
       } catch {
         // Keep the baked-in links if release settings are unavailable.
@@ -6335,7 +6391,7 @@ export function App() {
 
     void loadExtensionRelease();
     return () => controller.abort();
-  }, [canUseExtension]);
+  }, [canUseExtension, isLocalEdition]);
 
   useEffect(() => {
     if (!canUseMobileApp) {
@@ -6387,6 +6443,12 @@ export function App() {
 
   useEffect(() => {
     const handleUnauthorized = (): void => {
+      if (isLocalEdition) {
+        clearStoredAuthToken();
+        setCurrentUser(LOCAL_DESKTOP_USER);
+        setAuthStatus("authenticated");
+        return;
+      }
       setCurrentUser(null);
       setAuthStatus("anonymous");
       setAuthMode("login");
@@ -6402,7 +6464,7 @@ export function App() {
     return () => {
       window.removeEventListener("auth:unauthorized", handleUnauthorized);
     };
-  }, [navigateToRoute, route]);
+  }, [isLocalEdition, navigateToRoute, route]);
 
   useEffect(() => {
     if (isAuthenticated && (window.location.pathname === "/login" || window.location.pathname === "/register")) {
@@ -6415,6 +6477,9 @@ export function App() {
   }, [currentUser, isAuthenticated, navigateToRoute, route]);
 
   const refreshCurrentUser = useCallback(async (): Promise<void> => {
+    if (isLocalEdition) {
+      return;
+    }
     if (!getStoredAuthToken()) {
       return;
     }
@@ -6424,7 +6489,7 @@ export function App() {
     } catch {
       // Auth expiration is handled globally by authFetch.
     }
-  }, []);
+  }, [isLocalEdition]);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -6446,7 +6511,7 @@ export function App() {
   }, [isAuthenticated, refreshCurrentUser]);
 
   useEffect(() => {
-    if (!isAuthenticated || !currentUser || currentUser.phone || isAdminUser(currentUser)) {
+    if (isLocalEdition || !isAuthenticated || !currentUser || currentUser.phone || isAdminUser(currentUser)) {
       return;
     }
 
@@ -6456,7 +6521,7 @@ export function App() {
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [currentUser, isAuthenticated, refreshCurrentUser]);
+  }, [currentUser, isAuthenticated, isLocalEdition, refreshCurrentUser]);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -8679,10 +8744,12 @@ export function App() {
   }
 
   const resolvedRoute = route === "admin" && !isAdminUser(currentUser) ? "canvas" : route;
-  const requiresPhoneVerification = !currentUser.phone && !isAdminUser(currentUser);
+  const requiresPhoneVerification = !isLocalEdition && !currentUser.phone && !isAdminUser(currentUser);
   const capabilityVisibleRoute =
     resolvedRoute === "gallery" && !canUsePublicGallery
       ? "canvas"
+      : isLocalEdition && (resolvedRoute === "account" || resolvedRoute === "admin" || resolvedRoute === "help")
+        ? "canvas"
       : resolvedRoute === "admin" && !canUseAdminConsole
         ? "canvas"
         : resolvedRoute;
@@ -8712,6 +8779,7 @@ export function App() {
           ecommerceStats={ecommerceStats}
           generationHistoryCount={generationHistory.length}
           isNotificationCenterOpen={isNotificationCenterOpen}
+          isLocalEdition={isLocalEdition}
           notifications={notifications}
           notificationUnreadCount={notificationUnreadCount}
           route={visibleRoute}
@@ -10006,8 +10074,8 @@ export function App() {
           />
         </Suspense>
       ) : null}
-      {visibleRoute === "help" ? <HelpCenterPage onBack={() => navigateToRoute("canvas")} /> : null}
-      {visibleRoute === "account" ? (
+      {!isLocalEdition && visibleRoute === "help" ? <HelpCenterPage onBack={() => navigateToRoute("canvas")} /> : null}
+      {!isLocalEdition && visibleRoute === "account" ? (
         <AccountPage
           billingEnabled={canUseBilling}
           mobile={isMobileDrawer}
@@ -10024,7 +10092,7 @@ export function App() {
           onBindPhone={bindPhone}
         />
       ) : null}
-      {visibleRoute === "admin" && isAdminUser(currentUser) && canUseAdminConsole ? <AdminPage /> : null}
+      {!isLocalEdition && visibleRoute === "admin" && isAdminUser(currentUser) && canUseAdminConsole ? <AdminPage /> : null}
       {canUseMobileApp && isMobileAppPromptOpen ? (
         <MobileAppPromptOverlay
           downloadUrl={mobileAppDownloadUrl}
