@@ -6,6 +6,7 @@ node_modules
 data
 .env
 .env.*
+secrets
 generated
 generated-assets
 assets/generated

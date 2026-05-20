@@ -81,9 +81,9 @@ App({
 
   updateNotificationBadge(unreadCount) {
     if (unreadCount > 0) {
-      wx.setTabBarBadge({ index: 3, text: unreadCount > 99 ? "99+" : String(unreadCount) }).catch(() => undefined);
+      wx.setTabBarBadge({ index: 2, text: unreadCount > 99 ? "99+" : String(unreadCount) }).catch(() => undefined);
     } else {
-      wx.removeTabBarBadge({ index: 3 }).catch(() => undefined);
+      wx.removeTabBarBadge({ index: 2 }).catch(() => undefined);
     }
   },
 

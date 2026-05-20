@@ -59,6 +59,7 @@ import type {
   OutputFormat,
   SaveCategoryKitPlannerConfigRequest,
   SaveEcommerceGenerationConcurrencyConfigRequest,
+  SaveAppReleaseConfigRequest,
   SaveDemoCanvasConfigRequest,
   SaveSeedanceVideoConfigRequest,
   SaveStorageConfigRequest,
@@ -69,7 +70,7 @@ import type {
 } from "@gpt-image-canvas/shared";
 
 type AuthMode = "login" | "register";
-type AdminTab = "overview" | "models" | "categoryStrategies" | "storage" | "billing" | "redemption" | "extension" | "auth" | "help" | "plans" | "users" | "referral" | "demoCanvas" | "gallery" | "ledger";
+type AdminTab = "overview" | "models" | "categoryStrategies" | "storage" | "billing" | "redemption" | "extension" | "appRelease" | "auth" | "help" | "plans" | "users" | "referral" | "demoCanvas" | "gallery" | "ledger";
 
 const adminTabs: Array<{ id: AdminTab; label: string }> = [
   { id: "overview", label: "概览" },
@@ -79,6 +80,7 @@ const adminTabs: Array<{ id: AdminTab; label: string }> = [
   { id: "billing", label: "计费支付" },
   { id: "redemption", label: "兑换码" },
   { id: "extension", label: "插件发布" },
+  { id: "appRelease", label: "App 版本" },
   { id: "auth", label: "登录" },
   { id: "help", label: "帮助中心" },
   { id: "plans", label: "套餐" },
@@ -94,7 +96,8 @@ const DEFAULT_SEEDANCE_MODEL = "doubao-seedance-2-0-fast-260128";
 const textModelModuleOptions: Array<{ id: CategoryKitPlannerModule; label: string }> = [
   { id: "prompt-optimizer", label: "提示词优化" },
   { id: "category-kit-planner", label: "品类套图规划" },
-  { id: "category-classifier", label: "类目识别" }
+  { id: "category-classifier", label: "类目识别" },
+  { id: "video-storyboard-planner", label: "视频分镜规划" }
 ];
 
 const audienceCards = [
@@ -1757,6 +1760,7 @@ export function AdminPage() {
     createEcommerceGenerationConcurrencyForm()
   );
   const [extensionRelease, setExtensionRelease] = useState<ExtensionReleaseFormState>(createExtensionReleaseForm());
+  const [appRelease, setAppRelease] = useState<AppReleaseFormState>(createAppReleaseForm());
   const [alipaySettings, setAlipaySettings] = useState<AlipayFormState>(createAlipayForm());
   const [wechatMiniAppSettings, setWechatMiniAppSettings] = useState<WechatMiniAppFormState>(createWechatMiniAppForm());
   const [smtpSettings, setSmtpSettings] = useState<SmtpFormState>(createSmtpForm());
@@ -1807,6 +1811,7 @@ export function AdminPage() {
         seedanceVideoResponse,
         ecommerceConcurrencyResponse,
         extensionReleaseResponse,
+        appReleaseResponse,
         alipayResponse,
         wechatResponse,
         smtpResponse,
@@ -1832,6 +1837,7 @@ export function AdminPage() {
         authFetch("/api/admin/video/seedance"),
         authFetch("/api/admin/image-generation/concurrency"),
         authFetch("/api/admin/extension-release"),
+        authFetch("/api/admin/app-release"),
         authFetch("/api/admin/payment/alipay"),
         authFetch("/api/admin/auth/wechat/miniapp"),
         authFetch("/api/admin/email/smtp"),
@@ -1890,6 +1896,9 @@ export function AdminPage() {
       }
       if (extensionReleaseResponse.ok) {
         setExtensionRelease(parseExtensionReleaseForm(await extensionReleaseResponse.json()));
+      }
+      if (appReleaseResponse.ok) {
+        setAppRelease(parseAppReleaseForm(await appReleaseResponse.json()));
       }
       if (alipayResponse.ok) {
         setAlipaySettings(parseAlipayForm(await alipayResponse.json()));
@@ -2492,8 +2501,40 @@ export function AdminPage() {
     }
   }
 
+  async function saveAppRelease(): Promise<void> {
+    setSavingBilling("app-release");
+    setError("");
+    setNotice("");
+    try {
+      const response = await authFetch("/api/admin/app-release", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(appReleaseToPayload(appRelease))
+      });
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "App 版本配置保存失败。"));
+      }
+      setNotice("App 版本配置已保存。");
+      setAppRelease(parseAppReleaseForm(await response.json()));
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "App 版本配置保存失败。");
+    } finally {
+      setSavingBilling("");
+    }
+  }
+
   function updateExtensionReleaseTarget(target: keyof ExtensionReleaseFormState, patch: Partial<ExtensionReleaseTargetFormState>): void {
     setExtensionRelease((current) => ({
+      ...current,
+      [target]: {
+        ...current[target],
+        ...patch
+      }
+    }));
+  }
+
+  function updateAppReleaseTarget(target: keyof AppReleaseFormState, patch: Partial<AppReleaseTargetFormState>): void {
+    setAppRelease((current) => ({
       ...current,
       [target]: {
         ...current[target],
@@ -3494,6 +3535,54 @@ export function AdminPage() {
             <button className="primary-action h-10" disabled={savingBilling === "extension-release"} type="button" onClick={() => void saveExtensionRelease()}>
               {savingBilling === "extension-release" ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Save className="size-4" aria-hidden="true" />}
               保存插件发布配置
+            </button>
+          </div>
+        </section>
+        ) : null}
+
+        {activeTab === "appRelease" ? (
+        <section className="admin-table-card admin-billing-card" aria-labelledby="app-release-title">
+          <div className="admin-table-card__title">
+            <Phone className="size-4" aria-hidden="true" />
+            <h2 id="app-release-title">App 版本管理</h2>
+          </div>
+          <p className="admin-panel-note">这里配置移动端启动时读取的版本信息。客户端当前版本低于这里的版本号时，会弹出更新提示并引导用户打开下载地址。</p>
+          <div className="admin-billing-grid">
+            {(["ios", "android"] as const).map((target) => {
+              const form = appRelease[target];
+              return (
+                <div className="admin-form-panel" key={target}>
+                  <div className="admin-form-panel__title-row">
+                    <div>
+                      <p className="settings-eyebrow">{target === "ios" ? "iOS" : "Android"}</p>
+                      <h3>{target === "ios" ? "iOS 版本" : "Android 版本"}</h3>
+                    </div>
+                    <label className="admin-switch">
+                      <input checked={form.enabled} type="checkbox" onChange={(event) => updateAppReleaseTarget(target, { enabled: event.target.checked })} />
+                      <span>{form.enabled ? "启用提示" : "关闭提示"}</span>
+                    </label>
+                  </div>
+                  <div className="admin-form-grid admin-form-grid--two">
+                    <label><span>版本号</span><input className="admin-input" placeholder="例如 1.1.0" value={form.version} onChange={(event) => updateAppReleaseTarget(target, { version: event.target.value })} /></label>
+                    <label><span>构建号</span><input className="admin-input" placeholder={target === "android" ? "例如 12" : "例如 1"} value={form.buildNumber} onChange={(event) => updateAppReleaseTarget(target, { buildNumber: event.target.value })} /></label>
+                    <label className="admin-form-grid__wide"><span>下载地址</span><input className="admin-input" placeholder={target === "ios" ? "App Store 或 TestFlight 地址" : "Android APK 下载地址"} value={form.downloadUrl} onChange={(event) => updateAppReleaseTarget(target, { downloadUrl: event.target.value })} /></label>
+                    <label className="admin-switch admin-switch--inline">
+                      <input checked={form.forceUpdate} type="checkbox" onChange={(event) => updateAppReleaseTarget(target, { forceUpdate: event.target.checked })} />
+                      <span>强制更新</span>
+                    </label>
+                  </div>
+                  <label>
+                    <span>更新详情</span>
+                    <textarea className="admin-textarea" rows={5} value={form.releaseNotesText} onChange={(event) => updateAppReleaseTarget(target, { releaseNotesText: event.target.value })} />
+                  </label>
+                </div>
+              );
+            })}
+          </div>
+          <div className="admin-model-actions">
+            <button className="primary-action h-10" disabled={savingBilling === "app-release"} type="button" onClick={() => void saveAppRelease()}>
+              {savingBilling === "app-release" ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Save className="size-4" aria-hidden="true" />}
+              保存 App 版本配置
             </button>
           </div>
         </section>
@@ -5017,6 +5106,20 @@ interface ExtensionReleaseFormState {
   prod: ExtensionReleaseTargetFormState;
 }
 
+interface AppReleaseTargetFormState {
+  enabled: boolean;
+  version: string;
+  buildNumber: string;
+  downloadUrl: string;
+  forceUpdate: boolean;
+  releaseNotesText: string;
+}
+
+interface AppReleaseFormState {
+  ios: AppReleaseTargetFormState;
+  android: AppReleaseTargetFormState;
+}
+
 interface AlipayFormState {
   enabled: boolean;
   appId: string;
@@ -6164,6 +6267,45 @@ function extensionReleaseTargetToPayload(form: ExtensionReleaseTargetFormState):
   };
 }
 
+function parseAppReleaseForm(value: unknown): AppReleaseFormState {
+  const root = isRecord(value) ? value : {};
+  return {
+    ios: parseAppReleaseTargetForm(root.ios),
+    android: parseAppReleaseTargetForm(root.android)
+  };
+}
+
+function parseAppReleaseTargetForm(value: unknown): AppReleaseTargetFormState {
+  const release = isRecord(value) ? value : {};
+  const releaseNotes = Array.isArray(release.releaseNotes) ? release.releaseNotes.filter((item): item is string => typeof item === "string") : [];
+  return {
+    enabled: booleanFrom(release.enabled, false),
+    version: stringFrom(release.version),
+    buildNumber: stringFrom(release.buildNumber),
+    downloadUrl: stringFrom(release.downloadUrl),
+    forceUpdate: booleanFrom(release.forceUpdate, false),
+    releaseNotesText: releaseNotes.join("\n")
+  };
+}
+
+function appReleaseToPayload(form: AppReleaseFormState): SaveAppReleaseConfigRequest {
+  return {
+    ios: appReleaseTargetToPayload(form.ios),
+    android: appReleaseTargetToPayload(form.android)
+  };
+}
+
+function appReleaseTargetToPayload(form: AppReleaseTargetFormState): SaveAppReleaseConfigRequest["ios"] {
+  return {
+    enabled: form.enabled,
+    version: form.version,
+    buildNumber: form.buildNumber,
+    downloadUrl: form.downloadUrl,
+    forceUpdate: form.forceUpdate,
+    releaseNotes: splitLines(form.releaseNotesText)
+  };
+}
+
 function providerDefaults(provider: ImageModelProvider): Partial<ImageModelFormState> {
   return provider === "gemini"
     ? { provider, name: "Gemini Nano Banana Pro", model: "gemini-3-pro-image-preview", baseUrl: "" }
@@ -6538,6 +6680,27 @@ function createExtensionReleaseForm(): ExtensionReleaseFormState {
       sizeBytes: "",
       sha256: "",
       releaseNotesText: "优化插件体验并修复已知问题。"
+    }
+  };
+}
+
+function createAppReleaseForm(): AppReleaseFormState {
+  return {
+    ios: {
+      enabled: false,
+      version: "",
+      buildNumber: "",
+      downloadUrl: "",
+      forceUpdate: false,
+      releaseNotesText: "优化 App 体验并修复已知问题。"
+    },
+    android: {
+      enabled: false,
+      version: "",
+      buildNumber: "",
+      downloadUrl: "",
+      forceUpdate: false,
+      releaseNotesText: "优化 App 体验并修复已知问题。"
     }
   };
 }

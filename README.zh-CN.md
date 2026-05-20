@@ -202,10 +202,18 @@ GETUI_ENABLED=true
 GETUI_APP_ID=你的个推 AppID
 GETUI_APP_KEY=你的个推 AppKey
 GETUI_MASTER_SECRET=你的个推 MasterSecret
+APNS_ENABLED=true
+APNS_BUNDLE_ID=com.neimou.shangtuai
+APNS_TEAM_ID=你的 Apple Team ID
+APNS_KEY_ID=你的 APNs Key ID
+APNS_PRIVATE_KEY=你的 APNs Auth Key 私钥
+APNS_KEY_FILE=或填写服务器上的 .p8 私钥文件路径
+APNS_ENVIRONMENT=production
 WECHAT_MINIAPP_TASK_COMPLETE_TEMPLATE_ID=小程序任务完成订阅消息模板 ID
 ```
 
 注意不要把 `GETUI_APP_KEY` 或 `GETUI_MASTER_SECRET` 放到移动端包里；Android 客户端只需要 AppID 来初始化 SDK，CID 会登录后上报给后端。
+APNs 私钥也只放在服务端，iOS 客户端只负责申请系统通知权限和上报 device token。
 
 ## 蓝绿部署
 

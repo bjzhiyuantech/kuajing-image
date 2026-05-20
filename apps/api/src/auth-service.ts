@@ -25,7 +25,7 @@ import {
 } from "./referral-service.js";
 import { wechatMiniAppRuntimeConfig } from "./runtime.js";
 import { subscriptionPlans, users, wechatAccounts, workspaceMembers, workspaces } from "./schema.js";
-import { normalizePhone, validatePhone, verifyBindPhoneSmsCode, verifyRegisterSmsCode } from "./sms-service.js";
+import { normalizePhone, validatePhone, verifyBindPhoneSmsCode, verifyDeleteAccountSmsCode, verifyRegisterSmsCode } from "./sms-service.js";
 import { getSystemSetting, saveSystemSetting } from "./system-settings.js";
 
 const DEFAULT_PLAN_ID = "free";
@@ -34,6 +34,7 @@ const DEFAULT_STORAGE_QUOTA_BYTES = 1024 * 1024 * 1024;
 const WECHAT_MINIAPP_SETTINGS_KEY = "auth.wechat.miniapp";
 const WECHAT_PROVIDER = "miniapp";
 const WECHAT_BIND_TOKEN_TTL_SECONDS = 10 * 60;
+const ACCOUNT_DELETION_LOCK_MONTHS = 6;
 
 export interface AuthSession {
   user: AuthUser;
@@ -57,6 +58,10 @@ export interface LoginInput {
 
 export interface BindPhoneInput {
   phone: string;
+  smsCode: string;
+}
+
+export interface DeleteAccountInput {
   smsCode: string;
 }
 
@@ -89,6 +94,13 @@ export async function registerUser(input: RegisterInput): Promise<AuthResponse> 
 
   const existing = await findUserByPhone(phone);
   if (existing) {
+    if (isDeletedUser(existing)) {
+      if (isDeletedRegistrationLocked(existing)) {
+        throw deletedAccountRegistrationError(existing);
+      }
+      await verifyRegisterSmsCode(phone, input.smsCode);
+      return reactivateDeletedPhoneUser(existing, { displayName, password });
+    }
     throw new AuthError("phone_exists", "该手机号已经注册。", 409);
   }
   await verifyRegisterSmsCode(phone, input.smsCode);
@@ -161,6 +173,9 @@ export async function registerUser(input: RegisterInput): Promise<AuthResponse> 
       passwordHash: "",
       displayName,
       role: "user",
+      accountStatus: "active",
+      deletedAt: null,
+      deletionLockUntil: null,
       planId: defaultPlan.id,
       planExpiresAt: null,
       quotaTotal,
@@ -191,6 +206,9 @@ export async function loginUser(input: LoginInput): Promise<AuthResponse> {
   const email = input.email?.trim() ? normalizeEmail(input.email) : undefined;
   const phone = input.phone?.trim() ? normalizePhone(input.phone) : undefined;
   const user = email ? await findUserByEmail(email) : phone ? await findUserByPhone(phone) : undefined;
+  if (user && isDeletedUser(user)) {
+    throw new AuthError("account_deleted", "该账号已注销，暂时无法登录。注销后半年内无法重新注册。", 403);
+  }
   if (!user || !verifyPassword(input.password, user.passwordHash)) {
     throw new AuthError("invalid_credentials", "账号或密码不正确。", 401);
   }
@@ -248,6 +266,56 @@ export async function bindCurrentUserPhone(headers: Headers, input: BindPhoneInp
     .set({ phone, phoneVerifiedAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
     .where(eq(users.id, session.user.id));
   return toMeResponse(await requireAuthSession(new Headers({ authorization: `Bearer ${parseBearerToken(headers) ?? ""}` })));
+}
+
+export async function deleteCurrentUserAccount(headers: Headers, input: DeleteAccountInput): Promise<{ ok: true; deletedAt: string; deletionLockUntil: string }> {
+  const session = await requireAuthSession(headers);
+  if (!session.user.phone) {
+    throw new AuthError("phone_missing", "请先绑定手机号后再注销。", 400);
+  }
+  await verifyDeleteAccountSmsCode(session.user.phone, input.smsCode);
+
+  const now = new Date();
+  const deletedAt = now.toISOString();
+  const deletionLockUntil = accountDeletionLockUntil(now).toISOString();
+
+  await db
+    .update(users)
+    .set({
+      accountStatus: "deleted",
+      deletedAt,
+      deletionLockUntil,
+      updatedAt: deletedAt
+    })
+    .where(eq(users.id, session.user.id));
+
+  return { ok: true, deletedAt, deletionLockUntil };
+}
+
+async function reactivateDeletedPhoneUser(user: typeof users.$inferSelect, input: { displayName: string; password: string }): Promise<AuthResponse> {
+  const now = new Date().toISOString();
+  await db
+    .update(users)
+    .set({
+      accountStatus: "active",
+      deletedAt: null,
+      deletionLockUntil: null,
+      passwordHash: hashPassword(input.password),
+      displayName: input.displayName,
+      phoneVerifiedAt: now,
+      updatedAt: now
+    })
+    .where(eq(users.id, user.id));
+
+  const [currentUser, workspace] = await Promise.all([findUserById(user.id), findDefaultWorkspace(user.id)]);
+  if (!currentUser || !workspace) {
+    throw new AuthError("workspace_missing", "用户工作区不存在。", 403);
+  }
+
+  return buildAuthResponse({
+    user: toAuthUser(currentUser, await findPlanById(currentUser.planId)),
+    workspace
+  });
 }
 
 export async function getWechatMiniAppConfig(): Promise<WechatMiniAppConfigResponse> {
@@ -309,6 +377,9 @@ export async function loginWithWechatMiniApp(input: WechatMiniAppLoginRequest): 
     const user = await findUserById(account.userId);
     const workspace = user ? await findDefaultWorkspace(user.id) : undefined;
     if (user && workspace) {
+      if (isDeletedUser(user)) {
+        throw new AuthError("account_deleted", "该账号已注销，暂时无法登录。注销后半年内无法重新注册。", 403);
+      }
       return {
         status: "bound",
         session: buildAuthResponse({ user: toAuthUser(user, await findPlanById(user.planId)), workspace })
@@ -343,6 +414,9 @@ export async function registerWechatMiniAppUser(input: WechatMiniAppRegisterRequ
     const user = await findUserById(existing.userId);
     const workspace = user ? await findDefaultWorkspace(user.id) : undefined;
     if (user && workspace) {
+      if (isDeletedUser(user)) {
+        throw new AuthError("account_deleted", "该账号已注销，暂时无法登录。注销后半年内无法重新注册。", 403);
+      }
       return buildAuthResponse({ user: toAuthUser(user, await findPlanById(user.planId)), workspace });
     }
   }
@@ -352,6 +426,9 @@ export async function registerWechatMiniAppUser(input: WechatMiniAppRegisterRequ
     validateEmail(email);
     const existingEmailUser = await findUserByEmail(email);
     if (existingEmailUser) {
+      if (isDeletedUser(existingEmailUser)) {
+        throw deletedAccountRegistrationError(existingEmailUser);
+      }
       throw new AuthError("email_exists", "该邮箱已经注册，请先登录后绑定微信。", 409);
     }
   }
@@ -371,6 +448,9 @@ export async function registerWechatMiniAppUser(input: WechatMiniAppRegisterRequ
       passwordHash: "",
       displayName,
       role: "user",
+      accountStatus: "active",
+      deletedAt: null,
+      deletionLockUntil: null,
       planId: defaultPlan.id,
       planExpiresAt: null,
       quotaTotal,
@@ -427,6 +507,9 @@ export async function registerWechatMiniAppUser(input: WechatMiniAppRegisterRequ
       passwordHash: "",
       displayName,
       role: "user",
+      accountStatus: "active",
+      deletedAt: null,
+      deletionLockUntil: null,
       planId: defaultPlan.id,
       planExpiresAt: null,
       quotaTotal,
@@ -483,6 +566,9 @@ export async function getAuthSessionFromToken(token: string): Promise<AuthSessio
     .limit(1);
 
   if (!row) {
+    return undefined;
+  }
+  if (isDeletedUser(row.user)) {
     return undefined;
   }
 
@@ -649,6 +735,9 @@ function toAuthUser(row: typeof users.$inferSelect, plan?: Pick<typeof subscript
     phoneVerifiedAt: row.phoneVerifiedAt ?? undefined,
     displayName: row.displayName,
     role: row.role === "admin" ? "admin" : "user",
+    accountStatus: row.accountStatus ?? "active",
+    deletedAt: row.deletedAt ?? undefined,
+    deletionLockUntil: row.deletionLockUntil ?? undefined,
     planId: row.planId ?? undefined,
     planName: plan?.name,
     planExpiresAt: row.planExpiresAt ?? undefined,
@@ -670,6 +759,56 @@ function parseBearerToken(headers: Headers): string | undefined {
   const authorization = headers.get("authorization") ?? "";
   const match = /^Bearer\s+(.+)$/iu.exec(authorization);
   return match?.[1]?.trim() || undefined;
+}
+
+function isDeletedUser(user: Pick<typeof users.$inferSelect, "accountStatus" | "deletedAt">): boolean {
+  return user.accountStatus === "deleted" || Boolean(user.deletedAt);
+}
+
+function accountDeletionLockUntil(base: Date): Date {
+  const lockUntil = new Date(base);
+  lockUntil.setMonth(lockUntil.getMonth() + ACCOUNT_DELETION_LOCK_MONTHS);
+  return lockUntil;
+}
+
+function isDeletedRegistrationLocked(user: Pick<typeof users.$inferSelect, "accountStatus" | "deletedAt" | "deletionLockUntil">): boolean {
+  return isDeletedUser(user) && deletionLockUntilForUser(user).getTime() > Date.now();
+}
+
+function deletedAccountRegistrationError(user: Pick<typeof users.$inferSelect, "deletedAt" | "deletionLockUntil">): AuthError {
+  return new AuthError(
+    "account_deleted_lock",
+    `该账号已注销，注销后半年内无法重新注册。可重新注册时间：${formatDateOnly(deletionLockUntilForUser(user).toISOString())}。`,
+    403
+  );
+}
+
+function deletionLockUntilForUser(user: Pick<typeof users.$inferSelect, "deletedAt" | "deletionLockUntil">): Date {
+  const explicit = parseDate(user.deletionLockUntil);
+  if (explicit) {
+    return explicit;
+  }
+  const deletedAt = parseDate(user.deletedAt);
+  if (deletedAt) {
+    return accountDeletionLockUntil(deletedAt);
+  }
+  return accountDeletionLockUntil(new Date());
+}
+
+function formatDateOnly(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value.slice(0, 10);
+  }
+  return date.toISOString().slice(0, 10);
+}
+
+function parseDate(value: string | null | undefined): Date | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date;
 }
 
 function normalizeEmail(email: string): string {

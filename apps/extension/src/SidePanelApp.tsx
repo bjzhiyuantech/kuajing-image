@@ -46,6 +46,7 @@ import {
   type BillingTransaction,
   type BillingPlan,
   type EcommerceBatchGenerateResponse,
+  type EcommerceCategoryKitPlanItem,
   type EcommerceGenerationMode,
   type EcommerceSceneTemplateId,
   type GeneratedAsset,
@@ -308,6 +309,7 @@ interface UploadedReferenceImage {
 }
 
 type CategoryKitPrepareStatus = "idle" | "loading" | "ready" | "error";
+type CategoryKitPlanStatus = "idle" | "loading" | "ready" | "error";
 
 interface CategoryKitPrepareState {
   status: CategoryKitPrepareStatus;
@@ -318,6 +320,15 @@ interface CategoryKitPrepareState {
   missingItems: string[];
   requiredAssets: string[];
   warnings: string[];
+  message: string;
+}
+
+interface CategoryKitPlanState {
+  status: CategoryKitPlanStatus;
+  productSummary: string;
+  imagePlan: EcommerceCategoryKitPlanItem[];
+  categoryPath: string;
+  categoryName: string;
   message: string;
 }
 
@@ -431,6 +442,15 @@ const emptyCategoryKitPrepare: CategoryKitPrepareState = {
   requiredAssets: [],
   warnings: [],
   message: "先上传或选择商品主图，再预检类目策略。"
+};
+
+const emptyCategoryKitPlan: CategoryKitPlanState = {
+  status: "idle",
+  productSummary: "",
+  imagePlan: [],
+  categoryPath: "",
+  categoryName: "",
+  message: ""
 };
 
 const defaultSceneIdsByMode: Record<EcommerceGenerationMode, EcommerceSceneTemplateId[]> = {
@@ -972,6 +992,46 @@ function parseCategoryKitPrepare(value: unknown): CategoryKitPrepareState {
       (missingItems.length > 0
         ? `已匹配${categoryName || strategyName || "类目策略"}，仍需补充 ${missingItems.slice(0, 3).join("、")}。`
         : `已匹配${categoryName || strategyName || "类目策略"}，可确认生成。`)
+  };
+}
+
+function parseCategoryKitPlan(value: unknown): CategoryKitPlanState {
+  const root = asRecord(value);
+  const rawPlan = Array.isArray(root.imagePlan)
+    ? root.imagePlan
+    : Array.isArray(root.image_plan)
+      ? root.image_plan
+      : Array.isArray(root.plannedImages)
+        ? root.plannedImages
+        : [];
+  const imagePlan = rawPlan.flatMap((item): EcommerceCategoryKitPlanItem[] => {
+    const record = asRecord(item);
+    const title = stringFromUnknown(record.title ?? record.name).trim();
+    const prompt = stringFromUnknown(record.prompt ?? record.imagePrompt ?? record.image_prompt).trim();
+    if (!title || !prompt) {
+      return [];
+    }
+    return [
+      {
+        title,
+        purpose: stringFromUnknown(record.purpose ?? record.goal).trim() || title,
+        prompt,
+        notes: stringFromUnknown(record.notes ?? record.constraints).trim(),
+        sourceImageRoles: labelListFromUnknown(record.sourceImageRoles ?? record.source_image_roles ?? record.sourceRoles ?? record.source_roles)
+      }
+    ];
+  });
+  if (imagePlan.length === 0) {
+    throw new Error("品类套图规划没有返回可用的生图提示词。");
+  }
+
+  return {
+    status: "ready",
+    productSummary: stringFromUnknown(root.productSummary ?? root.product_summary),
+    imagePlan,
+    categoryPath: categoryPathFromUnknown(root.categoryPath ?? root.category_path),
+    categoryName: stringFromUnknown(root.categoryName ?? root.category_name),
+    message: `已规划 ${imagePlan.length} 张图，可小范围修改后提交生图队列。`
   };
 }
 
@@ -1686,6 +1746,7 @@ export function SidePanelApp() {
   const [referenceSourceTab, setReferenceSourceTab] = useState<ReferenceSourceTab>("read");
   const [uploadedReferenceImages, setUploadedReferenceImages] = useState<UploadedReferenceImage[]>([]);
   const [categoryKitPrepare, setCategoryKitPrepare] = useState<CategoryKitPrepareState>(emptyCategoryKitPrepare);
+  const [categoryKitPlan, setCategoryKitPlan] = useState<CategoryKitPlanState>(emptyCategoryKitPlan);
   const [imageHoverPreview, setImageHoverPreview] = useState<ImageHoverPreview | null>(null);
   const [worksViewOpen, setWorksViewOpen] = useState(false);
   const [textTranslationViewOpen, setTextTranslationViewOpen] = useState(false);
@@ -3472,6 +3533,7 @@ export function SidePanelApp() {
       }
     }));
     setCategoryKitPrepare(emptyCategoryKitPrepare);
+    resetCategoryKitPlan();
   }
 
   function showImageHoverPreview(event: PointerEvent<HTMLButtonElement>, item: { url: string; label: string }): void {
@@ -3503,6 +3565,10 @@ export function SidePanelApp() {
         <span>{imageHoverPreview.label}</span>
       </div>
     );
+  }
+
+  function resetCategoryKitPlan(): void {
+    setCategoryKitPlan(emptyCategoryKitPlan);
   }
 
   function categoryKitAssetRoleForIndex(index: number): string {
@@ -3555,6 +3621,7 @@ export function SidePanelApp() {
     }
 
     setCategoryKitPrepare((current) => ({ ...current, status: "loading", message: "正在识别类目并匹配策略。" }));
+    resetCategoryKitPlan();
     if (!options.silent) {
       setTask((current) => ({ ...current, status: "running", message: "正在预检品类策略，会返回缺失信息和建议素材。", records: [] }));
     }
@@ -3582,6 +3649,40 @@ export function SidePanelApp() {
       }
       return null;
     }
+  }
+
+  async function planCategoryKitBeforeGenerate(payload: Record<string, unknown>, token = auth.token): Promise<CategoryKitPlanState | null> {
+    setCategoryKitPlan((current) => ({ ...current, status: "loading", message: "正在读取参考图并规划套图。" }));
+    setTask((current) => ({ ...current, status: "running", message: "正在规划可编辑的品类套图提示词。", records: [] }));
+
+    try {
+      const response = await fetch(`${apiBaseUrl()}/api/ecommerce/images/category-kit-plan`, {
+        method: "POST",
+        headers: apiHeaders(true, token),
+        body: JSON.stringify(payload)
+      });
+      const planned = parseCategoryKitPlan(await parseResponseOrThrow(response));
+      setCategoryKitPlan(planned);
+      setTask((current) => ({
+        ...current,
+        status: "idle",
+        message: planned.message,
+        records: []
+      }));
+      return planned;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "品类套图规划失败。";
+      setCategoryKitPlan({ ...emptyCategoryKitPlan, status: "error", message });
+      setTask((current) => ({ ...current, status: "failed", message, records: [] }));
+      return null;
+    }
+  }
+
+  function updateCategoryKitPlanItem(index: number, patch: Partial<EcommerceCategoryKitPlanItem>): void {
+    setCategoryKitPlan((current) => ({
+      ...current,
+      imagePlan: current.imagePlan.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item))
+    }));
   }
 
   async function applySourceAspectSize(urls = selectedReferenceImageUrls, options: { force?: boolean } = {}): Promise<void> {
@@ -3628,6 +3729,7 @@ export function SidePanelApp() {
       };
     });
     setCategoryKitPrepare(emptyCategoryKitPrepare);
+    resetCategoryKitPlan();
   }
 
   function toggleReplacementImage(url: string): void {
@@ -3688,6 +3790,7 @@ export function SidePanelApp() {
       };
     });
     setCategoryKitPrepare(emptyCategoryKitPrepare);
+    resetCategoryKitPlan();
   }
 
   function inferMarketingMainExpression(category: string): string {
@@ -3837,6 +3940,7 @@ export function SidePanelApp() {
       };
     });
     setCategoryKitPrepare(emptyCategoryKitPrepare);
+    resetCategoryKitPlan();
     setTask((current) => ({
       ...current,
       message: `已${sourceLabel} ${uploadedImages.length} 张参考图，可在候选区选择。`
@@ -4261,9 +4365,10 @@ export function SidePanelApp() {
       allowTextRecreation: true,
       removeWatermarkAndLogo: generationMode === "enhance" ? current.removeWatermarkAndLogo : true
     }));
-    if (generationMode === "category-kit") {
-      setCategoryKitPrepare(emptyCategoryKitPrepare);
-    }
+	    if (generationMode === "category-kit") {
+	      setCategoryKitPrepare(emptyCategoryKitPrepare);
+	      resetCategoryKitPlan();
+	    }
     setTask((current) => ({
       ...current,
       message:
@@ -4372,6 +4477,27 @@ export function SidePanelApp() {
     if (form.generationMode === "category-kit") {
       try {
         const referenceImage = await referenceImageFromSources(selectedReferenceImageUrls);
+        const categoryKitPayload = {
+          product: effectiveProduct,
+          platform: effectivePlatform,
+          market: effectiveMarket,
+          textLanguage: form.textLanguage,
+          categoryPath: categoryKitPrepare.categoryPath,
+          categoryName: categoryKitPrepare.categoryName,
+          allowTextRecreation: form.allowTextRecreation,
+          removeWatermarkAndLogo: form.removeWatermarkAndLogo,
+          brandOverlayPlacement: form.brandOverlay.enabled ? form.brandOverlay.placement : undefined,
+          sceneTemplateIds: effectiveSceneTemplateIds,
+          sourcePageUrl: pageContext?.url,
+          size: form.size,
+          stylePresetId: form.stylePresetId,
+          quality: form.quality,
+          outputFormat: form.outputFormat,
+          countPerScene: effectiveCountPerScene,
+          referenceImage,
+          createComparisonCollage: isAdminAccount && createComparisonCollage && Boolean(referenceImage),
+          extraDirection: effectiveExtraDirection
+        };
         if (categoryKitPrepare.status !== "ready") {
           const prepared = await prepareCategoryKitBeforeGenerate({ silent: true });
           setBatchGenerationLocked(false);
@@ -4392,29 +4518,17 @@ export function SidePanelApp() {
           }
           return;
         }
+        if (categoryKitPlan.status !== "ready") {
+          await planCategoryKitBeforeGenerate(categoryKitPayload, token);
+          setBatchGenerationLocked(false);
+          return;
+        }
         const response = await fetch(`${apiBaseUrl()}/api/ecommerce/images/category-kit-generate`, {
           method: "POST",
           headers: apiHeaders(true, token),
           body: JSON.stringify({
-            product: effectiveProduct,
-            platform: effectivePlatform,
-            market: effectiveMarket,
-            textLanguage: form.textLanguage,
-            categoryPath: categoryKitPrepare.categoryPath,
-            categoryName: categoryKitPrepare.categoryName,
-            allowTextRecreation: form.allowTextRecreation,
-            removeWatermarkAndLogo: form.removeWatermarkAndLogo,
-            brandOverlayPlacement: form.brandOverlay.enabled ? form.brandOverlay.placement : undefined,
-            sceneTemplateIds: effectiveSceneTemplateIds,
-            sourcePageUrl: pageContext?.url,
-            size: form.size,
-            stylePresetId: form.stylePresetId,
-            quality: form.quality,
-            outputFormat: form.outputFormat,
-            countPerScene: effectiveCountPerScene,
-            referenceImage,
-            createComparisonCollage: isAdminAccount && createComparisonCollage && Boolean(referenceImage),
-            extraDirection: effectiveExtraDirection
+            ...categoryKitPayload,
+            plannedImages: categoryKitPlan.imagePlan
           })
         });
 
@@ -5186,7 +5300,7 @@ export function SidePanelApp() {
           <div className="kit-heading">
             <div>
               <h2>AI 品类套图策划</h2>
-              <p>先看图识别类目，匹配策略库并提示缺失素材；确认后再进入套图规划和生图队列。</p>
+              <p>先预检素材，确认后返回可编辑提示词，再进入生图队列。</p>
             </div>
             <span>{categoryKitPrepare.status === "ready" ? "策略已匹配" : "先预检"}</span>
           </div>
@@ -5231,8 +5345,33 @@ export function SidePanelApp() {
               </ul>
             </div>
           ) : null}
-          <p className="kit-version-hint">袜子、服饰、鞋子等类目会调用对应策略；未收录类目会走通用兜底，但仍不会编造尺寸、材质、包装或认证。</p>
-          <p className="kit-version-hint">补充素材可在上方参考图区域多选 1 到 3 张：第一张为主商品图，后续会作为细节/包装等素材证据。</p>
+          {categoryKitPlan.status !== "idle" ? (
+            <div className="category-kit-plan">
+              <div className="category-kit-plan__head">
+                <strong>{categoryKitPlan.status === "loading" ? "正在规划套图" : categoryKitPlan.status === "error" ? "规划失败" : `已规划 ${categoryKitPlan.imagePlan.length} 张图`}</strong>
+                <span>{categoryKitPlan.message}</span>
+              </div>
+              {categoryKitPlan.status === "ready" ? (
+                <div className="category-kit-plan__list">
+                  {categoryKitPlan.imagePlan.map((item, index) => (
+                    <div className="category-kit-plan__item" key={`${index}-${item.title}`}>
+                      <input
+                        aria-label={`第 ${index + 1} 张标题`}
+                        value={item.title}
+                        onChange={(event) => updateCategoryKitPlanItem(index, { title: event.target.value })}
+                      />
+                      <textarea
+                        aria-label={`第 ${index + 1} 张生图提示词`}
+                        rows={4}
+                        value={item.prompt}
+                        onChange={(event) => updateCategoryKitPlanItem(index, { prompt: event.target.value })}
+                      />
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </section>
       ) : form.generationMode === "marketing-main" ? (
         <section className="panel marketing-main-panel" id="scene-panel">
@@ -5522,8 +5661,8 @@ export function SidePanelApp() {
             </span>
         </div>
         <button className="primary-button" disabled={batchGenerationLocked} type="button" onClick={() => void submitBatch()}>
-          {batchGenerationLocked ? <Loader2 className="spin" size={17} /> : form.generationMode === "category-kit" && categoryKitPrepare.status !== "ready" ? <CheckCircle2 size={17} /> : <Send size={17} />}
-          {form.generationMode === "category-kit" && categoryKitPrepare.status !== "ready" ? "预检类目" : form.generationMode === "one-click-replace" ? "一键换装/换品" : "批量生成"}
+          {batchGenerationLocked ? <Loader2 className="spin" size={17} /> : form.generationMode === "category-kit" && (categoryKitPrepare.status !== "ready" || categoryKitPlan.status !== "ready") ? <CheckCircle2 size={17} /> : <Send size={17} />}
+          {form.generationMode === "category-kit" && batchGenerationLocked && categoryKitPrepare.status !== "ready" ? "正在预检类目" : form.generationMode === "category-kit" && batchGenerationLocked && categoryKitPlan.status !== "ready" ? "正在规划套图" : form.generationMode === "category-kit" && categoryKitPrepare.status !== "ready" ? "预检类目" : form.generationMode === "category-kit" && categoryKitPlan.status !== "ready" ? "规划套图" : form.generationMode === "category-kit" ? "提交队列" : form.generationMode === "one-click-replace" ? "一键换装/换品" : "批量生成"}
         </button>
       </section>
 

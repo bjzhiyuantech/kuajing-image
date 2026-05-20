@@ -7,6 +7,7 @@ import { smsVerificationCodes, systemSettings, users } from "./schema.js";
 const SMS_SETTINGS_KEY = "sms.aliyun";
 const REGISTER_PURPOSE = "register";
 const BIND_PURPOSE = "bind_phone";
+const DELETE_ACCOUNT_PURPOSE = "delete_account";
 const CODE_TTL_MS = 10 * 60 * 1000;
 const SEND_COOLDOWN_MS = 60 * 1000;
 const MAX_VERIFY_ATTEMPTS = 5;
@@ -37,7 +38,12 @@ export async function sendRegisterSmsCode(phoneInput: string): Promise<{ ok: tru
   validatePhone(phone);
   const existingUser = await findUserByPhone(phone);
   if (existingUser) {
-    throw new SmsError("phone_exists", "该手机号已经注册。", 409);
+    if (isDeletedUser(existingUser) && isDeletedRegistrationLocked(existingUser)) {
+      throw deletedAccountRegistrationError(existingUser);
+    }
+    if (!isDeletedUser(existingUser)) {
+      throw new SmsError("phone_exists", "该手机号已经注册。", 409);
+    }
   }
   return sendSmsCode({ phone, purpose: REGISTER_PURPOSE });
 }
@@ -52,12 +58,26 @@ export async function sendBindPhoneSmsCode(phoneInput: string, currentUserId: st
   return sendSmsCode({ phone, purpose: BIND_PURPOSE });
 }
 
+export async function sendDeleteAccountSmsCode(phoneInput: string, currentUserId: string): Promise<{ ok: true; expiresInSeconds: number; cooldownSeconds: number }> {
+  const phone = normalizePhone(phoneInput);
+  validatePhone(phone);
+  const existingUser = await findUserByPhone(phone);
+  if (!existingUser || existingUser.id !== currentUserId) {
+    throw new SmsError("phone_mismatch", "请使用当前绑定手机号获取验证码。", 400);
+  }
+  return sendSmsCode({ phone, purpose: DELETE_ACCOUNT_PURPOSE });
+}
+
 export async function verifyRegisterSmsCode(phoneInput: string, codeInput: string): Promise<void> {
   await verifySmsCode(phoneInput, codeInput, REGISTER_PURPOSE);
 }
 
 export async function verifyBindPhoneSmsCode(phoneInput: string, codeInput: string): Promise<void> {
   await verifySmsCode(phoneInput, codeInput, BIND_PURPOSE);
+}
+
+export async function verifyDeleteAccountSmsCode(phoneInput: string, codeInput: string): Promise<void> {
+  await verifySmsCode(phoneInput, codeInput, DELETE_ACCOUNT_PURPOSE);
 }
 
 export async function getAliyunSmsSettings(): Promise<{ sms: Omit<AliyunSmsSettings, "accessKeySecret"> & { accessKeySecretSaved: boolean; updatedAt?: string } }> {
@@ -226,7 +246,7 @@ function ensureAliyunSmsEnabled(settings: AliyunSmsSettings, purpose: string): v
 }
 
 function templateCodeForPurpose(settings: AliyunSmsSettings, purpose: string): string {
-  return purpose === BIND_PURPOSE ? settings.bindTemplateCode || settings.registerTemplateCode : settings.registerTemplateCode;
+  return purpose === BIND_PURPOSE || purpose === DELETE_ACCOUNT_PURPOSE ? settings.bindTemplateCode || settings.registerTemplateCode : settings.registerTemplateCode;
 }
 
 async function getRawAliyunSmsSettings(): Promise<AliyunSmsSettings> {
@@ -264,6 +284,57 @@ async function deleteExpiredCodes(): Promise<void> {
 async function findUserByPhone(phone: string): Promise<(typeof users.$inferSelect) | undefined> {
   const [row] = await db.select().from(users).where(eq(users.phone, phone)).limit(1);
   return row;
+}
+
+function isDeletedUser(user: Pick<typeof users.$inferSelect, "accountStatus" | "deletedAt">): boolean {
+  return user.accountStatus === "deleted" || Boolean(user.deletedAt);
+}
+
+function isDeletedRegistrationLocked(user: Pick<typeof users.$inferSelect, "accountStatus" | "deletedAt" | "deletionLockUntil">): boolean {
+  return isDeletedUser(user) && deletionLockUntilForUser(user).getTime() > Date.now();
+}
+
+function deletedAccountRegistrationError(user: Pick<typeof users.$inferSelect, "deletedAt" | "deletionLockUntil">): SmsError {
+  return new SmsError(
+    "account_deleted_lock",
+    `该账号已注销，注销后半年内无法重新注册。可重新注册时间：${formatDateOnly(deletionLockUntilForUser(user).toISOString())}。`,
+    403
+  );
+}
+
+function deletionLockUntilForUser(user: Pick<typeof users.$inferSelect, "deletedAt" | "deletionLockUntil">): Date {
+  const explicit = parseDate(user.deletionLockUntil);
+  if (explicit) {
+    return explicit;
+  }
+  const deletedAt = parseDate(user.deletedAt);
+  if (deletedAt) {
+    const lockUntil = new Date(deletedAt);
+    lockUntil.setMonth(lockUntil.getMonth() + 6);
+    return lockUntil;
+  }
+  const lockUntil = new Date();
+  lockUntil.setMonth(lockUntil.getMonth() + 6);
+  return lockUntil;
+}
+
+function formatDateOnly(value: string): string {
+  if (!value) {
+    return "锁定期结束后";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value.slice(0, 10);
+  }
+  return date.toISOString().slice(0, 10);
+}
+
+function parseDate(value: string | null | undefined): Date | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date;
 }
 
 function parseAliyunSmsSettings(valueJson: string | undefined): AliyunSmsSettings {

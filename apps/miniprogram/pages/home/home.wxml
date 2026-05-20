@@ -52,7 +52,7 @@
   <view class="section-block">
     <view class="section-head">
       <view class="section-title">推荐工作流</view>
-      <view class="section-more" bindtap="goCreate">自定义</view>
+      <view class="section-more" bindtap="goCustomCreate">自定义</view>
     </view>
     <scroll-view scroll-x class="workflow-scroll">
       <view wx:for="{{workflows}}" wx:key="key" class="workflow-card" bindtap="openWorkflow" data-key="{{item.key}}">
@@ -89,11 +89,105 @@
     </view>
   </view>
 
+  <view class="section-block">
+    <view class="section-head">
+      <view class="section-title">公开作品</view>
+      <view class="section-more" bindtap="goPublicGallery">查看更多</view>
+    </view>
+    <view class="public-works-card">
+      <view class="public-works-head">
+        <view>
+          <view class="public-works-title">平台精选案例</view>
+          <view class="public-works-copy">看看公开展示的成品效果，找找适合你商品的构图和风格。</view>
+        </view>
+        <view class="public-works-badge">所有用户可见</view>
+      </view>
+      <view wx:if="{{publicWorksLoading && !publicWorks.length}}" class="public-works-loading">正在加载公开作品</view>
+      <scroll-view wx:elif="{{publicWorks.length}}" scroll-x class="public-works-scroll" enhanced show-scrollbar="{{false}}">
+        <view wx:for="{{publicWorks}}" wx:key="imageId" class="public-work-item" bindtap="openPublicWork" data-id="{{item.imageId}}">
+          <image class="public-work-image" src="{{item.imageUrl}}" mode="aspectFill" />
+          <view class="public-work-body">
+            <view class="public-work-prompt">{{item.promptText}}</view>
+            <view class="public-work-meta">
+              <text>{{item.tagText}}</text>
+              <text>放大</text>
+            </view>
+          </view>
+        </view>
+      </scroll-view>
+      <view wx:else class="public-works-empty">
+        <view class="empty-title">{{publicWorksError ? '公开作品加载失败' : '暂无公开作品'}}</view>
+        <view class="empty-copy">{{publicWorksError || '后台开启公开展示后，这里会展示平台精选作品。'}}</view>
+      </view>
+    </view>
+  </view>
+
   <view class="member-strip" bindtap="goProfile">
     <view>
       <view class="member-title">{{memberTitle}}</view>
       <view class="member-copy">{{memberCopy}}</view>
     </view>
     <view class="member-arrow">›</view>
+  </view>
+
+  <view class="quick-custom-fab" bindtap="openQuickCustom">
+    <view class="quick-custom-fab-icon">✦</view>
+    <view class="quick-custom-fab-text">自由生成</view>
+  </view>
+
+  <view wx:if="{{quickCustomVisible}}" class="quick-custom-mask" catchtap="closeQuickCustom">
+    <view class="quick-custom-sheet" catchtap="noop">
+      <view class="quick-custom-head">
+        <view>
+          <view class="quick-custom-title">自由生成</view>
+          <view class="quick-custom-sub">写提示词，可选参考图，直接生成 1 张图。</view>
+        </view>
+        <view class="quick-custom-close" bindtap="closeQuickCustom">×</view>
+      </view>
+
+      <scroll-view scroll-y class="quick-custom-scroll" enhanced show-scrollbar="{{false}}">
+        <view class="quick-custom-composer">
+          <view class="quick-custom-image-rail">
+            <view wx:for="{{quickCustomImages}}" wx:key="path" class="quick-custom-image-wrap">
+              <image class="quick-custom-image" src="{{item.path}}" mode="aspectFill" />
+              <view class="quick-custom-remove" bindtap="removeQuickCustomImage" data-index="{{index}}">×</view>
+            </view>
+            <view wx:if="{{quickCustomImages.length < quickCustomImageLimit}}" class="quick-custom-add-image" bindtap="chooseQuickCustomImages">
+              <view class="quick-custom-add-plus">+</view>
+              <view>拍照 / 相册</view>
+            </view>
+          </view>
+          <textarea
+            class="quick-custom-input"
+            maxlength="-1"
+            value="{{quickCustomPrompt}}"
+            bindinput="onQuickCustomPromptInput"
+            placeholder="描述你想生成的画面，例如：白色防晒衣，夏季户外通勤，真实摄影，干净高级，留白。"
+            placeholder-class="quick-custom-placeholder"
+          />
+          <view class="quick-custom-composer-foot">
+            <view class="quick-custom-tool {{(!quickCustomPrompt || quickCustomOptimizing || quickCustomSubmitting) ? 'disabled' : ''}}" bindtap="optimizeQuickCustomPrompt">
+              <view class="quick-custom-tool-icon">✦</view>
+              <view>{{quickCustomOptimizing ? '优化中' : '优化提示词'}}</view>
+            </view>
+            <view class="quick-custom-count">{{quickCustomImages.length}}/{{quickCustomImageLimit}}</view>
+          </view>
+        </view>
+      </scroll-view>
+
+      <view class="quick-custom-submit-row">
+        <view class="quick-custom-cost">
+          <view class="quick-custom-cost-value">1 张</view>
+          <view class="quick-custom-cost-label">生成结果</view>
+        </view>
+        <button
+          class="quick-custom-submit {{(!quickCustomPrompt || quickCustomSubmitting) ? 'disabled' : ''}}"
+          loading="{{quickCustomSubmitting}}"
+          bindtap="submitQuickCustom"
+        >
+          Generate
+        </button>
+      </view>
+    </view>
   </view>
 </view>

@@ -1,4 +1,5 @@
 const api = require("../../utils/api");
+const galleryUtils = require("../../utils/gallery");
 
 const STATUS_LABELS = {
   failed: "失败",
@@ -8,13 +9,30 @@ const STATUS_LABELS = {
   succeeded: "已完成"
 };
 const RECENT_CREATED_JOBS_KEY = "recentCreatedJobs";
+const JOB_FILTERS = [
+  { id: "all", label: "全部" },
+  { id: "running", label: "生成中" },
+  { id: "succeeded", label: "已完成" },
+  { id: "partial", label: "部分完成" },
+  { id: "failed", label: "失败" }
+];
 
 Page({
   data: {
     apiBaseUrl: "",
     currentJob: null,
+    filteredJobs: [],
+    filters: JOB_FILTERS.map((item, index) => ({ ...item, active: index === 0 })),
+    finishedCount: 0,
+    galleryPromptVisible: false,
     jobs: [],
     loading: false,
+    runningCount: 0,
+    saveProgressText: "",
+    saving: false,
+    selectedImage: null,
+    selectedImageId: "",
+    statusFilter: "all",
     token: ""
   },
 
@@ -41,7 +59,7 @@ Page({
       const data = await api.getJobs();
       const recentJobs = this.readRecentCreatedJobs();
       const summaries = this.mergeRecentJobs((data.jobs || []).map((job) => this.decorateSummary(job)), recentJobs);
-      this.setData({ jobs: summaries });
+      this.setJobs(summaries);
 
       let galleryItems = [];
       try {
@@ -57,14 +75,12 @@ Page({
           const detail = await api.getJob(job.jobId);
           const hydratedJob = this.mergeDetail(job, detail, galleryItems);
           hydratedJobs.push(hydratedJob);
-          this.setData({
-            jobs: this.data.jobs.map((item) => (item.jobId === hydratedJob.jobId ? hydratedJob : item))
-          });
+          this.setJobs(this.data.jobs.map((item) => (item.jobId === hydratedJob.jobId ? hydratedJob : item)));
         } catch {
           hydratedJobs.push(this.mergeGalleryFallback(job, galleryItems));
         }
       }
-      this.setData({ jobs: summaries.map((job) => hydratedJobs.find((item) => item.jobId === job.jobId) || job) });
+      this.setJobs(summaries.map((job) => hydratedJobs.find((item) => item.jobId === job.jobId) || job));
       this.pruneRecentCreatedJobs(this.data.jobs);
     } catch (error) {
       wx.showToast({ title: error.message, icon: "none" });
@@ -81,6 +97,35 @@ Page({
       progressPercent: this.progressPercent(job.completedScenes, job.totalScenes),
       statusLabel: STATUS_LABELS[job.status] || job.status
     };
+  },
+
+  setJobs(jobs) {
+    const runningCount = jobs.filter((job) => job.status === "running" || job.status === "pending").length;
+    const finishedCount = jobs.filter((job) => job.status === "succeeded" || job.status === "partial").length;
+    const filteredJobs = this.filterJobs(jobs, this.data.statusFilter);
+    this.setData({
+      filteredJobs,
+      finishedCount,
+      jobs,
+      runningCount
+    });
+  },
+
+  filterJobs(jobs, statusFilter) {
+    if (statusFilter === "all") return jobs;
+    if (statusFilter === "running") {
+      return jobs.filter((job) => job.status === "running" || job.status === "pending");
+    }
+    return jobs.filter((job) => job.status === statusFilter);
+  },
+
+  selectFilter(event) {
+    const statusFilter = event.currentTarget.dataset.id || "all";
+    this.setData({
+      filteredJobs: this.filterJobs(this.data.jobs, statusFilter),
+      filters: JOB_FILTERS.map((item) => ({ ...item, active: item.id === statusFilter })),
+      statusFilter
+    });
   },
 
   readRecentCreatedJobs() {
@@ -164,7 +209,9 @@ Page({
           {
             id: output.id || assetId || assetUrl,
             url: this.imageDisplayUrl(displayUrl, baseUrl, token),
+            prompt: this.promptForPreview(job, record.presetId),
             scene: record.presetId,
+            sceneLabel: this.sceneLabel(record.presetId),
             status: output.status
           }
         ];
@@ -196,7 +243,9 @@ Page({
         {
           id: item.outputId || item.asset.id,
           url: this.imageDisplayUrl(displayUrl, api.getBaseUrl(), api.getToken()),
+          prompt: galleryUtils.workPrompt(item),
           scene: item.presetId,
+          sceneLabel: galleryUtils.workTag(item),
           status: "succeeded"
         }
       ];
@@ -243,8 +292,11 @@ Page({
       await this.markJobNotificationRead(jobId);
       this.setData({
         currentJob,
-        jobs: this.data.jobs.map((job) => (job.jobId === jobId ? currentJob : job))
+        galleryPromptVisible: false,
+        selectedImage: (currentJob.coverImages || [])[0] || null,
+        selectedImageId: ((currentJob.coverImages || [])[0] || {}).id || ""
       });
+      this.setJobs(this.data.jobs.map((job) => (job.jobId === jobId ? currentJob : job)));
     } catch (error) {
       wx.showToast({ title: error.message, icon: "none" });
     } finally {
@@ -253,7 +305,7 @@ Page({
   },
 
   closeGallery() {
-    this.setData({ currentJob: null });
+    this.setData({ currentJob: null, galleryPromptVisible: false, selectedImage: null, selectedImageId: "" });
   },
 
   async markJobNotificationRead(jobId) {
@@ -277,6 +329,79 @@ Page({
       current: url,
       urls
     });
+  },
+
+  selectGalleryImage(event) {
+    const imageId = event.currentTarget.dataset.id;
+    const selectedImage = (this.data.currentJob.coverImages || []).find((item) => item.id === imageId) || null;
+    this.setData({ galleryPromptVisible: false, selectedImage, selectedImageId: selectedImage ? selectedImage.id : "" });
+  },
+
+  toggleGalleryPrompt() {
+    this.setData({ galleryPromptVisible: !this.data.galleryPromptVisible });
+  },
+
+  async saveSelectedImage() {
+    if (!this.data.selectedImage || this.data.saving) return;
+    this.setData({ saving: true, saveProgressText: "保存中" });
+    try {
+      await galleryUtils.saveImageUrlToAlbum(this.data.selectedImage.url);
+      wx.showToast({ title: "已保存到相册", icon: "success" });
+    } catch (error) {
+      wx.showToast({ title: error.message || "保存失败", icon: "none" });
+    } finally {
+      this.setData({ saving: false, saveProgressText: "" });
+    }
+  },
+
+  async saveAllImages() {
+    const images = (this.data.currentJob && this.data.currentJob.coverImages) || [];
+    if (!images.length || this.data.saving) return;
+    this.setData({ saving: true });
+    let savedCount = 0;
+    try {
+      for (const [index, image] of images.entries()) {
+        this.setData({ saveProgressText: `保存中 ${index + 1}/${images.length}` });
+        try {
+          await galleryUtils.saveImageUrlToAlbum(image.url);
+          savedCount += 1;
+        } catch {
+          // 单张失败后继续尝试保存后续图片，最后统一提示。
+        }
+      }
+      wx.showToast({
+        title: savedCount === images.length ? `已保存 ${savedCount} 张` : `已保存 ${savedCount}/${images.length} 张`,
+        icon: savedCount ? "success" : "none"
+      });
+    } finally {
+      this.setData({ saving: false, saveProgressText: "" });
+    }
+  },
+
+  reuseSelectedImage() {
+    const selectedImage = this.data.selectedImage;
+    if (!selectedImage) return;
+    wx.setStorageSync("createPreset", "scene");
+    wx.setStorageSync("createPrompt", this.promptForImage(selectedImage));
+    this.closeGallery();
+    wx.switchTab({ url: "/pages/workbench/workbench" });
+  },
+
+  promptForImage(image) {
+    return image.prompt || (this.data.currentJob && this.data.currentJob.message) || "";
+  },
+
+  promptForPreview(job, sceneId) {
+    const pieces = [
+      job.productTitle ? `商品：${job.productTitle}` : "",
+      this.sceneLabel(sceneId) ? `场景：${this.sceneLabel(sceneId)}` : "",
+      job.message || ""
+    ].filter(Boolean);
+    return pieces.join("\n");
+  },
+
+  sceneLabel(sceneId) {
+    return galleryUtils.workTag({ presetId: sceneId });
   },
 
   findGalleryUrls(url) {

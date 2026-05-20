@@ -14,6 +14,8 @@ PUBLIC_PORT="${PUBLIC_PORT:-8787}"
 DEV_PUBLIC_PORT="${DEV_PUBLIC_PORT:-8790}"
 BLUE_PORT="${BLUE_PORT:-8788}"
 GREEN_PORT="${GREEN_PORT:-8789}"
+APNS_ENV_FILE="${APNS_ENV_FILE:-.env.apns}"
+APNS_SECRETS_DIR="${APNS_SECRETS_DIR:-secrets/apns}"
 
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -55,11 +57,27 @@ sync_code() {
     --exclude='.codex-temp/' \
     --exclude='data/' \
     --exclude='downloads/' \
+    --exclude='secrets/' \
     --exclude='.env' \
     --exclude='.env.*' \
     --exclude='apps/**/dist/' \
     --exclude='packages/**/dist/' \
     ./ "$SERVER:$REMOTE_DIR/"
+}
+
+sync_apns_secrets() {
+  if [ ! -f "$APNS_ENV_FILE" ]; then
+    return 0
+  fi
+
+  echo "Syncing APNs runtime config to $SERVER:$REMOTE_DIR ..."
+  rsync -az "$APNS_ENV_FILE" "$SERVER:$REMOTE_DIR/$APNS_ENV_FILE"
+
+  if [ -d "$APNS_SECRETS_DIR" ]; then
+    remote "mkdir -p '$REMOTE_DIR/$APNS_SECRETS_DIR'"
+    rsync -az "$APNS_SECRETS_DIR/" "$SERVER:$REMOTE_DIR/$APNS_SECRETS_DIR/"
+    remote "chmod 700 '$REMOTE_DIR/secrets' '$REMOTE_DIR/$APNS_SECRETS_DIR' 2>/dev/null || true; chmod 600 '$REMOTE_DIR/$APNS_SECRETS_DIR/'*.p8 2>/dev/null || true"
+  fi
 }
 
 case "${1:-}" in
@@ -91,6 +109,7 @@ service="app-$target"
 
 echo "Syncing local workspace to $SERVER:$REMOTE_DIR ..."
 sync_code
+sync_apns_secrets
 
 echo "Preparing blue/green nginx config on server ..."
 remote "cd '$REMOTE_DIR' && mkdir -p \"\$(dirname '$ACTIVE_FILE')\" \"\$(dirname '$UPSTREAM_FILE')\" \"\$(dirname '$DEV_UPSTREAM_FILE')\" && printf '%s\n' '$current' > '$ACTIVE_FILE' && cat > '$UPSTREAM_FILE' <<EOF

@@ -1,4 +1,4 @@
-import { createSign, createVerify, randomUUID } from "node:crypto";
+import { createHash, createSign, createVerify, randomUUID } from "node:crypto";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import type { RequestTenant } from "./auth-context.js";
 import type {
@@ -15,11 +15,13 @@ import type {
   CreatePaymentResponse,
   PurchasePlanRequest,
   SaveAlipayConfigRequest,
-  SaveBillingSettingsRequest
+  SaveBillingSettingsRequest,
+  VerifyAppleInAppPurchaseRequest
 } from "./contracts.js";
 import { db } from "./database.js";
 import { ensureUserPlanCurrent, planExpiryFrom } from "./plan-expiration.js";
 import { applyReferralCashback } from "./referral-service.js";
+import { appleIapRuntimeConfig } from "./runtime.js";
 import { billingOrders, billingTransactions, redemptionCodeRedemptions, subscriptionPlans, systemSettings, users } from "./schema.js";
 import { getSystemSetting, saveSystemSetting } from "./system-settings.js";
 
@@ -28,6 +30,9 @@ const ALIPAY_SETTINGS_KEY = "payment.alipay";
 const DEFAULT_CURRENCY = "CNY";
 const DEFAULT_ALIPAY_GATEWAY = "https://openapi.alipay.com/gateway.do";
 const ALIPAY_NOTIFY_SUCCESS = "success";
+const APPLE_IAP_PRODUCTION_API = "https://api.storekit.apple.com";
+const APPLE_IAP_SANDBOX_API = "https://api.storekit-sandbox.apple.com";
+const APPLE_IAP_AUDIENCE = "appstoreconnect-v1";
 type BillingTransactionClient = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 export class BillingError extends Error {
@@ -234,6 +239,117 @@ export async function purchasePlan(
     status: "pending",
     paymentUrl,
     checkoutUrl: paymentUrl
+  };
+}
+
+export async function verifyAppleInAppPurchase(
+  tenant: RequestTenant,
+  input: VerifyAppleInAppPurchaseRequest
+): Promise<CreatePaymentResponse> {
+  await ensureUserPlanCurrent(tenant.userId);
+  const transactionId = limitedString(input.transactionId, 128);
+  if (!transactionId) {
+    throw new BillingError("invalid_apple_iap", "Apple 内购交易编号不能为空。");
+  }
+
+  const [plan] = await db.select().from(subscriptionPlans).where(eq(subscriptionPlans.id, input.planId)).limit(1);
+  if (!plan || Number(plan.enabled ?? 0) !== 1) {
+    throw new BillingError("plan_not_found", "套餐不存在或已停用。", 404);
+  }
+
+  const expectedProductId = appleProductIdForPlan(plan.id);
+  if (input.productId !== expectedProductId) {
+    throw new BillingError("invalid_apple_iap_product", "Apple 内购商品与套餐不匹配。", 400);
+  }
+
+  const appleTransaction = await fetchAppleTransactionInfo(transactionId, input.environment);
+  if (appleTransaction.bundleId !== appleIapRuntimeConfig.bundleId) {
+    throw new BillingError("invalid_apple_iap_bundle", "Apple 内购 Bundle ID 不匹配。", 400);
+  }
+  if (appleTransaction.productId !== expectedProductId) {
+    throw new BillingError("invalid_apple_iap_product", "Apple 内购商品与套餐不匹配。", 400);
+  }
+  if (appleTransaction.transactionId !== transactionId) {
+    throw new BillingError("invalid_apple_iap_transaction", "Apple 内购交易编号不匹配。", 400);
+  }
+  if (appleTransaction.revocationDate) {
+    throw new BillingError("revoked_apple_iap_transaction", "这笔 Apple 内购交易已撤销。", 409);
+  }
+
+  const outTradeNo = createAppleOutTradeNo(transactionId);
+  const existingOrder = await getBillingOrderByOutTradeNo(outTradeNo);
+  if (existingOrder) {
+    if (existingOrder.userId !== tenant.userId) {
+      throw new BillingError("apple_iap_transaction_used", "这笔 Apple 内购交易已绑定其他账号。", 409);
+    }
+    if (existingOrder.status !== "paid") {
+      await applyPaidOrder(existingOrder.outTradeNo, {
+        providerTradeNo: appleTransaction.transactionId,
+        notifyPayload: {
+          environment: appleTransaction.environment,
+          originalTransactionId: appleTransaction.originalTransactionId,
+          productId: appleTransaction.productId,
+          signedTransactionInfo: appleTransaction.signedTransactionInfo,
+          transactionId: appleTransaction.transactionId
+        }
+      });
+      const savedOrder = await getBillingOrderById(existingOrder.id);
+      return {
+        order: savedOrder,
+        orderId: savedOrder.id,
+        outTradeNo: savedOrder.outTradeNo,
+        status: "paid",
+        message: "Apple 内购已验证，套餐权益已生效。"
+      };
+    }
+    return {
+      order: existingOrder,
+      orderId: existingOrder.id,
+      outTradeNo: existingOrder.outTradeNo,
+      status: "paid",
+      message: "Apple 内购已验证，套餐权益已生效。"
+    };
+  }
+
+  const order = await insertPendingOrder({
+    tenant,
+    type: "plan_purchase",
+    title: `${plan.name} 套餐购买`,
+    amountCents: Number(plan.priceCents ?? 0),
+    currency: plan.currency || DEFAULT_CURRENCY,
+    paymentProvider: "apple_iap",
+    planId: plan.id,
+    imageQuota: Number(plan.imageQuota ?? 0),
+    storageQuotaBytes: Number(plan.storageQuotaBytes ?? 0),
+    outTradeNo,
+    metadata: {
+      appAccountToken: input.appAccountToken,
+      environment: appleTransaction.environment,
+      originalTransactionId: input.originalTransactionId ?? appleTransaction.originalTransactionId,
+      planName: plan.name,
+      productId: expectedProductId,
+      purchaseToken: input.purchaseToken
+    }
+  });
+
+  await applyPaidOrder(order.outTradeNo, {
+    providerTradeNo: appleTransaction.transactionId,
+    notifyPayload: {
+      environment: appleTransaction.environment,
+      originalTransactionId: appleTransaction.originalTransactionId,
+      productId: appleTransaction.productId,
+      signedTransactionInfo: appleTransaction.signedTransactionInfo,
+      transactionId: appleTransaction.transactionId
+    }
+  });
+  const savedOrder = await getBillingOrderById(order.id);
+
+  return {
+    order: savedOrder,
+    orderId: savedOrder.id,
+    outTradeNo: savedOrder.outTradeNo,
+    status: "paid",
+    message: "Apple 内购已验证，套餐权益已生效。"
   };
 }
 
@@ -527,7 +643,7 @@ async function applyPlanPurchaseByBalance(tenant: RequestTenant, plan: typeof su
 
 async function applyPaidOrder(
   outTradeNo: string,
-  input: { providerTradeNo?: string; paidAmountCents?: number; notifyPayload: Record<string, string> }
+  input: { providerTradeNo?: string; paidAmountCents?: number; notifyPayload: Record<string, unknown> }
 ): Promise<void> {
   let paidOrder: { id: string; type: string; userId: string; amountCents: number; currency: string; now: string } | undefined;
   await db.transaction(async (tx) => {
@@ -620,7 +736,7 @@ async function applyPaidOrder(
       quotaCount: Number(order.imageQuota ?? 0),
       unitPriceCents: 0,
       relatedId: order.id,
-      note: order.type === "recharge" ? "支付宝充值到账" : "支付宝购买套餐生效",
+      note: order.type === "recharge" ? `${paymentProviderName(order.paymentProvider)}充值到账` : `${paymentProviderName(order.paymentProvider)}购买套餐生效`,
       createdByUserId: user.id,
       metadataJson: JSON.stringify({ orderId: order.id, outTradeNo: order.outTradeNo, planId: order.planId }),
       createdAt: now
@@ -675,16 +791,17 @@ async function insertPendingOrder(input: {
   title: string;
   amountCents: number;
   currency: string;
-  paymentProvider: "alipay";
+  paymentProvider: "alipay" | "apple_iap";
   planId?: string;
   imageQuota?: number;
   storageQuotaBytes?: number;
+  outTradeNo?: string;
   returnUrl?: string;
   metadata?: Record<string, unknown>;
 }): Promise<BillingOrder> {
   const now = new Date().toISOString();
   const id = randomUUID();
-  const outTradeNo = createOutTradeNo(input.type);
+  const outTradeNo = input.outTradeNo ?? createOutTradeNo(input.type);
   await db.insert(billingOrders).values({
     id,
     outTradeNo,
@@ -717,6 +834,11 @@ async function getBillingOrderById(orderId: string): Promise<BillingOrder> {
     throw new BillingError("order_not_found", "订单不存在。", 404);
   }
   return toBillingOrder(row);
+}
+
+async function getBillingOrderByOutTradeNo(outTradeNo: string): Promise<BillingOrder | undefined> {
+  const [row] = await db.select().from(billingOrders).where(eq(billingOrders.outTradeNo, outTradeNo)).limit(1);
+  return row ? toBillingOrder(row) : undefined;
 }
 
 function toBillingTransaction(row: typeof billingTransactions.$inferSelect, userEmail?: string): BillingTransaction {
@@ -779,6 +901,7 @@ function toBillingPlan(plan: typeof subscriptionPlans.$inferSelect): BillingPlan
     storageQuotaBytes: Number(plan.storageQuotaBytes ?? 0),
     priceCents: Number(plan.priceCents ?? 0),
     currency: plan.currency,
+    appleProductId: appleProductIdForPlan(plan.id),
     enabled: Number(plan.enabled ?? 0) === 1,
     sortOrder: Number(plan.sortOrder ?? 0),
     benefits: parseJsonValue(plan.benefitsJson),
@@ -811,6 +934,125 @@ function toAlipayConfigView(value: Record<string, unknown>, updatedAt?: string):
 
 function getRawAlipayConfig(): Promise<Record<string, unknown>> {
   return getSetting(ALIPAY_SETTINGS_KEY).then((row) => parseRecord(row?.valueJson));
+}
+
+interface AppleTransactionInfo {
+  bundleId: string;
+  environment?: string;
+  originalTransactionId?: string;
+  productId: string;
+  revocationDate?: number;
+  signedTransactionInfo: string;
+  transactionId: string;
+}
+
+function appleProductIdForPlan(planId: string): string {
+  return appleIapRuntimeConfig.productIds[planId] || `${appleIapRuntimeConfig.productPrefix}${planId}`;
+}
+
+async function fetchAppleTransactionInfo(transactionId: string, environment?: string): Promise<AppleTransactionInfo> {
+  ensureAppleIapConfigured();
+  const preferredBaseUrls = environment === "Sandbox" ? [APPLE_IAP_SANDBOX_API, APPLE_IAP_PRODUCTION_API] : [APPLE_IAP_PRODUCTION_API, APPLE_IAP_SANDBOX_API];
+  let lastError: unknown;
+
+  for (const baseUrl of preferredBaseUrls) {
+    try {
+      return await fetchAppleTransactionInfoFromBaseUrl(baseUrl, transactionId);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  if (lastError instanceof BillingError) {
+    throw lastError;
+  }
+  throw new BillingError("apple_iap_verification_failed", "Apple 内购交易校验失败。", 502);
+}
+
+async function fetchAppleTransactionInfoFromBaseUrl(baseUrl: string, transactionId: string): Promise<AppleTransactionInfo> {
+  const jwt = createAppleServerApiJwt();
+  const response = await fetch(`${baseUrl}/inApps/v1/transactions/${encodeURIComponent(transactionId)}`, {
+    headers: {
+      Authorization: `Bearer ${jwt}`
+    }
+  });
+  const bodyText = await response.text();
+  if (!response.ok) {
+    throw new BillingError("apple_iap_verification_failed", `Apple 内购交易校验失败（HTTP ${response.status}）。`, 502);
+  }
+
+  const body = parseJsonRecord(bodyText);
+  const signedTransactionInfo = stringValue(body.signedTransactionInfo);
+  if (!signedTransactionInfo) {
+    throw new BillingError("apple_iap_verification_failed", "Apple 未返回交易签名信息。", 502);
+  }
+
+  const payload = decodeJwsPayload(signedTransactionInfo);
+  const bundleId = stringValue(payload.bundleId);
+  const productId = stringValue(payload.productId);
+  const signedTransactionId = stringValue(payload.transactionId);
+  if (!bundleId || !productId || !signedTransactionId) {
+    throw new BillingError("apple_iap_verification_failed", "Apple 交易信息不完整。", 502);
+  }
+
+  return {
+    bundleId,
+    environment: stringValue(payload.environment),
+    originalTransactionId: stringValue(payload.originalTransactionId),
+    productId,
+    revocationDate: typeof payload.revocationDate === "number" ? payload.revocationDate : undefined,
+    signedTransactionInfo,
+    transactionId: signedTransactionId
+  };
+}
+
+function ensureAppleIapConfigured(): void {
+  if (!appleIapRuntimeConfig.bundleId || !appleIapRuntimeConfig.issuerId || !appleIapRuntimeConfig.keyId || !appleIapRuntimeConfig.privateKey) {
+    throw new BillingError("apple_iap_not_configured", "Apple 内购服务端配置不完整。", 500);
+  }
+}
+
+function createAppleServerApiJwt(): string {
+  const now = Math.floor(Date.now() / 1000);
+  const header = base64UrlJson({
+    alg: "ES256",
+    kid: appleIapRuntimeConfig.keyId,
+    typ: "JWT"
+  });
+  const payload = base64UrlJson({
+    aud: APPLE_IAP_AUDIENCE,
+    bid: appleIapRuntimeConfig.bundleId,
+    exp: now + 300,
+    iat: now,
+    iss: appleIapRuntimeConfig.issuerId
+  });
+  const signingInput = `${header}.${payload}`;
+  const signer = createSign("SHA256");
+  signer.update(signingInput, "utf8");
+  signer.end();
+  const signature = signer.sign({ key: normalizePrivateKey(appleIapRuntimeConfig.privateKey || ""), dsaEncoding: "ieee-p1363" });
+  return `${signingInput}.${signature.toString("base64url")}`;
+}
+
+function base64UrlJson(value: unknown): string {
+  return Buffer.from(JSON.stringify(value)).toString("base64url");
+}
+
+function decodeJwsPayload(value: string): Record<string, unknown> {
+  const [, payload] = value.split(".");
+  if (!payload) {
+    throw new BillingError("apple_iap_verification_failed", "Apple 交易签名格式无效。", 502);
+  }
+  return parseJsonRecord(Buffer.from(payload, "base64url").toString("utf8"));
+}
+
+function parseJsonRecord(value: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
 }
 
 function ensureAlipayEnabled(config: Record<string, unknown>): void {
@@ -909,6 +1151,18 @@ function formatTimestamp(date: Date): string {
 
 function createOutTradeNo(type: string): string {
   return `${type.slice(0, 3)}_${Date.now()}_${randomUUID().slice(0, 8)}`;
+}
+
+function createAppleOutTradeNo(transactionId: string): string {
+  const compact = transactionId.replace(/[^\w-]/gu, "");
+  if (compact.length <= 110) {
+    return `apple_${compact}`;
+  }
+  return `apple_${createHash("sha256").update(transactionId).digest("hex").slice(0, 32)}`;
+}
+
+function paymentProviderName(provider: string): string {
+  return provider === "apple_iap" ? "Apple 内购" : "支付宝";
 }
 
 function alipayAmountToCents(value: string | undefined): number | undefined {

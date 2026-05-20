@@ -19,7 +19,33 @@
     <view class="empty-copy">先创建一组商品图任务，生成后会在这里展示。</view>
   </view>
 
-  <view wx:for="{{jobs}}" wx:key="jobId" class="album-card" bindtap="openJob" data-id="{{item.jobId}}">
+  <block wx:if="{{token && jobs.length}}">
+    <view class="jobs-summary">
+      <view class="summary-cell">
+        <view class="summary-value">{{jobs.length}}</view>
+        <view class="summary-label">全部任务</view>
+      </view>
+      <view class="summary-cell">
+        <view class="summary-value">{{runningCount}}</view>
+        <view class="summary-label">生成中</view>
+      </view>
+      <view class="summary-cell">
+        <view class="summary-value">{{finishedCount}}</view>
+        <view class="summary-label">可挑图</view>
+      </view>
+    </view>
+
+    <scroll-view scroll-x class="filter-scroll" enhanced show-scrollbar="{{false}}">
+      <view wx:for="{{filters}}" wx:key="id" class="filter-chip {{item.active ? 'active' : ''}}" bindtap="selectFilter" data-id="{{item.id}}">{{item.label}}</view>
+    </scroll-view>
+  </block>
+
+  <view wx:if="{{token && jobs.length && !filteredJobs.length}}" class="empty-card">
+    <view class="empty-title">当前筛选下没有任务</view>
+    <view class="empty-copy">切换筛选条件，或刷新同步最新生成状态。</view>
+  </view>
+
+  <view wx:for="{{filteredJobs}}" wx:key="jobId" class="album-card" bindtap="openJob" data-id="{{item.jobId}}">
     <view class="album-head">
       <view>
         <view class="album-title">{{item.productTitle || '未命名商品'}}</view>
@@ -66,21 +92,29 @@
       </view>
       <scroll-view scroll-y class="gallery-body">
         <view wx:if="{{currentJob.coverImages.length}}" class="gallery-grid">
-          <image
-            wx:for="{{currentJob.coverImages}}"
-            wx:key="id"
-            class="gallery-image"
-            src="{{item.url}}"
-            mode="aspectFill"
-            catchtap="previewImage"
-            data-url="{{item.url}}"
-          />
+          <view wx:for="{{currentJob.coverImages}}" wx:key="id" class="gallery-image-wrap {{selectedImageId === item.id ? 'active' : ''}}" catchtap="selectGalleryImage" data-id="{{item.id}}">
+            <image class="gallery-image" src="{{item.url}}" mode="aspectFill" />
+            <view class="gallery-image-label">{{item.sceneLabel || item.scene}}</view>
+          </view>
         </view>
         <view wx:else class="album-placeholder large">
           <view class="placeholder-icon">⌁</view>
           <view>这批任务暂时还没有可展示图片。</view>
         </view>
       </scroll-view>
+      <view wx:if="{{selectedImage}}" class="gallery-tools">
+        <view wx:if="{{galleryPromptVisible}}" class="prompt-box">
+          <view class="prompt-title">提示词</view>
+          <view class="prompt-text">{{selectedImage.prompt || currentJob.message}}</view>
+        </view>
+        <view class="tool-row">
+          <view class="tool-button" bindtap="previewImage" data-url="{{selectedImage.url}}">放大</view>
+          <view class="tool-button" bindtap="toggleGalleryPrompt">{{galleryPromptVisible ? '收起提示词' : '提示词'}}</view>
+          <view class="tool-button" bindtap="saveSelectedImage">{{saving ? (saveProgressText || '保存中') : '保存单张'}}</view>
+          <view class="tool-button primary" bindtap="reuseSelectedImage">套用生成</view>
+        </view>
+        <view class="save-all" bindtap="saveAllImages">{{saving ? (saveProgressText || '保存中') : '保存全部图片'}}</view>
+      </view>
     </view>
   </view>
 </view>

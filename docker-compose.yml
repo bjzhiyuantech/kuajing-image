@@ -28,6 +28,8 @@ services:
     env_file:
       - path: .env
         required: false
+      - path: .env.apns
+        required: false
     environment:
       HOST: 0.0.0.0
       PORT: ${PORT:-8787}
@@ -42,6 +44,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./downloads:/app/apps/web/dist/downloads
+      - ./secrets/apns:/run/secrets/apns:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

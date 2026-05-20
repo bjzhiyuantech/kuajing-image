@@ -130,6 +130,9 @@ async function createSchema(): Promise<void> {
       password_hash VARCHAR(512) NOT NULL DEFAULT '',
       display_name VARCHAR(255) NOT NULL,
       role VARCHAR(32) NOT NULL DEFAULT 'user',
+      account_status VARCHAR(32) NOT NULL DEFAULT 'active',
+      deleted_at VARCHAR(32),
+      deletion_lock_until VARCHAR(32),
       plan_id VARCHAR(64),
       plan_expires_at VARCHAR(32),
       quota_total BIGINT NOT NULL DEFAULT 0,
@@ -790,6 +793,9 @@ function inviteCodeFromUserId(userId: string): string {
 async function migrateUsersTable(): Promise<void> {
   await addColumnIfMissing("users", "password_hash", "VARCHAR(512) NOT NULL DEFAULT ''");
   await addColumnIfMissing("users", "role", "VARCHAR(32) NOT NULL DEFAULT 'user'");
+  await addColumnIfMissing("users", "account_status", "VARCHAR(32) NOT NULL DEFAULT 'active'");
+  await addColumnIfMissing("users", "deleted_at", "VARCHAR(32)");
+  await addColumnIfMissing("users", "deletion_lock_until", "VARCHAR(32)");
   await addColumnIfMissing("users", "plan_id", "VARCHAR(64)");
   await addColumnIfMissing("users", "plan_expires_at", "VARCHAR(32)");
   await addColumnIfMissing("users", "quota_total", "BIGINT NOT NULL DEFAULT 0");

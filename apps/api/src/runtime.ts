@@ -88,12 +88,35 @@ export const wechatMiniAppRuntimeConfig = {
   enabled: process.env.WECHAT_MINIAPP_ENABLED === "true"
 };
 
+export const appleIapRuntimeConfig = {
+  bundleId: emptyToUndefined(process.env.APPLE_IAP_BUNDLE_ID) ?? "com.neimou.shangtuai",
+  issuerId: emptyToUndefined(process.env.APPLE_IAP_ISSUER_ID),
+  keyId: emptyToUndefined(process.env.APPLE_IAP_KEY_ID),
+  privateKey: emptyToUndefined(process.env.APPLE_IAP_PRIVATE_KEY),
+  productPrefix: emptyToUndefined(process.env.APPLE_IAP_PRODUCT_PREFIX) ?? "com.neimou.shangtuai.plan.",
+  productIds: parseStringMap(process.env.APPLE_IAP_PRODUCT_IDS_JSON)
+};
+
 export const getuiRuntimeConfig = {
   enabled: process.env.GETUI_ENABLED === "true",
   appId: emptyToUndefined(process.env.GETUI_APP_ID),
   appKey: emptyToUndefined(process.env.GETUI_APP_KEY),
   masterSecret: emptyToUndefined(process.env.GETUI_MASTER_SECRET),
   baseUrl: (emptyToUndefined(process.env.GETUI_BASE_URL) ?? "https://restapi.getui.com/v2").replace(/\/+$/u, "")
+};
+
+export const apnsRuntimeConfig = {
+  enabled: process.env.APNS_ENABLED === "true",
+  bundleId: emptyToUndefined(process.env.APNS_BUNDLE_ID) ?? appleIapRuntimeConfig.bundleId,
+  teamId: emptyToUndefined(process.env.APNS_TEAM_ID),
+  keyId: emptyToUndefined(process.env.APNS_KEY_ID),
+  privateKey: emptyToUndefined(process.env.APNS_PRIVATE_KEY),
+  keyFile: emptyToUndefined(process.env.APNS_KEY_FILE),
+  environment: process.env.APNS_ENVIRONMENT === "development" ? "development" : "production",
+  baseUrl:
+    process.env.APNS_ENVIRONMENT === "development"
+      ? "https://api.sandbox.push.apple.com"
+      : "https://api.push.apple.com"
 };
 
 export const extensionReleaseRuntimeConfig = {
@@ -109,6 +132,15 @@ export const extensionReleaseRuntimeConfig = {
   prodInstallHelpUrl: emptyToUndefined(process.env.EXTENSION_PROD_INSTALL_HELP_URL) ?? "/install-help.html"
 };
 
+export const appReleaseRuntimeConfig = {
+  iosVersion: emptyToUndefined(process.env.APP_RELEASE_IOS_VERSION) ?? "",
+  iosBuildNumber: emptyToUndefined(process.env.APP_RELEASE_IOS_BUILD_NUMBER),
+  iosDownloadUrl: emptyToUndefined(process.env.APP_RELEASE_IOS_DOWNLOAD_URL),
+  androidVersion: emptyToUndefined(process.env.APP_RELEASE_ANDROID_VERSION) ?? "",
+  androidBuildNumber: emptyToUndefined(process.env.APP_RELEASE_ANDROID_BUILD_NUMBER),
+  androidDownloadUrl: emptyToUndefined(process.env.APP_RELEASE_ANDROID_DOWNLOAD_URL)
+};
+
 export function ensureRuntimeStorage(): void {
   mkdirSync(runtimePaths.dataDir, { recursive: true });
   mkdirSync(runtimePaths.assetsDir, { recursive: true });
@@ -118,4 +150,27 @@ export function ensureRuntimeStorage(): void {
 function emptyToUndefined(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function parseStringMap(value: string | undefined): Record<string, string> {
+  if (!value?.trim()) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {};
+    }
+
+    const result: Record<string, string> = {};
+    for (const [key, item] of Object.entries(parsed)) {
+      if (typeof item === "string" && item.trim()) {
+        result[key] = item.trim();
+      }
+    }
+    return result;
+  } catch {
+    return {};
+  }
 }

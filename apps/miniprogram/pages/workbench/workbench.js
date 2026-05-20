@@ -3,6 +3,7 @@ const { fileToDataUrl } = require("../../utils/image");
 const { LANGUAGES, MARKETS, PLATFORMS, SCENES } = require("../../utils/constants");
 
 const MODES = [
+  { id: "custom", title: "自由创作", desc: "只写提示词也能生成，可选上传参考图控制主体、风格或构图。", icon: "写" },
   { id: "enhance", title: "原图增强", desc: "保留商品原貌，生成卖点文字和电商排版。", icon: "✨" },
   { id: "creative", title: "场景创作", desc: "依据主图生成生活方式、模特穿戴和搭配场景。", icon: "🎬" },
   { id: "category-kit", title: "品类套图", desc: "上传参考图和描述，自动拆解整套 Listing Image Kit。", icon: "📦" },
@@ -12,6 +13,7 @@ const MODES = [
 ];
 
 const MODE_SCENES = {
+  custom: ["lifestyle"],
   enhance: ["marketplace-main", "logo-benefit", "feature-benefit", "promo-poster"],
   creative: ["lifestyle", "model-wear", "accessory-match", "seasonal-campaign", "social-ad"],
   "category-kit": [
@@ -35,6 +37,8 @@ const MODE_SCENES = {
 
 const PRESET_TO_MODE = {
   category: "category-kit",
+  custom: "custom",
+  freestyle: "custom",
   launch: "enhance",
   localize: "text-translation",
   replace: "one-click-replace",
@@ -101,8 +105,8 @@ Page({
     marketLabels: MARKETS.map((item) => item.label),
     material: "",
     mode: "enhance",
-    modeDesc: MODES[0].desc,
-    modes: MODES.map((item, index) => ({ ...item, active: index === 0 })),
+    modeDesc: (MODES.find((item) => item.id === "enhance") || MODES[0]).desc,
+    modes: MODES.map((item) => ({ ...item, active: item.id === "enhance" })),
     platformIndex: DEFAULT_PLATFORM_INDEX >= 0 ? DEFAULT_PLATFORM_INDEX : 0,
     platformLabels: PLATFORMS.map((item) => item.label),
     removeWatermarkAndLogo: true,
@@ -131,10 +135,24 @@ Page({
       wx.removeStorageSync("createPreset");
       this.applyPreset(preset);
     }
+    const prompt = wx.getStorageSync("createPrompt");
+    if (prompt) {
+      wx.removeStorageSync("createPrompt");
+      this.applyPrompt(prompt);
+    }
   },
 
   applyPreset(preset) {
     this.changeMode(PRESET_TO_MODE[preset] || "enhance");
+  },
+
+  applyPrompt(prompt) {
+    const nextPrompt = String(prompt || "").trim();
+    if (!nextPrompt) return;
+    this.setData({
+      description: this.data.description || nextPrompt,
+      extraDirection: this.data.extraDirection || nextPrompt
+    });
   },
 
   selectMode(event) {
@@ -152,8 +170,8 @@ Page({
       modeDesc: modeMeta.desc,
       modes: MODES.map((item) => ({ ...item, active: item.id === mode })),
       scenes,
-      imageLimit: mode === "one-click-replace" ? 9 : 3,
-      images: mode === "one-click-replace" ? this.data.images.slice(0, 9) : this.data.images.slice(0, 3)
+      imageLimit: mode === "one-click-replace" ? 9 : mode === "custom" ? 4 : 3,
+      images: mode === "one-click-replace" ? this.data.images.slice(0, 9) : mode === "custom" ? this.data.images.slice(0, 4) : this.data.images.slice(0, 3)
     };
     if (mode === "single-poster" || mode === "category-kit" || mode === "one-click-replace") {
       const longPosterSizeIndex = SIZE_OPTIONS.findIndex((item) => item.id === "ecommerce-long-poster");
@@ -305,16 +323,21 @@ Page({
 
     const title = this.data.title.trim();
     const sceneTemplateIds = this.data.scenes.filter((item) => item.active && item.visible).map((item) => item.id);
-    const titleOptionalMode = this.data.mode === "single-poster" || this.data.mode === "category-kit" || this.data.mode === "one-click-replace";
+    const isCustomMode = this.data.mode === "custom";
+    const titleOptionalMode = isCustomMode || this.data.mode === "single-poster" || this.data.mode === "category-kit" || this.data.mode === "one-click-replace";
     if (!title && !titleOptionalMode) {
       wx.showToast({ title: "请输入商品标题", icon: "none" });
+      return;
+    }
+    if (isCustomMode && !this.data.description.trim() && !this.data.extraDirection.trim()) {
+      wx.showToast({ title: "请填写提示词", icon: "none" });
       return;
     }
     if (this.data.mode === "category-kit" && !title && !this.data.description.trim()) {
       wx.showToast({ title: "请填写商品描述", icon: "none" });
       return;
     }
-    if (!this.data.images.length) {
+    if (!isCustomMode && !this.data.images.length) {
       wx.showToast({ title: "请上传 1-3 张图片", icon: "none" });
       return;
     }
@@ -337,6 +360,7 @@ Page({
     const extraDirection = [
       this.data.extraDirection.trim(),
       isCategoryKitMode ? "自动识别商品品类、平台和市场，按当前商品拆解详情页级套图，覆盖整体、细节、卖点、规格、包装、用法、场景、人群和保障注意事项；不要套用固定围巾或丝巾模板。" : "",
+      isCustomMode ? `自由创作提示词：${this.data.description.trim()}` : "",
       this.data.brandOverlayEnabled ? "需要预留品牌 Logo 或品牌文字叠加空间，不要生成虚假品牌标识。" : ""
     ].filter(Boolean).join("\n");
 
@@ -350,22 +374,22 @@ Page({
       const replacementDataUrl = replacementImage ? await fileToDataUrl(replacementImage.path) : "";
       const buildPayloadBase = () => ({
         product: {
-          title: title || (isCategoryKitMode ? "AI 自拆品类套图" : isOneClickReplaceMode ? "一键换装/换品" : "单品完整电商海报"),
+          title: title || (isCustomMode ? "自由创作" : isCategoryKitMode ? "AI 自拆品类套图" : isOneClickReplaceMode ? "一键换装/换品" : "单品完整电商海报"),
           description: this.data.description.trim(),
           targetCustomer: this.data.targetCustomer.trim(),
           usageScene: this.data.usageScene.trim(),
           material: this.data.material.trim(),
           color: [this.data.color.trim(), this.data.sku.trim()].filter(Boolean).join(" / ")
         },
-        platform: isTextTranslationMode ? "other" : PLATFORMS[this.data.platformIndex].id,
-        market: isTextTranslationMode ? "global" : MARKETS[this.data.marketIndex].id,
+        platform: isTextTranslationMode || isCustomMode ? "other" : PLATFORMS[this.data.platformIndex].id,
+        market: isTextTranslationMode || isCustomMode ? "global" : MARKETS[this.data.marketIndex].id,
         textLanguage: isTextTranslationMode ? LANGUAGES[this.data.languageIndex].id : "none",
         allowTextRecreation: !isTextTranslationMode,
         removeWatermarkAndLogo: this.data.removeWatermarkAndLogo,
         sceneTemplateIds,
         size: { width: size.width, height: size.height },
         sizePresetId: size.id,
-        stylePresetId,
+        stylePresetId: isCustomMode ? "photoreal" : stylePresetId,
         quality: "auto",
         outputFormat: "png",
         countPerScene,
@@ -394,6 +418,15 @@ Page({
           ...buildPayloadBase(),
           referenceImages
         }));
+      } else if (isCustomMode && !this.data.images.length) {
+        const payload = {
+          ...buildPayloadBase(),
+          referenceImage: {
+            dataUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lQnZ6QAAAABJRU5ErkJggg==",
+            fileName: "prompt-only-reference.png"
+          }
+        };
+        jobs.push(await api.createBatchJob(payload));
       } else {
         const jobImages = targetImages;
         for (const [index, image] of jobImages.entries()) {
@@ -412,7 +445,7 @@ Page({
         RECENT_CREATED_JOBS_KEY,
         jobs.map((job) => ({
           jobId: job.jobId,
-          productTitle: title || "单品完整电商海报",
+          productTitle: title || (isCustomMode ? "自由创作" : "单品完整电商海报"),
           createdAt: job.createdAt || new Date().toISOString(),
           status: job.status || "pending",
           totalScenes: job.totalScenes || (isOneClickReplaceMode ? targetImages.length : sceneTemplateIds.length),

@@ -1083,6 +1083,39 @@ export interface ExtensionReleaseConfig {
   updatedAt?: string;
 }
 
+export type AppReleasePlatform = "ios" | "android";
+
+export interface AppReleaseTargetConfig {
+  enabled: boolean;
+  version: string;
+  buildNumber?: string;
+  downloadUrl: string;
+  releaseNotes: string[];
+  forceUpdate?: boolean;
+  publishedAt?: string;
+}
+
+export interface AppReleaseConfig {
+  ios: AppReleaseTargetConfig;
+  android: AppReleaseTargetConfig;
+  updatedAt?: string;
+}
+
+export interface SaveAppReleaseTargetConfig {
+  enabled?: boolean;
+  version?: string;
+  buildNumber?: string;
+  downloadUrl?: string;
+  releaseNotes?: string[];
+  forceUpdate?: boolean;
+  publishedAt?: string;
+}
+
+export interface SaveAppReleaseConfigRequest {
+  ios: SaveAppReleaseTargetConfig;
+  android: SaveAppReleaseTargetConfig;
+}
+
 export type HelpArticleStatus = "draft" | "published";
 export type HelpContentBlockType = "heading" | "paragraph" | "list" | "steps" | "image" | "video" | "callout";
 
@@ -1180,6 +1213,7 @@ export interface Plan {
   storageQuotaBytes: number;
   priceCents: number;
   currency: string;
+  appleProductId?: string;
   enabled: boolean;
   sortOrder: number;
   benefits?: unknown;
@@ -1195,6 +1229,9 @@ export interface AuthUser {
   phoneVerifiedAt?: string;
   displayName: string;
   role: UserRole;
+  accountStatus?: "active" | "deleted" | string;
+  deletedAt?: string;
+  deletionLockUntil?: string;
   planId?: string;
   planName?: string;
   planExpiresAt?: string;
@@ -1493,7 +1530,7 @@ export interface BillingOrder {
   planId?: string;
   imageQuota?: number;
   storageQuotaBytes?: number;
-  paymentProvider: "alipay" | "balance" | string;
+  paymentProvider: "alipay" | "apple_iap" | "balance" | string;
   paymentUrl?: string;
   providerTradeNo?: string;
   paidAt?: string;
@@ -1542,6 +1579,16 @@ export interface PurchasePlanRequest {
   planId: string;
   paymentMethod: "balance" | "alipay";
   returnUrl?: string;
+}
+
+export interface VerifyAppleInAppPurchaseRequest {
+  appAccountToken?: string;
+  environment?: string;
+  originalTransactionId?: string;
+  planId: string;
+  productId: string;
+  purchaseToken?: string;
+  transactionId: string;
 }
 
 export type RedemptionCodeStatus = "active" | "disabled";
@@ -1684,6 +1731,7 @@ export interface EcommerceBatchGenerateRequest {
   strategy?: EcommerceCategoryKitStrategy;
   assets?: EcommerceCategoryKitAssetInput[];
   missingInputs?: EcommerceCategoryKitMissingInput[];
+  plannedImages?: EcommerceCategoryKitPlanItem[];
   allowTextRecreation?: boolean;
   removeWatermarkAndLogo?: boolean;
   brandOverlayPlacement?: BrandOverlayPlacement;
@@ -1912,7 +1960,11 @@ export interface EcommerceCategoryKitPlanResponse {
 
 export type CategoryKitPlannerModelRole = "primary" | "fallback";
 export type CategoryKitPlannerProvider = "openai-responses" | "openai-compatible-chat" | "deepseek";
-export type CategoryKitPlannerModule = "prompt-optimizer" | "category-kit-planner" | "category-classifier";
+export type CategoryKitPlannerModule =
+  | "prompt-optimizer"
+  | "category-kit-planner"
+  | "category-classifier"
+  | "video-storyboard-planner";
 
 export interface CategoryKitPlannerConfigEntry {
   id: string;
@@ -1965,6 +2017,47 @@ export interface SaveSeedanceVideoConfigRequest {
   apiKey?: string;
   preserveApiKey?: boolean;
   baseUrl?: string;
+  model?: string;
+}
+
+export interface SeedanceVideoStoryboardFramePrompt {
+  prompt: string;
+  notes?: string;
+}
+
+export interface SeedanceVideoStoryboardScene {
+  id: string;
+  title: string;
+  overview: string;
+  scene: string;
+  camera: string;
+  plot: string;
+  extra: string;
+  videoPrompt: string;
+  firstFrame: SeedanceVideoStoryboardFramePrompt;
+  lastFrame: SeedanceVideoStoryboardFramePrompt;
+  duration: number;
+}
+
+export interface SeedanceVideoStoryboardPlanRequest {
+  intent: string;
+  referenceImages: ReferenceImageInput[];
+  ratio?: string;
+  duration?: number;
+  resolution?: string;
+  generateAudio?: boolean;
+}
+
+export interface SeedanceVideoStoryboardPlanResponse {
+  summary: string;
+  scenes: SeedanceVideoStoryboardScene[];
+  recommendations: {
+    ratio: string;
+    resolution: string;
+    duration: number;
+    generateAudio: boolean;
+    notes: string[];
+  };
   model?: string;
 }
 

@@ -10,6 +10,8 @@ const DEFAULT_POLL_INTERVAL_MS = 15_000;
 const DEFAULT_TIMEOUT_MS = 30 * 60_000;
 const MAX_PROMPT_LENGTH = 8_000;
 const MAX_REFERENCE_IMAGES = 4;
+const DEFAULT_VIDEO_DURATION_SECONDS = 4;
+const MAX_VIDEO_DURATION_SECONDS = 6;
 
 type SeedanceVideoMode = "reference" | "first-last";
 
@@ -378,11 +380,11 @@ function parseRatio(value: FormDataEntryValue | null): string {
 function parseDuration(value: FormDataEntryValue | null): number {
   const rawValue = stringEntry(value);
   if (!rawValue) {
-    return 11;
+    return DEFAULT_VIDEO_DURATION_SECONDS;
   }
   const duration = Number.parseInt(rawValue, 10);
-  if (!Number.isSafeInteger(duration) || duration <= 0 || duration > 60) {
-    throw new SeedanceVideoError("invalid_seedance_duration", "视频时长必须是 1 到 60 秒之间的整数。");
+  if (!Number.isSafeInteger(duration) || duration <= 0 || duration > MAX_VIDEO_DURATION_SECONDS) {
+    throw new SeedanceVideoError("invalid_seedance_duration", `视频时长必须是 1 到 ${MAX_VIDEO_DURATION_SECONDS} 秒之间的整数。`);
   }
   return duration;
 }

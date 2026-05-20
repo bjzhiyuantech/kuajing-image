@@ -3,6 +3,7 @@ import { db } from "./database.js";
 import { systemSettings } from "./schema.js";
 
 export const EXTENSION_RELEASE_SETTINGS_KEY = "extension.release";
+export const APP_RELEASE_SETTINGS_KEY = "app.release";
 export const DEMO_CANVAS_SETTINGS_KEY = "guest.demoCanvas";
 
 export async function getSystemSetting(key: string): Promise<typeof systemSettings.$inferSelect | undefined> {

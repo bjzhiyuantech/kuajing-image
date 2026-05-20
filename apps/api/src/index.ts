@@ -6,12 +6,14 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { and, asc, desc, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import type { Context } from "hono";
+import { getAppReleaseConfig, saveAppReleaseConfig } from "./app-release.js";
 import { parsePreviewWidth, readStoredAssetPreview } from "./asset-preview.js";
 import { resolveRequestTenant, type RequestTenant } from "./auth-context.js";
 import {
   AuthError,
   bindCurrentUserPhone,
   bindWechatMiniAppToCurrentUser,
+  deleteCurrentUserAccount,
   getAdminWechatMiniAppConfig,
   getAuthSession,
   getAuthSessionFromToken,
@@ -52,6 +54,7 @@ import {
   type CategoryKitPlannerConfigResponse,
   type EcommerceGenerationConcurrencyConfigResponse,
   type SaveAlipayConfigRequest,
+  type SaveAppReleaseConfigRequest,
   type SaveBillingSettingsRequest,
   type SaveCategoryKitPlannerConfigRequest,
   type SaveEcommerceGenerationConcurrencyConfigRequest,
@@ -88,10 +91,10 @@ import {
   type RedemptionCodeRedeemRequest,
   type NotificationDeviceRegisterRequest,
   type ReferenceImageInput,
+  type SeedanceVideoStoryboardPlanRequest,
   type SaveStorageConfigRequest,
-  type ExtensionReleaseConfig,
-  type ExtensionReleaseTargetConfig,
-  type StylePresetId
+  type StylePresetId,
+  type VerifyAppleInAppPurchaseRequest
 } from "./contracts.js";
 import { closeDatabase, ensureTenant, initializeDatabase } from "./database.js";
 import { db } from "./database.js";
@@ -111,7 +114,8 @@ import {
   attachGenerationToCharge,
   reserveGenerationCharge,
   saveAlipayConfig,
-  saveBillingSettings
+  saveBillingSettings,
+  verifyAppleInAppPurchase
 } from "./billing.js";
 import { DemoCanvasAssetError, uploadDemoCanvasAsset } from "./demo-canvas-assets.js";
 import { getAdminDemoCanvasConfig, getDemoCanvasConfig, saveDemoCanvasConfig } from "./demo-canvas-config.js";
@@ -123,7 +127,7 @@ import {
   updateInvoiceApplication
 } from "./invoice-service.js";
 import { EmailError, getSmtpSettings, saveSmtpSettings, sendRegisterEmailCode } from "./email-service.js";
-import { SmsError, getAliyunSmsSettings, normalizePhone, saveAliyunSmsSettings, sendBindPhoneSmsCode, sendRegisterSmsCode } from "./sms-service.js";
+import { SmsError, getAliyunSmsSettings, normalizePhone, saveAliyunSmsSettings, sendBindPhoneSmsCode, sendDeleteAccountSmsCode, sendRegisterSmsCode } from "./sms-service.js";
 import {
   ProviderError,
   type EditImageProviderInput,
@@ -141,6 +145,7 @@ import {
   generateCategoryKitPlan,
   getCategoryKitPlannerConfig,
   optimizeImagePrompt,
+  planSeedanceVideoStoryboard,
   saveCategoryKitPlannerConfig
 } from "./category-kit-planner.js";
 import {
@@ -228,6 +233,11 @@ import {
   registerNotificationDevice,
   unreadNotificationCount
 } from "./notifications.js";
+import {
+  PhotoshopPackageError,
+  createPhotoshopPackage,
+  readPhotoshopPackageFile
+} from "./photoshop-package.js";
 
 const MAX_PROJECT_SNAPSHOT_BYTES = 100 * 1024 * 1024;
 const MAX_PROJECT_NAME_LENGTH = 120;
@@ -354,6 +364,8 @@ app.get("/api/config", async (c) => {
 
 app.get("/api/extension-release", async (c) => c.json(await getExtensionReleaseConfig()));
 
+app.get("/api/app-release", async (c) => c.json(await getAppReleaseConfig()));
+
 app.get("/api/help", async (c) => c.json(await getHelpCenter()));
 
 app.get("/api/public/demo-canvas", async (c) => c.json(await getDemoCanvasConfig()));
@@ -403,6 +415,22 @@ app.get("/api/public/assets/:id", async (c) => {
       "Cache-Control": "public, max-age=31536000, immutable",
       "Content-Disposition": `inline; filename="${asset.file.fileName}"`,
       "Content-Type": asset.file.mimeType
+    }
+  });
+});
+
+app.get("/api/photoshop/packages/:packageId/:fileName", async (c) => {
+  const file = await readPhotoshopPackageFile(c.req.param("packageId"), c.req.param("fileName"), c.req.query("token"));
+  if (!file) {
+    return c.json(errorResponse("not_found", "找不到 Photoshop 工作流文件，或访问链接已过期。"), 404);
+  }
+
+  return new Response(new Uint8Array(file.bytes), {
+    status: 200,
+    headers: {
+      "Cache-Control": "private, max-age=86400",
+      "Content-Disposition": `inline; filename="${downloadFileName(file.fileName)}"`,
+      "Content-Type": file.mimeType
     }
   });
 });
@@ -500,6 +528,18 @@ app.post("/api/auth/phone-code", async (c) => {
   }
 });
 
+app.post("/api/auth/delete-code", async (c) => {
+  try {
+    const session = await requireAuthSession(c.req.raw.headers);
+    if (!session.user.phone) {
+      return c.json(errorResponse("phone_missing", "请先绑定手机号后再注销。"), 400);
+    }
+    return c.json(await sendDeleteAccountSmsCode(session.user.phone, session.user.id));
+  } catch (error) {
+    return authErrorJson(c, error);
+  }
+});
+
 app.post("/api/auth/phone", async (c) => {
   const payload = await readJson(c.req.raw);
   if (!payload.ok) {
@@ -582,6 +622,21 @@ app.put("/api/auth/me", async (c) => {
   }
 });
 
+app.delete("/api/auth/me", async (c) => {
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+  if (!isRecord(payload.value)) {
+    return c.json(errorResponse("invalid_request", "请求内容必须是 JSON 对象。"), 400);
+  }
+  try {
+    return c.json(await deleteCurrentUserAccount(c.req.raw.headers, { smsCode: parseOptionalString(payload.value.smsCode) ?? "" }));
+  } catch (error) {
+    return authErrorJson(c, error);
+  }
+});
+
 app.post("/api/auth/wechat/miniapp/bind", async (c) => {
   const payload = await readJson(c.req.raw);
   if (!payload.ok) {
@@ -638,7 +693,9 @@ function canAccessWithoutPhoneVerification(path: string): boolean {
   return (
     path === "/api/auth/me" ||
     path === "/api/auth/phone-code" ||
+    path === "/api/auth/delete-code" ||
     path === "/api/auth/phone" ||
+    path === "/api/auth/account" ||
     path.startsWith("/api/admin/")
   );
 }
@@ -934,6 +991,33 @@ app.post("/api/images/prompt/optimize", async (c) => {
   }
 });
 
+app.post("/api/photoshop/packages", async (c) => {
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+
+  const parsed = parsePhotoshopPackagePayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  try {
+    return c.json(
+      await createPhotoshopPackage(await requestTenant(c), {
+        ...parsed.value,
+        baseUrl: new URL(c.req.url).origin
+      })
+    );
+  } catch (error) {
+    if (error instanceof PhotoshopPackageError) {
+      return c.json(errorResponse(error.code, error.message), error.status as 400 | 404 | 500);
+    }
+
+    throw error;
+  }
+});
+
 app.post("/api/videos/seedance", async (c) => {
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
@@ -952,6 +1036,33 @@ app.post("/api/videos/seedance", async (c) => {
   } catch (error) {
     if (error instanceof SeedanceVideoError) {
       return c.json(errorResponse(error.code, error.message), error.status as 400 | 401 | 402 | 403 | 404 | 409 | 413 | 429 | 500 | 502 | 503 | 504);
+    }
+
+    throw error;
+  }
+});
+
+app.post("/api/videos/seedance/storyboard-plan", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+
+  const parsed = parseSeedanceStoryboardPlanPayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  try {
+    return c.json(await planSeedanceVideoStoryboard(parsed.value));
+  } catch (error) {
+    if (error instanceof ProviderError) {
+      return providerErrorJson(c, error);
     }
 
     throw error;
@@ -1064,6 +1175,71 @@ app.post("/api/ecommerce/images/category-kit-prepare", async (c) => {
   );
 });
 
+app.post("/api/ecommerce/images/category-kit-plan", async (c) => {
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+
+  const parsed = parseEcommerceBatchPayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+  if (!parsed.value.referenceImage) {
+    return c.json(errorResponse("invalid_reference_image", "品类套图规划需要至少一张主商品图。"), 400);
+  }
+
+  try {
+    const strategy = await resolveCategoryKitStrategyForRequest(parsed.value);
+    const categoryKit = await prepareCategoryKitPlanRequest({
+      product: parsed.value.product,
+      platform: parsed.value.platform,
+      market: parsed.value.market,
+      textLanguage: parsed.value.textLanguage,
+      categoryPath: parsed.value.categoryPath,
+      categoryName: parsed.value.categoryName,
+      strategyId: parsed.value.strategyId,
+      strategy,
+      assets: parsed.value.assets,
+      missingInputs: parsed.value.missingInputs,
+      referenceImage: parsed.value.referenceImage,
+      extraDirection: parsed.value.extraDirection
+    });
+    const plan = await generateCategoryKitPlan({
+      product: parsed.value.product,
+      platform: parsed.value.platform,
+      market: parsed.value.market,
+      textLanguage: parsed.value.textLanguage,
+      requestedImageCount: parsed.value.sceneTemplateIds.length,
+      requestedSceneTemplateIds: parsed.value.sceneTemplateIds,
+      categoryPath: categoryKit.categoryPath,
+      categoryName: categoryKit.categoryName,
+      strategy: categoryKit.strategy,
+      assets: categoryKit.assets,
+      missingInputs: categoryKit.missingInputs,
+      referenceImage: parsed.value.referenceImage,
+      extraDirection: parsed.value.extraDirection
+    });
+
+    return c.json({
+      ...plan,
+      categoryPath: categoryKit.categoryPath,
+      categoryName: categoryKit.categoryName,
+      strategy: categoryKit.strategy,
+      assets: categoryKit.assets,
+      missingInputs: categoryKit.missingInputs,
+      warnings: categoryKit.warnings,
+      notes: categoryKit.notes
+    });
+  } catch (error) {
+    if (error instanceof ProviderError) {
+      return providerErrorJson(c, error);
+    }
+
+    throw error;
+  }
+});
+
 app.post("/api/ecommerce/images/category-kit-generate", async (c) => {
   const payload = await readJson(c.req.raw);
   if (!payload.ok) {
@@ -1085,7 +1261,7 @@ app.post("/api/ecommerce/images/category-kit-generate", async (c) => {
   const input: ResolvedEcommerceBatchGenerateRequest = {
     ...parsed.value,
     createComparisonCollage: parsed.value.createComparisonCollage === true && session?.user.role === "admin",
-    categoryKitPlannerPending: true,
+    categoryKitPlannerPending: !parsed.value.plannedImages?.length,
     countPerScene: 1
   };
   const providerConfigs = await getActiveImageModelConfigs();
@@ -1254,6 +1430,18 @@ app.post("/api/billing/plans/:planId/purchase", async (c) => {
   }
   const planId = c.req.param("planId");
   return c.json(await purchasePlan(await requestTenant(c), planId, { ...parsed.value, planId }), 201);
+});
+
+app.post("/api/billing/apple-iap/verify", async (c) => {
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+  const parsed = parseAppleInAppPurchasePayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+  return c.json(await verifyAppleInAppPurchase(await requestTenant(c), parsed.value), 201);
 });
 
 app.post("/api/billing/alipay/notify", async (c) => {
@@ -1578,6 +1766,34 @@ app.put("/api/admin/extension-release", async (c) => {
   }
 
   return c.json(await saveExtensionReleaseConfig(parsed.value));
+});
+
+app.get("/api/admin/app-release", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return c.json(await getAppReleaseConfig());
+});
+
+app.put("/api/admin/app-release", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+
+  const parsed = parseAppReleasePayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  return c.json(await saveAppReleaseConfig(parsed.value));
 });
 
 app.get("/api/admin/referral/settings", async (c) => {
@@ -3081,6 +3297,9 @@ function toAdminUserItem(
     phoneVerifiedAt: user.phoneVerifiedAt ?? undefined,
     displayName: user.displayName,
     role: user.role === "admin" ? "admin" : "user",
+    accountStatus: user.accountStatus ?? "active",
+    deletedAt: user.deletedAt ?? undefined,
+    deletionLockUntil: user.deletionLockUntil ?? undefined,
     planId: user.planId ?? undefined,
     planName: plan?.name,
     planExpiresAt: user.planExpiresAt ?? undefined,
@@ -3125,25 +3344,32 @@ async function getAdminEcommerceJobs(limit?: number): Promise<EcommerceJobListRe
   const rows = typeof limit === "number" ? await baseQuery.limit(limit) : await baseQuery;
 
   return {
-    jobs: rows.map(({ job, user }) => ({
-      jobId: job.id,
-      userId: job.createdByUserId,
-      userEmail: user?.email ?? undefined,
-      userDisplayName: user?.displayName,
-      workspaceId: job.workspaceId,
-      status: job.status as EcommerceBatchGenerateResponse["status"],
-      message: job.message,
-      productTitle: job.productTitle,
-      platform: job.platform as EcommercePlatform,
-      market: job.market as EcommerceMarket,
-      totalScenes: job.totalScenes,
-      completedScenes: job.completedScenes,
-      succeededScenes: job.succeededScenes,
-      failedScenes: job.failedScenes,
-      createdAt: job.createdAt,
-      updatedAt: job.updatedAt,
-      completedAt: job.completedAt ?? undefined
-    }))
+    jobs: rows.map(({ job, user }) => toAdminEcommerceJobSummary(job, user))
+  };
+}
+
+function toAdminEcommerceJobSummary(
+  job: typeof ecommerceBatchJobs.$inferSelect,
+  user?: typeof users.$inferSelect | null
+): EcommerceJobListResponse["jobs"][number] {
+  return {
+    jobId: job.id,
+    userId: job.createdByUserId,
+    userEmail: user?.email ?? undefined,
+    userDisplayName: user?.displayName,
+    workspaceId: job.workspaceId,
+    status: job.status as EcommerceBatchGenerateResponse["status"],
+    message: job.message,
+    productTitle: job.productTitle,
+    platform: job.platform as EcommercePlatform,
+    market: job.market as EcommerceMarket,
+    totalScenes: job.totalScenes,
+    completedScenes: job.completedScenes,
+    succeededScenes: job.succeededScenes,
+    failedScenes: job.failedScenes,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+    completedAt: job.completedAt ?? undefined
   };
 }
 
@@ -4026,6 +4252,61 @@ function parseExtensionReleaseTargetPayload(
   };
 }
 
+function parseAppReleasePayload(input: unknown): ParseResult<SaveAppReleaseConfigRequest> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_app_release", "App 版本配置内容必须是 JSON 对象。")
+    };
+  }
+
+  const ios = parseAppReleaseTargetPayload(input.ios);
+  if (!ios.ok) {
+    return ios;
+  }
+  const android = parseAppReleaseTargetPayload(input.android);
+  if (!android.ok) {
+    return android;
+  }
+
+  return {
+    ok: true,
+    value: { ios: ios.value, android: android.value }
+  };
+}
+
+function parseAppReleaseTargetPayload(input: unknown): ParseResult<SaveAppReleaseConfigRequest["ios"]> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_app_release", "App 版本配置项必须是 JSON 对象。")
+    };
+  }
+
+  const version = parseLimitedString(input.version, 64);
+  const buildNumber = parseLimitedString(input.buildNumber, 64);
+  const downloadUrl = parseLimitedString(input.downloadUrl, 2000);
+  const publishedAt = parseLimitedString(input.publishedAt, 64);
+  const enabled = parseOptionalBoolean(input.enabled);
+  const forceUpdate = parseOptionalBoolean(input.forceUpdate);
+  const releaseNotes = Array.isArray(input.releaseNotes)
+    ? input.releaseNotes.filter((item): item is string => typeof item === "string").map((line) => line.trim()).filter(Boolean).slice(0, 20)
+    : undefined;
+
+  return {
+    ok: true,
+    value: {
+      enabled,
+      version,
+      buildNumber,
+      downloadUrl,
+      releaseNotes,
+      forceUpdate,
+      publishedAt
+    }
+  };
+}
+
 function parseImageModelConfigPayload(input: unknown): ParseResult<{ models: Parameters<typeof saveImageModelConfig>[0]["models"] }> {
   if (!isRecord(input) || !Array.isArray(input.models)) {
     return {
@@ -4425,12 +4706,15 @@ function parseCategoryKitPlannerProvider(value: unknown, baseUrl: unknown): Save
 }
 
 function parseCategoryKitPlannerModules(value: unknown): SaveCategoryKitPlannerConfigRequest["models"][number]["modules"] {
-  const allowed = new Set(["prompt-optimizer", "category-kit-planner", "category-classifier"]);
+  const allowed = new Set(["prompt-optimizer", "category-kit-planner", "category-classifier", "video-storyboard-planner"]);
   if (!Array.isArray(value)) {
     return undefined;
   }
   const raw = value;
-  const modules = raw.filter((item): item is "prompt-optimizer" | "category-kit-planner" | "category-classifier" => typeof item === "string" && allowed.has(item));
+  const modules = raw.filter(
+    (item): item is NonNullable<SaveCategoryKitPlannerConfigRequest["models"][number]["modules"]>[number] =>
+      typeof item === "string" && allowed.has(item)
+  );
   return Array.from(new Set(modules));
 }
 
@@ -4714,6 +4998,38 @@ function parsePurchasePlanPayload(input: unknown): ParseResult<{
   };
 }
 
+function parseAppleInAppPurchasePayload(input: unknown): ParseResult<VerifyAppleInAppPurchaseRequest> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_apple_iap", "Apple 内购内容必须是 JSON 对象。")
+    };
+  }
+
+  const planId = stringValue(input.planId);
+  const productId = stringValue(input.productId);
+  const transactionId = stringValue(input.transactionId);
+  if (!planId || !productId || !transactionId) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_apple_iap", "Apple 内购必须包含 planId、productId 和 transactionId。")
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      appAccountToken: stringValue(input.appAccountToken),
+      environment: stringValue(input.environment),
+      originalTransactionId: stringValue(input.originalTransactionId),
+      planId,
+      productId,
+      purchaseToken: stringValue(input.purchaseToken),
+      transactionId
+    }
+  };
+}
+
 function parseInvoiceApplicationPayload(input: unknown): ParseResult<ApplyInvoiceRequest> {
   if (!isRecord(input)) {
     return {
@@ -4856,6 +5172,31 @@ async function parseEditPayload(tenant: RequestTenant, input: unknown): Promise<
       ...base.value,
       referenceImage,
       referenceAssetId
+    }
+  };
+}
+
+function parsePhotoshopPackagePayload(input: unknown): ParseResult<{ assetId: string; packageName?: string }> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_photoshop_package", "Photoshop 工作流内容必须是 JSON 对象。")
+    };
+  }
+
+  const assetId = parseLimitedString(input.assetId, 128);
+  if (!assetId) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_photoshop_package", "请提供有效的图像资源 ID。")
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      assetId,
+      packageName: parseLimitedString(input.packageName, 80)
     }
   };
 }
@@ -5052,6 +5393,60 @@ function parsePromptOptimizePayload(input: unknown): ParseResult<PromptOptimizeR
   };
 }
 
+function parseSeedanceStoryboardPlanPayload(input: unknown): ParseResult<SeedanceVideoStoryboardPlanRequest> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_request", "请求内容必须是 JSON 对象。")
+    };
+  }
+
+  const intent = parseLimitedString(input.intent, 1000);
+  if (!intent) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_seedance_storyboard_intent", "请输入视频意图，且不能超过 1000 个字符。")
+    };
+  }
+
+  if (!Array.isArray(input.referenceImages) || input.referenceImages.length === 0) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_seedance_storyboard_reference_images", "请至少上传一张产品参考图。")
+    };
+  }
+  if (input.referenceImages.length > 4) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_seedance_storyboard_reference_images", "视频分镜最多支持 4 张参考图。")
+    };
+  }
+
+  const referenceImages: ReferenceImageInput[] = [];
+  for (const [index, item] of input.referenceImages.entries()) {
+    const referenceImage = parseEcommerceReferenceImage(item);
+    if (!referenceImage) {
+      return {
+        ok: false,
+        error: errorResponse("invalid_seedance_storyboard_reference_images", `第 ${index + 1} 张参考图格式不受支持。`)
+      };
+    }
+    referenceImages.push(referenceImage);
+  }
+
+  return {
+    ok: true,
+    value: {
+      intent,
+      referenceImages,
+      ratio: parseSeedanceRatioString(input.ratio),
+      duration: parseSeedanceStoryboardDurationValue(input.duration),
+      resolution: parseSeedanceResolutionString(input.resolution),
+      generateAudio: typeof input.generateAudio === "boolean" ? input.generateAudio : undefined
+    }
+  };
+}
+
 function parseEcommerceBatchPayload(input: unknown): ParseResult<ResolvedEcommerceBatchGenerateRequest> {
   if (!isRecord(input)) {
     return {
@@ -5140,6 +5535,10 @@ function parseEcommerceBatchPayload(input: unknown): ParseResult<ResolvedEcommer
   if (!missingInputs.ok) {
     return missingInputs;
   }
+  const plannedImages = parseCategoryKitPlannedImages(input.plannedImages ?? input.planned_images ?? input.imagePlan ?? input.image_plan);
+  if (!plannedImages.ok) {
+    return plannedImages;
+  }
   const strategy = parseCategoryKitStrategyValue(input.strategy);
   if (!strategy.ok) {
     return strategy;
@@ -5159,6 +5558,7 @@ function parseEcommerceBatchPayload(input: unknown): ParseResult<ResolvedEcommer
       strategy: strategy.value,
       assets: assets.value,
       missingInputs: missingInputs.value,
+      plannedImages: plannedImages.value,
       allowTextRecreation: parseOptionalBoolean(input.allowTextRecreation) ?? true,
       removeWatermarkAndLogo: parseOptionalBoolean(input.removeWatermarkAndLogo) ?? true,
       brandOverlayPlacement: parseBrandOverlayPlacement(input.brandOverlayPlacement),
@@ -5352,6 +5752,53 @@ function parseCategoryKitMissingInputs(value: unknown): ParseResult<EcommerceCat
   });
 
   return { ok: true, value: items.length ? items.slice(0, 80) : undefined };
+}
+
+function parseCategoryKitPlannedImages(value: unknown): ParseResult<EcommerceCategoryKitPlanItem[] | undefined> {
+  if (value === undefined) {
+    return { ok: true, value: undefined };
+  }
+  if (!Array.isArray(value)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_category_kit_plan", "品类套图计划必须是数组。")
+    };
+  }
+  if (value.length > 12) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_category_kit_plan", "单个品类套图任务最多支持 12 张规划图。")
+    };
+  }
+
+  const plannedImages: EcommerceCategoryKitPlanItem[] = [];
+  for (const [index, item] of value.entries()) {
+    if (!isRecord(item)) {
+      return {
+        ok: false,
+        error: errorResponse("invalid_category_kit_plan", `第 ${index + 1} 张规划图格式不受支持。`)
+      };
+    }
+    const title = parseLimitedString(item.title ?? item.name, 160);
+    const purpose = parseLimitedString(item.purpose ?? item.goal, 500);
+    const prompt = parseLimitedString(item.prompt ?? item.imagePrompt ?? item.image_prompt, 4000);
+    if (!title || !prompt) {
+      return {
+        ok: false,
+        error: errorResponse("invalid_category_kit_plan", `第 ${index + 1} 张规划图需要包含标题和生图提示词。`)
+      };
+    }
+
+    plannedImages.push({
+      title,
+      purpose: purpose || title,
+      prompt,
+      notes: parseLimitedString(item.notes ?? item.constraints ?? item.copy_notes, 1000),
+      sourceImageRoles: parseStringListLike(item.sourceImageRoles ?? item.source_image_roles ?? item.sourceRoles ?? item.source_roles)
+    });
+  }
+
+  return { ok: true, value: plannedImages.length ? plannedImages : undefined };
 }
 
 function parseCategoryKitStrategyValue(value: unknown): ParseResult<EcommerceCategoryKitStrategy | undefined> {
@@ -5839,6 +6286,27 @@ function parseHelpMarkdown(value: unknown): string | undefined {
 
 function parseOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function parseSeedanceRatioString(value: unknown): string | undefined {
+  const ratio = parseOptionalString(value);
+  return ratio && /^\d{1,2}:\d{1,2}$/u.test(ratio) ? ratio : undefined;
+}
+
+function parseSeedanceResolutionString(value: unknown): string | undefined {
+  const resolution = parseOptionalString(value)?.toLowerCase();
+  if (!resolution || resolution === "auto") {
+    return resolution;
+  }
+  return /^(?:480p|720p|1080p|2k|4k)$/u.test(resolution) ? resolution : undefined;
+}
+
+function parseSeedanceStoryboardDurationValue(value: unknown): number | undefined {
+  const duration = typeof value === "number" ? value : typeof value === "string" ? Number.parseInt(value, 10) : Number.NaN;
+  if (!Number.isSafeInteger(duration) || duration <= 0) {
+    return undefined;
+  }
+  return Math.min(duration, 6);
 }
 
 function workspaceMemberId(workspaceId: string, userId: string): string {

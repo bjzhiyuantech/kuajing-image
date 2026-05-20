@@ -3,6 +3,7 @@
     "pages/home/home",
     "pages/workbench/workbench",
     "pages/jobs/jobs",
+    "pages/public-gallery/public-gallery",
     "pages/notifications/notifications",
     "pages/profile/profile",
     "pages/login/login",

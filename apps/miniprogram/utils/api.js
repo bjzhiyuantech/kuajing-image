@@ -192,6 +192,18 @@ function getGallery() {
   return request("/api/gallery");
 }
 
+function getPublicGallery() {
+  return request("/api/public/gallery");
+}
+
+function optimizePrompt(payload) {
+  return request("/api/images/prompt/optimize", {
+    method: "POST",
+    data: payload,
+    timeout: 120000
+  });
+}
+
 function getInvoiceApplications() {
   return request("/api/billing/invoice/applications");
 }
@@ -225,6 +237,7 @@ module.exports = {
   getBaseUrl,
   getConfig,
   getGallery,
+  getPublicGallery,
   getJob,
   getJobs,
   getNotifications,
@@ -236,6 +249,7 @@ module.exports = {
   markAllNotificationsRead,
   markNotificationRead,
   me,
+  optimizePrompt,
   redeemCode,
   register,
   updateProfile,

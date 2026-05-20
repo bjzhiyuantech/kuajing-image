@@ -75,6 +75,8 @@ import {
   STYLE_PRESETS,
   resolveNearestValidImageSize,
   validateImageSize,
+  type AppReleaseConfig,
+  type AppReleaseTargetConfig,
   type DemoCanvasConfigResponse,
   type DemoCanvasExample,
   type GalleryImageItem,
@@ -104,10 +106,13 @@ import {
   type PromptOptimizeResponse,
   type ReferenceImageInput,
   type SizePreset,
-  type StylePresetId
+  type StylePresetId,
+  type EcommerceCategoryKitPlanItem
 } from "@gpt-image-canvas/shared";
 import { AccountPage, AdminPage, AuthScreen } from "./AuthViews";
+import { AgreementPage } from "./AgreementPage";
 import { HelpCenterPage } from "./HelpCenter";
+import { PrivacyPolicyPage } from "./PrivacyPolicyPage";
 import { SeedanceVideoPanel } from "./SeedanceVideoPanel";
 import {
   authFetch,
@@ -194,6 +199,10 @@ const tldrawAssetUrls = {
 } satisfies TLUiAssetUrlOverrides;
 const TLDRAW_LICENSE_KEY =
   "tldraw-2026-08-08/WyJ3dGU4bldjRyIsWyIqIl0sMTYsIjIwMjYtMDgtMDgiXQ.Xt7lTydUhMnKfHfp+g8Mrs9gtJjlB8uPyYMniFEfRfruCYdYEl9J0uZl0lMAf6o7GdDB1zXOVhWLFAipssI6Cw";
+const APP_RELEASE_API_URL = "/api/app-release";
+const APP_DEEP_LINK_BASE = "shangtuai://web-receive";
+const APP_PROMPT_DISMISSED_KEY = "shangtu.mobileAppPrompt.dismissedAt";
+const APP_PROMPT_DISMISS_MS = 24 * 60 * 60 * 1000;
 
 const canvasAssetStore: TLAssetStore = {
   async upload(_asset, file) {
@@ -523,6 +532,14 @@ const emptyCategoryKitPrepare: CategoryKitPrepareState = {
   requiredAssets: [],
   message: ""
 };
+const emptyCategoryKitPlan: CategoryKitPlanState = {
+  status: "idle",
+  productSummary: "",
+  imagePlan: [],
+  categoryPath: "",
+  categoryName: "",
+  message: ""
+};
 const emptyEcommerceStats: EcommerceStatsResponse = {
   totalJobs: 0,
   pendingJobs: 0,
@@ -602,6 +619,77 @@ function installHelpUrlForBrowser(baseUrl: string, browser: BrowserKind): string
   return url.toString();
 }
 
+function detectMobilePlatform(): MobilePlatform {
+  const userAgent = window.navigator.userAgent.toLowerCase();
+  const platform = window.navigator.platform.toLowerCase();
+  const maxTouchPoints = window.navigator.maxTouchPoints || 0;
+  if (/iphone|ipad|ipod/.test(userAgent) || (platform === "macintel" && maxTouchPoints > 1)) {
+    return "ios";
+  }
+  if (/android/.test(userAgent)) {
+    return "android";
+  }
+  return "other";
+}
+
+function createAppDeepLink(target: "home" | "create" | "gallery" | "account" = "home"): string {
+  const url = new URL(APP_DEEP_LINK_BASE);
+  url.searchParams.set("source", "mobile-web");
+  url.searchParams.set("target", target);
+  return url.toString();
+}
+
+function shouldShowMobileAppPrompt(): boolean {
+  try {
+    const dismissedAt = Number(window.localStorage.getItem(APP_PROMPT_DISMISSED_KEY) || 0);
+    return !dismissedAt || Date.now() - dismissedAt > APP_PROMPT_DISMISS_MS;
+  } catch {
+    return true;
+  }
+}
+
+function rememberMobileAppPromptDismissed(): void {
+  try {
+    window.localStorage.setItem(APP_PROMPT_DISMISSED_KEY, String(Date.now()));
+  } catch {
+    // Ignore unavailable storage in private or embedded browsers.
+  }
+}
+
+function appDownloadUrlForPlatform(links: AppDownloadLinks, platform: MobilePlatform): string {
+  if (platform === "ios") {
+    return links.ios?.enabled ? links.ios.downloadUrl : "";
+  }
+  if (platform === "android") {
+    return links.android?.enabled ? links.android.downloadUrl : "";
+  }
+  return links.android?.downloadUrl || links.ios?.downloadUrl || "";
+}
+
+function appPlatformLabel(platform: MobilePlatform): string {
+  if (platform === "ios") {
+    return "iPhone";
+  }
+  if (platform === "android") {
+    return "Android";
+  }
+  return "手机";
+}
+
+function openAppOrDownload(downloadUrl: string, target: "home" | "create" | "gallery" | "account" = "home"): void {
+  const deepLink = createAppDeepLink(target);
+  const openedAt = Date.now();
+  window.location.href = deepLink;
+  if (!downloadUrl) {
+    return;
+  }
+  window.setTimeout(() => {
+    if (document.visibilityState === "visible" && Date.now() - openedAt < 1800) {
+      window.location.href = downloadUrl;
+    }
+  }, 1200);
+}
+
 function isExtensionProbeResponseMessage(value: unknown): value is ExtensionProbeResponseMessage {
   return (
     typeof value === "object" &&
@@ -670,6 +758,7 @@ type AuthStatus = "checking" | "anonymous" | "authenticated";
 type SaveStatus = "loading" | "saved" | "pending" | "saving" | "error";
 type GenerationMode = "text" | "reference";
 type MobileCreateTab = "home" | "ecommerce" | "creative" | "history";
+type MobilePlatform = "ios" | "android" | "other";
 type PanelStatusTone = "progress" | "success" | "warning" | "error";
 type SidebarTab = "plugins" | "creative" | "video";
 type EcommerceImageSource = { dataUrl: string; fileName: string; previewUrl: string };
@@ -679,8 +768,10 @@ type EcommerceUploadSlot = "target" | "replacement";
 type CategoryKitAssetRole = "detail" | "package" | "texture" | "size" | "lifestyle" | "other";
 type CategoryKitAssetSource = EcommerceImageSource & { id: string; role: CategoryKitAssetRole };
 type CategoryKitPrepareStatus = "idle" | "loading" | "ready" | "error";
+type CategoryKitPlanStatus = "idle" | "loading" | "ready" | "error";
 type MobileReferenceImageSource = EcommerceImageSource & { assetId?: string };
 type PluginGuideLinks = typeof defaultPluginGuideLinks;
+type AppDownloadLinks = Record<"ios" | "android", AppReleaseTargetConfig | null>;
 
 interface EcommerceDocumentSource {
   id: string;
@@ -725,6 +816,15 @@ interface CategoryKitPrepareState {
   strategySummary: string;
   missingItems: string[];
   requiredAssets: string[];
+  message: string;
+}
+
+interface CategoryKitPlanState {
+  status: CategoryKitPlanStatus;
+  productSummary: string;
+  imagePlan: EcommerceCategoryKitPlanItem[];
+  categoryPath: string;
+  categoryName: string;
   message: string;
 }
 
@@ -1152,6 +1252,50 @@ function parseCategoryKitPrepare(value: unknown): CategoryKitPrepareState {
     missingItems,
     requiredAssets,
     message: stringFromUnknown(root.message) || (missingItems.length > 0 ? "策略已匹配，仍需补素材。" : "策略已匹配。")
+  };
+}
+
+function parseCategoryKitPlan(value: unknown): CategoryKitPlanState {
+  const root = firstRecordFrom(value, ["plan", "result", "data"]);
+  const rawPlan = Array.isArray(root.imagePlan)
+    ? root.imagePlan
+    : Array.isArray(root.image_plan)
+      ? root.image_plan
+      : Array.isArray(root.plannedImages)
+        ? root.plannedImages
+        : [];
+  const imagePlan = rawPlan.flatMap((item): EcommerceCategoryKitPlanItem[] => {
+    if (!isRecord(item)) {
+      return [];
+    }
+    const title = stringFromUnknown(item.title ?? item.name).trim();
+    const prompt = stringFromUnknown(item.prompt ?? item.imagePrompt ?? item.image_prompt).trim();
+    if (!title || !prompt) {
+      return [];
+    }
+    return [
+      {
+        title,
+        purpose: stringFromUnknown(item.purpose ?? item.goal).trim() || title,
+        prompt,
+        notes: stringFromUnknown(item.notes ?? item.constraints).trim(),
+        sourceImageRoles: stringListFromUnknown(item.sourceImageRoles ?? item.source_image_roles ?? item.sourceRoles ?? item.source_roles)
+      }
+    ];
+  });
+  if (imagePlan.length === 0) {
+    throw new Error("品类套图规划没有返回可用的生图提示词。");
+  }
+
+  const categoryPath = categoryPathFromUnknown(root.categoryPath ?? root.category_path);
+  const categoryName = stringFromUnknown(root.categoryName ?? root.category_name);
+  return {
+    status: "ready",
+    productSummary: stringFromUnknown(root.productSummary ?? root.product_summary),
+    imagePlan,
+    categoryPath,
+    categoryName,
+    message: `已规划 ${imagePlan.length} 张图，可小范围修改后提交生图队列。`
   };
 }
 
@@ -3218,6 +3362,7 @@ function MobileWorkbench({
   ecommerceTargetImages,
   ecommerceMarket,
   ecommerceMode,
+  categoryKitPlan,
   ecommercePlatform,
   ecommerceRemoveWatermark,
   ecommerceSceneIds,
@@ -3231,6 +3376,7 @@ function MobileWorkbench({
   generationWarning,
   height,
   isEcommerceGenerating,
+  isCategoryKitPlanning,
   isEcommerceExtraDirectionOptimizing,
   isGenerating,
   mobileReferenceImage,
@@ -3243,11 +3389,15 @@ function MobileWorkbench({
   stylePreset,
   user,
   width,
+  appDownloadUrl,
+  appPlatform,
   onApplyPromptStarter,
   onCopyHistoryPrompt,
   onDownloadHistoryRecord,
   onNavigate,
   onOpenGallery,
+  onOpenMobileApp,
+  onOpenMobileAppPrompt,
   onOptimizeEcommerceExtraDirection,
   onOptimizePrompt,
   onRerunHistoryRecord,
@@ -3294,9 +3444,10 @@ function MobileWorkbench({
   ecommerceImages: EcommerceReferenceImageSource[];
   ecommerceReplacementImage: EcommerceImageSource | null;
   ecommerceTargetImages: EcommerceTargetImageSource[];
-  ecommerceMarket: EcommerceMarket;
-  ecommerceMode: EcommerceGenerationMode;
-  ecommercePlatform: EcommercePlatform;
+	  ecommerceMarket: EcommerceMarket;
+	  ecommerceMode: EcommerceGenerationMode;
+  categoryKitPlan: CategoryKitPlanState;
+	  ecommercePlatform: EcommercePlatform;
   ecommerceRemoveWatermark: boolean;
   ecommerceSceneIds: EcommerceSceneTemplateId[];
   ecommerceSizePresetId: string;
@@ -3307,9 +3458,10 @@ function MobileWorkbench({
   generationMessage: string;
   generationMode: GenerationMode;
   generationWarning: string;
-  height: number;
-  isEcommerceGenerating: boolean;
-  isEcommerceExtraDirectionOptimizing: boolean;
+	  height: number;
+	  isEcommerceGenerating: boolean;
+  isCategoryKitPlanning: boolean;
+	  isEcommerceExtraDirectionOptimizing: boolean;
   isGenerating: boolean;
   mobileReferenceImage: MobileReferenceImageSource | null;
   outputFormat: OutputFormat;
@@ -3321,11 +3473,15 @@ function MobileWorkbench({
   stylePreset: StylePresetId;
   user: AuthUser;
   width: number;
+  appDownloadUrl: string;
+  appPlatform: MobilePlatform;
   onApplyPromptStarter: (prompt: string) => void;
   onCopyHistoryPrompt: (record: GenerationRecord) => void;
   onDownloadHistoryRecord: (record: GenerationRecord) => void;
   onNavigate: (route: AppRoute) => void;
   onOpenGallery: () => void;
+  onOpenMobileApp: (target?: "home" | "create" | "gallery" | "account") => void;
+  onOpenMobileAppPrompt: () => void;
   onOptimizeEcommerceExtraDirection: () => void;
   onOptimizePrompt: () => void;
   onRerunHistoryRecord: (record: GenerationRecord) => void;
@@ -3588,6 +3744,31 @@ function MobileWorkbench({
               </div>
             </section>
 
+            <section className="mobile-home-app-card" aria-label="App 下载引导">
+              <div>
+                <span>{appPlatformLabel(appPlatform)} APP</span>
+                <strong>复杂编辑、批量任务和素材管理放到 APP 更顺手</strong>
+                <p>移动 Web 保留登录和快速生图，更多平台模板、任务通知、相册保存建议在 APP 内完成。</p>
+              </div>
+              <div className="mobile-home-app-card__actions">
+                <button type="button" onClick={() => onOpenMobileApp("create")}>
+                  <ExternalLink className="size-4" aria-hidden="true" />
+                  打开 APP
+                </button>
+                {appDownloadUrl ? (
+                  <a href={appDownloadUrl} target="_blank" rel="noreferrer">
+                    <Download className="size-4" aria-hidden="true" />
+                    下载
+                  </a>
+                ) : (
+                  <button type="button" onClick={onOpenMobileAppPrompt}>
+                    <Download className="size-4" aria-hidden="true" />
+                    下载
+                  </button>
+                )}
+              </div>
+            </section>
+
             <section className="mobile-home-menu" aria-label="功能菜单">
               {homeMenuItems.map((item) => {
                 const Icon = item.icon;
@@ -3662,9 +3843,9 @@ function MobileWorkbench({
                   </div>
                 </div>
               </div>
-              <button className="mobile-home-generate" disabled={isEcommerceGenerating} type="button" onClick={onSubmitEcommerce}>
-                {isEcommerceGenerating ? <Loader2 className="size-5 animate-spin" aria-hidden="true" /> : <Sparkles className="size-5" aria-hidden="true" />}
-                {isEcommerceGenerating ? "生成中" : "生成电商图"}
+              <button className="mobile-home-generate" disabled={isEcommerceGenerating || isCategoryKitPlanning} type="button" onClick={onSubmitEcommerce}>
+                {isEcommerceGenerating || isCategoryKitPlanning ? <Loader2 className="size-5 animate-spin" aria-hidden="true" /> : <Sparkles className="size-5" aria-hidden="true" />}
+                {isCategoryKitPlanning ? "规划中" : isEcommerceGenerating ? "生成中" : "生成电商图"}
               </button>
             </section>
 
@@ -3929,8 +4110,8 @@ function MobileWorkbench({
                 <BadgeCheck className="size-5" aria-hidden="true" />
                 <h2>生成场景</h2>
               </div>
-              {ecommerceMode === "category-kit" ? (
-                <p>后台会根据参考图自动识别商品并规划图片清单，不再固定选择场景模板。</p>
+                  {ecommerceMode === "category-kit" ? (
+                  <p>{categoryKitPlan.status === "ready" ? "已生成可编辑的套图提示词，确认后会直接进入生图队列。" : "先根据参考图和文字规划图片清单，确认后再进入生图队列。"}</p>
               ) : (
                 <div className="mobile-create-scene-strip">
                   {mobileSceneCards.map((item) => {
@@ -4017,11 +4198,11 @@ function MobileWorkbench({
             </section>
 
             <div className="mobile-sticky-action">
-              <button className="mobile-create-submit" disabled={isEcommerceGenerating} type="button" onClick={onSubmitEcommerce}>
-                {isEcommerceGenerating ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Workflow className="size-4" aria-hidden="true" />}
+              <button className="mobile-create-submit" disabled={isEcommerceGenerating || isCategoryKitPlanning} type="button" onClick={onSubmitEcommerce}>
+                {isEcommerceGenerating || isCategoryKitPlanning ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Workflow className="size-4" aria-hidden="true" />}
                 <span>
-                  <strong>{isEcommerceGenerating ? "电商图生成中" : ecommerceMode === "category-kit" ? "生成品类套图" : ecommerceMode === "one-click-replace" ? "一键换装/换品" : `生成 ${ecommerceOutputCount || 1} 张电商图`}</strong>
-                  <small>{ecommerceMode === "category-kit" ? "由后台规划后按实际图片数计费" : `预计消耗 ${ecommerceOutputCount || 1} 额度`}</small>
+		                  <strong>{isEcommerceGenerating ? "电商图生成中" : isCategoryKitPlanning ? "正在规划品类套图" : ecommerceMode === "category-kit" ? categoryKitPlan.status === "ready" ? "提交生图队列" : "规划品类套图" : ecommerceMode === "one-click-replace" ? "一键换装/换品" : `生成 ${ecommerceOutputCount || 1} 张电商图`}</strong>
+	                  <small>{ecommerceMode === "category-kit" ? categoryKitPlan.status === "ready" ? `预计生成 ${categoryKitPlan.imagePlan.length} 张` : "先返回可编辑提示词" : `预计消耗 ${ecommerceOutputCount || 1} 额度`}</small>
                 </span>
               </button>
             </div>
@@ -5181,6 +5362,322 @@ function GuestQuotaOverlay({
   );
 }
 
+function MobileAppPromptOverlay({
+  downloadUrl,
+  platform,
+  onClose,
+  onOpenApp
+}: {
+  downloadUrl: string;
+  platform: MobilePlatform;
+  onClose: () => void;
+  onOpenApp: (target: "home" | "create" | "gallery" | "account") => void;
+}) {
+  return (
+    <div className="mobile-app-prompt" role="dialog" aria-modal="true" aria-labelledby="mobile-app-prompt-title">
+      <button aria-label="关闭 APP 下载提示" className="mobile-app-prompt__backdrop" type="button" onClick={onClose} />
+      <section className="mobile-app-prompt__sheet">
+        <button aria-label="关闭" className="mobile-app-prompt__close" type="button" onClick={onClose}>
+          <X className="size-4" aria-hidden="true" />
+        </button>
+        <div className="mobile-app-prompt__icon">
+          <Sparkles className="size-7" aria-hidden="true" />
+        </div>
+        <span className="mobile-app-prompt__eyebrow">{appPlatformLabel(platform)} APP</span>
+        <h2 id="mobile-app-prompt-title">在 APP 里继续完成复杂能力</h2>
+        <p>手机 Web 适合登录、上传产品图和快速生图；批量任务、图库管理、任务通知和相册保存放到 APP 里体验更完整。</p>
+        <div className="mobile-app-prompt__features" aria-label="APP 能力">
+          <span>批量任务</span>
+          <span>任务通知</span>
+          <span>素材管理</span>
+        </div>
+        <div className="mobile-app-prompt__actions">
+          <button type="button" onClick={() => onOpenApp("create")}>
+            <ExternalLink className="size-4" aria-hidden="true" />
+            打开 APP 生图
+          </button>
+          {downloadUrl ? (
+            <a href={downloadUrl} target="_blank" rel="noreferrer" onClick={onClose}>
+              <Download className="size-4" aria-hidden="true" />
+              下载安装包
+            </a>
+          ) : null}
+        </div>
+        <button className="mobile-app-prompt__later" type="button" onClick={onClose}>
+          继续使用 Web 轻版
+        </button>
+      </section>
+    </div>
+  );
+}
+
+function AppReceivePage({
+  downloadLinks,
+  platform,
+  onAuthNavigate,
+  onNavigateHome,
+  onOpenApp
+}: {
+  downloadLinks: AppDownloadLinks;
+  platform: MobilePlatform;
+  onAuthNavigate: (mode: AuthMode) => void;
+  onNavigateHome: () => void;
+  onOpenApp: (target?: "home" | "create" | "gallery" | "account") => void;
+}) {
+  const downloadUrl = appDownloadUrlForPlatform(downloadLinks, platform);
+  const iosUrl = downloadLinks.ios?.downloadUrl || "";
+  const androidUrl = downloadLinks.android?.downloadUrl || "";
+
+  return (
+    <main className="app-receive-page app-view">
+      <header className="app-receive-nav">
+        <button className="brand-lockup" type="button" onClick={onNavigateHome}>
+          <BrandMark />
+          <div>
+            <BrandName />
+            <p className="brand-tagline">移动端 APP 接收页</p>
+          </div>
+        </button>
+        <button type="button" onClick={() => onAuthNavigate("login")}>
+          登录 Web
+        </button>
+      </header>
+
+      <section className="app-receive-hero" aria-labelledby="app-receive-title">
+        <div className="app-receive-hero__copy">
+          <p className="home-eyebrow">
+            <Sparkles className="size-4" aria-hidden="true" />
+            WEB TO APP
+          </p>
+          <h1 id="app-receive-title">用 APP 接收 Web 上的生图任务</h1>
+          <p>从手机网页打开后，可直接跳到商图 AI APP。没有安装时，根据系统选择安装包；登录和快速生图仍可留在 Web 轻版完成。</p>
+          <div className="app-receive-hero__actions">
+            <button type="button" onClick={() => onOpenApp("create")}>
+              <ExternalLink className="size-4" aria-hidden="true" />
+              打开 APP
+            </button>
+            {downloadUrl ? (
+              <a href={downloadUrl} target="_blank" rel="noreferrer">
+                <Download className="size-4" aria-hidden="true" />
+                下载 {appPlatformLabel(platform)} 版
+              </a>
+            ) : null}
+          </div>
+        </div>
+        <div className="app-receive-phone" aria-hidden="true">
+          <div className="app-receive-phone__screen">
+            <span>商图 AI</span>
+            <strong>一张产品图，生成整套电商素材</strong>
+            <div>
+              <i />
+              <i />
+              <i />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="app-receive-downloads" aria-label="下载入口">
+        <a aria-disabled={!iosUrl} href={iosUrl || undefined} target="_blank" rel="noreferrer">
+          <span>iOS</span>
+          <strong>{iosUrl ? "下载 iPhone 版" : "iOS 下载地址待配置"}</strong>
+        </a>
+        <a aria-disabled={!androidUrl} href={androidUrl || undefined} target="_blank" rel="noreferrer">
+          <span>Android</span>
+          <strong>{androidUrl ? "下载 Android 版" : "Android 下载地址待配置"}</strong>
+        </a>
+      </section>
+    </main>
+  );
+}
+
+function MobileGuestHome({
+  appDownloadUrl,
+  appPlatform,
+  onAuthNavigate,
+  onOpenApp,
+  onOpenMobileAppPrompt,
+  onOpenGallery
+}: {
+  appDownloadUrl: string;
+  appPlatform: MobilePlatform;
+  onAuthNavigate: (mode: AuthMode) => void;
+  onOpenApp: (target?: "home" | "create" | "gallery" | "account") => void;
+  onOpenMobileAppPrompt: () => void;
+  onOpenGallery: () => void;
+}) {
+  const guestMenuItems = [
+    { label: "原图增强", icon: BadgeCheck },
+    { label: "场景创作", icon: Brush },
+    { label: "品类套图", icon: Package },
+    { label: "文字翻译", icon: Globe2 }
+  ] as const;
+
+  return (
+    <main className="mobile-workbench app-view" data-active-tab="home" data-testid="mobile-guest-home">
+      <header className="mobile-workbench__header" data-variant="home">
+        <div className="mobile-home-topbar">
+          <div className="mobile-home-topbar__brand">
+            <strong>{BRAND_NAME}</strong>
+            <span>AI 电商素材工作台</span>
+          </div>
+          <div className="mobile-home-topbar__actions" aria-label="账号入口">
+            <button type="button" onClick={() => onAuthNavigate("login")}>登录</button>
+            <button type="button" data-primary="true" onClick={() => onAuthNavigate("register")}>注册</button>
+          </div>
+        </div>
+      </header>
+
+      <div className="mobile-workbench__content">
+        <button className="mobile-home-notice" type="button" onClick={() => onAuthNavigate("register")}>
+          <Bell className="size-5" aria-hidden="true" />
+          <span>新用户注册送 20 张生图额度</span>
+          <ChevronRight className="size-5" aria-hidden="true" />
+        </button>
+
+        <section className="mobile-home-banner" aria-label="电商素材生成入口">
+          <div className="mobile-home-banner__copy">
+            <h1>一张产品图，生成整套电商素材</h1>
+            <p>主图、海报、翻译、详情长图一次完成</p>
+            <button type="button" onClick={() => onAuthNavigate("register")}>
+              立即生图
+              <ChevronRight className="size-5" aria-hidden="true" />
+            </button>
+          </div>
+          <div className="mobile-home-banner__visual" aria-hidden="true">
+            <img src="/images/auth-carousel-product.png" alt="" />
+            <span className="mobile-home-banner__badge mobile-home-banner__badge--main">主图</span>
+            <span className="mobile-home-banner__badge mobile-home-banner__badge--scene">场景图</span>
+            <span className="mobile-home-banner__ai">AI</span>
+          </div>
+        </section>
+
+        <section className="mobile-home-app-card" aria-label="App 下载引导">
+          <div>
+            <span>{appPlatformLabel(appPlatform)} APP</span>
+            <strong>批量任务、结果管理和通知放到 APP</strong>
+            <p>移动 Web 先做登录和轻量生图入口，复杂编辑继续交给 APP。</p>
+          </div>
+          <div className="mobile-home-app-card__actions">
+            <button type="button" onClick={() => onOpenApp("create")}>
+              <ExternalLink className="size-4" aria-hidden="true" />
+              打开 APP
+            </button>
+            {appDownloadUrl ? (
+              <a href={appDownloadUrl} target="_blank" rel="noreferrer">
+                <Download className="size-4" aria-hidden="true" />
+                下载
+              </a>
+            ) : (
+              <button type="button" onClick={onOpenMobileAppPrompt}>
+                <Download className="size-4" aria-hidden="true" />
+                下载
+              </button>
+            )}
+          </div>
+        </section>
+
+        <section className="mobile-home-menu" aria-label="功能菜单">
+          {guestMenuItems.map((item) => {
+            const Icon = item.icon;
+            return (
+              <button key={item.label} type="button" onClick={() => onAuthNavigate("register")}>
+                <Icon className="size-7" aria-hidden="true" />
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
+        </section>
+
+        <section className="mobile-home-quick" aria-label="快捷生成">
+          <div className="mobile-home-section-head">
+            <h2>快捷生成</h2>
+          </div>
+          <div className="mobile-home-quick__body">
+            <button className="mobile-home-upload" type="button" onClick={() => onAuthNavigate("register")}>
+              <span>
+                <Cloud className="size-8" aria-hidden="true" />
+                <strong>上传产品图</strong>
+                <small>登录后可拍照或从相册选择</small>
+              </span>
+            </button>
+            <div className="mobile-home-quick__controls">
+              <div className="mobile-home-control-group">
+                <span>选择场景或风格</span>
+                <div className="mobile-home-chip-row">
+                  {["清新自然", "极简白底", "家居场景", "户外场景"].map((label, index) => (
+                    <button key={label} data-active={index === 1} type="button" onClick={() => onAuthNavigate("register")}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="mobile-home-control-group">
+                <span>选择尺寸</span>
+                <div className="mobile-home-size-row">
+                  {["1:1", "3:4", "4:3", "9:16"].map((label, index) => (
+                    <button key={label} data-active={index === 0} type="button" onClick={() => onAuthNavigate("register")}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+          <button className="mobile-home-generate" type="button" onClick={() => onAuthNavigate("register")}>
+            <Sparkles className="size-5" aria-hidden="true" />
+            登录后生成电商图
+          </button>
+        </section>
+
+        <section className="mobile-home-recent" aria-label="公开作品">
+          <div className="mobile-home-section-head">
+            <h2>公开作品</h2>
+            <button type="button" onClick={onOpenGallery}>
+              查看全部
+              <ChevronRight className="size-4" aria-hidden="true" />
+            </button>
+          </div>
+          <div className="mobile-home-recent__grid">
+            {[
+              { id: "sample-product", title: "护肤品主图", imageUrl: "/images/auth-register-hero.png" },
+              { id: "sample-lifestyle", title: "生活场景图", imageUrl: "/images/auth-carousel-product.png" }
+            ].map((item) => (
+              <article className="mobile-home-work-card" key={item.id}>
+                <img alt={item.title} src={item.imageUrl} />
+                <div className="mobile-home-work-card__actions">
+                  <button aria-label="打开案例库" type="button" onClick={onOpenGallery}>
+                    <ImageIcon className="size-5" aria-hidden="true" />
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      </div>
+
+      <nav className="mobile-bottom-nav" aria-label="手机底部导航">
+        <button className="mobile-workbench__tab" data-active="true" type="button">
+          <Home className="size-5" aria-hidden="true" />
+          <span>首页</span>
+        </button>
+        <button className="mobile-workbench__tab" type="button" onClick={() => onAuthNavigate("register")}>
+          <Sparkles className="size-5" aria-hidden="true" />
+          <span>生图</span>
+        </button>
+        <button className="mobile-workbench__tab" type="button" onClick={onOpenGallery}>
+          <ImageIcon className="size-5" aria-hidden="true" />
+          <span>图库</span>
+        </button>
+        <button className="mobile-workbench__tab" type="button" onClick={() => onAuthNavigate("login")}>
+          <User className="size-5" aria-hidden="true" />
+          <span>我的</span>
+        </button>
+      </nav>
+    </main>
+  );
+}
+
 function PanelStatusIcon({ tone }: { tone: PanelStatusTone }) {
   if (tone === "progress") {
     return <Loader2 className="mt-0.5 size-4 shrink-0 animate-spin" aria-hidden="true" />;
@@ -5221,6 +5718,8 @@ export function App() {
   const [ecommerceCategoryName, setEcommerceCategoryName] = useState("");
   const [ecommerceCategoryKitAssets, setEcommerceCategoryKitAssets] = useState<CategoryKitAssetSource[]>([]);
   const [categoryKitPrepare, setCategoryKitPrepare] = useState<CategoryKitPrepareState>(emptyCategoryKitPrepare);
+  const [categoryKitPlan, setCategoryKitPlan] = useState<CategoryKitPlanState>(emptyCategoryKitPlan);
+  const [isCategoryKitPlanning, setIsCategoryKitPlanning] = useState(false);
   const [ecommercePlatform, setEcommercePlatform] = useState<EcommercePlatform>("taobao");
   const [ecommerceMarket, setEcommerceMarket] = useState<EcommerceMarket>("cn");
   const [ecommerceTextLanguage, setEcommerceTextLanguage] = useState<EcommerceTextLanguage>("en");
@@ -5264,10 +5763,21 @@ export function App() {
   const [notificationUnreadCount, setNotificationUnreadCount] = useState(0);
   const [isNotificationCenterOpen, setIsNotificationCenterOpen] = useState(false);
   const [toastNotification, setToastNotification] = useState<AppNotification | null>(null);
+  const [appDownloadLinks, setAppDownloadLinks] = useState<AppDownloadLinks>({ ios: null, android: null });
+  const [isMobileAppPromptOpen, setIsMobileAppPromptOpen] = useState(false);
   const [demoCanvasExamples, setDemoCanvasExamples] = useState<DemoCanvasExample[]>(demoComparisonExamples);
   const [selectedDemoExampleId, setSelectedDemoExampleId] = useState(demoComparisonExamples[0]?.id ?? "");
+
+  function resetCategoryKitPlanning(): void {
+    setCategoryKitPlan(emptyCategoryKitPlan);
+  }
   const [referenceSelection, setReferenceSelection] = useState<ReferenceSelection>(missingReferenceSelection);
   const browserKind = useMemo(() => detectBrowserKind(), []);
+  const mobilePlatform = useMemo(() => detectMobilePlatform(), []);
+  const mobileAppDownloadUrl = useMemo(
+    () => appDownloadUrlForPlatform(appDownloadLinks, mobilePlatform),
+    [appDownloadLinks, mobilePlatform]
+  );
   const pluginGuideDisplayLinks = useMemo(
     () => ({
       ...pluginGuideLinks,
@@ -5326,6 +5836,18 @@ export function App() {
   const openGuestQuotaModal = useCallback((): void => {
     setIsGuestQuotaModalOpen(true);
   }, []);
+
+  const closeMobileAppPrompt = useCallback((): void => {
+    rememberMobileAppPromptDismissed();
+    setIsMobileAppPromptOpen(false);
+  }, []);
+
+  const openMobileApp = useCallback(
+    (target: "home" | "create" | "gallery" | "account" = "home"): void => {
+      openAppOrDownload(mobileAppDownloadUrl, target);
+    },
+    [mobileAppDownloadUrl]
+  );
 
   const navigateFromGuestQuota = useCallback(
     (mode: AuthMode): void => {
@@ -5629,6 +6151,48 @@ export function App() {
     void loadExtensionRelease();
     return () => controller.abort();
   }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function loadAppRelease(): Promise<void> {
+      try {
+        const response = await fetch(`${APP_RELEASE_API_URL}?t=${Date.now()}`, {
+          cache: "no-store",
+          signal: controller.signal
+        });
+        if (!response.ok) {
+          return;
+        }
+        const config = (await response.json()) as AppReleaseConfig;
+        if (!controller.signal.aborted) {
+          setAppDownloadLinks({
+            ios: config.ios?.downloadUrl ? config.ios : null,
+            android: config.android?.downloadUrl ? config.android : null
+          });
+        }
+      } catch {
+        // App download is optional; keep the page usable if release settings are unavailable.
+      }
+    }
+
+    void loadAppRelease();
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    if (!isMobileDrawer || !shouldShowMobileAppPrompt()) {
+      return;
+    }
+
+    const timerId = window.setTimeout(() => {
+      setIsMobileAppPromptOpen(true);
+    }, 900);
+
+    return () => {
+      window.clearTimeout(timerId);
+    };
+  }, [isMobileDrawer]);
 
   useEffect(() => {
     const handleUnauthorized = (): void => {
@@ -6288,9 +6852,10 @@ export function App() {
 	    const nextPreset = firstScene ? SIZE_PRESETS.find((item) => item.id === firstScene.defaultSizePresetId) : undefined;
 	    const nextReferenceLimit = ecommerceReferenceUploadLimit(nextMode);
 
-	    setEcommerceMode(nextMode);
-	    setEcommerceSceneIds(nextScenes);
-	    setEcommerceSizePresetId(nextPreset?.id ?? "square-1k");
+		    setEcommerceMode(nextMode);
+		    setEcommerceSceneIds(nextScenes);
+		    setEcommerceSizePresetId(nextPreset?.id ?? "square-1k");
+    resetCategoryKitPlanning();
 	    if (nextMode !== "one-click-replace" && ecommerceImagesRef.current.length > nextReferenceLimit) {
 	      setEcommerceImages((images) => {
 	        images.slice(nextReferenceLimit).forEach((image) => URL.revokeObjectURL(image.previewUrl));
@@ -6306,6 +6871,7 @@ export function App() {
 
   function selectEcommercePlatform(platform: EcommercePlatform): void {
     setEcommercePlatform(platform);
+    resetCategoryKitPlanning();
     if (CHINESE_ECOMMERCE_PLATFORM_IDS.has(platform)) {
       setEcommerceMarket("cn");
       return;
@@ -6378,7 +6944,8 @@ export function App() {
         ? "已添加待翻译图片，会逐张翻译并分别返回。"
         : `已添加产品参考图，最多可上传 ${limit} 张；第一张作为主体，后续作为细节依据。`
     );
-    setCategoryKitPrepare(emptyCategoryKitPrepare);
+	    setCategoryKitPrepare(emptyCategoryKitPrepare);
+    resetCategoryKitPlanning();
   }
 
   async function selectEcommerceImages(files: FileList | File[] | null | undefined): Promise<void> {
@@ -6413,7 +6980,8 @@ export function App() {
       }
       return images.filter((image) => image.id !== id);
     });
-    setCategoryKitPrepare(emptyCategoryKitPrepare);
+	    setCategoryKitPrepare(emptyCategoryKitPrepare);
+    resetCategoryKitPlanning();
   }
 
   function removeEcommerceTargetImage(id: string): void {
@@ -6561,14 +7129,16 @@ export function App() {
       previewUrl
     };
     setEcommerceCategoryKitAssets((assets) => [...assets, asset]);
-    setGenerationError("");
-    setCategoryKitPrepare((current) => (current.status === "idle" ? current : { ...current, status: "idle", message: "" }));
-  }
+	    setGenerationError("");
+	    setCategoryKitPrepare((current) => (current.status === "idle" ? current : { ...current, status: "idle", message: "" }));
+    resetCategoryKitPlanning();
+	  }
 
-  function updateCategoryKitAssetRole(id: string, role: CategoryKitAssetRole): void {
-    setEcommerceCategoryKitAssets((assets) => assets.map((asset) => (asset.id === id ? { ...asset, role } : asset)));
-    setCategoryKitPrepare((current) => (current.status === "idle" ? current : { ...current, status: "idle", message: "" }));
-  }
+	  function updateCategoryKitAssetRole(id: string, role: CategoryKitAssetRole): void {
+	    setEcommerceCategoryKitAssets((assets) => assets.map((asset) => (asset.id === id ? { ...asset, role } : asset)));
+	    setCategoryKitPrepare((current) => (current.status === "idle" ? current : { ...current, status: "idle", message: "" }));
+    resetCategoryKitPlanning();
+	  }
 
   function removeCategoryKitAsset(id: string): void {
     setEcommerceCategoryKitAssets((assets) => {
@@ -6577,9 +7147,10 @@ export function App() {
         URL.revokeObjectURL(removed.previewUrl);
       }
       return assets.filter((asset) => asset.id !== id);
-    });
-    setCategoryKitPrepare((current) => (current.status === "idle" ? current : { ...current, status: "idle", message: "" }));
-  }
+	    });
+	    setCategoryKitPrepare((current) => (current.status === "idle" ? current : { ...current, status: "idle", message: "" }));
+    resetCategoryKitPlanning();
+	  }
 
   async function selectMobileReferenceImage(file: File | undefined): Promise<void> {
     if (!file) {
@@ -6721,6 +7292,7 @@ export function App() {
 	              }))
 	            ]
 	          : undefined,
+      plannedImages: ecommerceMode === "category-kit" && categoryKitPlan.status === "ready" ? categoryKitPlan.imagePlan : undefined,
 	      extraDirection
 	    };
 	  }
@@ -6737,6 +7309,7 @@ export function App() {
 	    const extraDirection = [ecommerceExtraDirection.trim(), documentDirection].filter(Boolean).join("\n\n");
 
 	    setCategoryKitPrepare((current) => ({ ...current, status: "loading", message: "正在预检" }));
+    resetCategoryKitPlanning();
     if (!options.silent) {
       setGenerationError("");
       setGenerationMessage("");
@@ -6803,7 +7376,60 @@ export function App() {
     }
   }
 
+  async function planCategoryKitImages(payload: ReturnType<typeof buildEcommerceGenerationPayload>): Promise<CategoryKitPlanState | null> {
+    setIsCategoryKitPlanning(true);
+    setCategoryKitPlan((current) => ({ ...current, status: "loading", message: "正在读取参考图并规划套图" }));
+    setGenerationError("");
+    setGenerationMessage("");
+    setGenerationWarning("");
+
+    try {
+      const response = await authFetch("/api/ecommerce/images/category-kit-plan", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+
+      const planned = parseCategoryKitPlan(await response.json());
+      setCategoryKitPlan(planned);
+      if (!ecommerceCategoryPath.trim() && planned.categoryPath) {
+        setEcommerceCategoryPath(planned.categoryPath);
+      }
+      if (!ecommerceCategoryName.trim() && planned.categoryName) {
+        setEcommerceCategoryName(planned.categoryName);
+      }
+      setGenerationMessage(planned.message);
+      return planned;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "品类套图规划失败。";
+      setCategoryKitPlan({
+        ...emptyCategoryKitPlan,
+        status: "error",
+        message
+      });
+      setGenerationError(message);
+      return null;
+    } finally {
+      setIsCategoryKitPlanning(false);
+    }
+  }
+
+  function updateCategoryKitPlanItem(index: number, patch: Partial<EcommerceCategoryKitPlanItem>): void {
+    setCategoryKitPlan((current) => ({
+      ...current,
+      imagePlan: current.imagePlan.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item))
+    }));
+  }
+
   async function submitEcommerceGeneration(): Promise<void> {
+    if (isEcommerceGenerating || isCategoryKitPlanning) {
+      return;
+    }
 	    const title = ecommerceTitle.trim();
 	    const selectedSize = SIZE_PRESETS.find((item) => item.id === ecommerceSizePresetId) ?? SIZE_PRESETS[0];
 	    const outputCountPerScene = ecommerceMode === "single-poster" || ecommerceMode === "category-kit" || ecommerceMode === "one-click-replace" || ecommerceMode === "text-translation" ? 1 : ecommerceCount;
@@ -6842,6 +7468,9 @@ export function App() {
       setGenerationError("请至少选择一个生成场景。");
       return;
     }
+    if (ecommerceMode === "category-kit" && categoryKitPlan.status !== "ready") {
+      setIsCategoryKitPlanning(true);
+    }
     let preparedCategoryKit: CategoryKitPrepareState | null = null;
     if (ecommerceMode === "category-kit" && categoryKitPrepare.status !== "ready") {
       preparedCategoryKit = await prepareCategoryKitStrategy({ silent: true });
@@ -6858,6 +7487,11 @@ export function App() {
       categoryPath: ecommerceCategoryPath.trim() || preparedCategoryKit?.categoryPath || categoryKitPrepare.categoryPath,
       categoryName: ecommerceCategoryName.trim() || preparedCategoryKit?.categoryName || categoryKitPrepare.categoryName
     });
+
+    if (ecommerceMode === "category-kit" && categoryKitPlan.status !== "ready") {
+      await planCategoryKitImages(payload);
+      return;
+    }
 
     const generateEndpoint = ecommerceMode === "category-kit" ? "/api/ecommerce/images/category-kit-generate" : "/api/ecommerce/images/batch-generate";
 
@@ -7659,6 +8293,36 @@ export function App() {
     setGenerationWarning("");
   }
 
+  if (publicPath === "/privacy" || publicPath === "/privacy/choices") {
+    return (
+      <div className="app-root">
+        <PrivacyPolicyPage />
+      </div>
+    );
+  }
+
+  if (publicPath === "/agreement") {
+    return (
+      <div className="app-root">
+        <AgreementPage />
+      </div>
+    );
+  }
+
+  if (publicPath === "/app" || publicPath === "/download-app") {
+    return (
+      <div className="app-root">
+        <AppReceivePage
+          downloadLinks={appDownloadLinks}
+          platform={mobilePlatform}
+          onAuthNavigate={navigateToAuth}
+          onNavigateHome={() => navigateToRoute("canvas")}
+          onOpenApp={openMobileApp}
+        />
+      </div>
+    );
+  }
+
   if (authStatus === "checking") {
     return (
       <div className="app-root">
@@ -7690,6 +8354,28 @@ export function App() {
             onRegister={registerWithPassword}
             onSendSmsCode={sendRegisterSmsCode}
           />
+        ) : isMobileDrawer && guestVisibleRoute === "canvas" ? (
+          <>
+            <MobileGuestHome
+              appDownloadUrl={mobileAppDownloadUrl}
+              appPlatform={mobilePlatform}
+              onAuthNavigate={navigateToAuth}
+              onOpenApp={openMobileApp}
+              onOpenGallery={() => navigateToRoute("gallery")}
+              onOpenMobileAppPrompt={() => setIsMobileAppPromptOpen(true)}
+            />
+            {isMobileAppPromptOpen ? (
+              <MobileAppPromptOverlay
+                downloadUrl={mobileAppDownloadUrl}
+                platform={mobilePlatform}
+                onClose={closeMobileAppPrompt}
+                onOpenApp={(target) => {
+                  closeMobileAppPrompt();
+                  openMobileApp(target);
+                }}
+              />
+            ) : null}
+          </>
         ) : (
           <>
             <GuestTopNavigation
@@ -7830,9 +8516,10 @@ export function App() {
 	          ecommerceImages={ecommerceImages}
 	          ecommerceReplacementImage={ecommerceReplacementImage}
 	          ecommerceTargetImages={ecommerceTargetImages}
-          ecommerceMarket={ecommerceMarket}
-          ecommerceMode={ecommerceMode}
-          ecommercePlatform={ecommercePlatform}
+	          ecommerceMarket={ecommerceMarket}
+	          ecommerceMode={ecommerceMode}
+	          categoryKitPlan={categoryKitPlan}
+	          ecommercePlatform={ecommercePlatform}
           ecommerceRemoveWatermark={ecommerceRemoveWatermark}
           ecommerceSceneIds={ecommerceSceneIds}
           ecommerceSizePresetId={ecommerceSizePresetId}
@@ -7843,9 +8530,10 @@ export function App() {
           generationMessage={generationMessage}
           generationMode={generationMode}
           generationWarning={generationWarning}
-	          height={height}
-	          isEcommerceGenerating={isEcommerceGenerating}
-	          isEcommerceExtraDirectionOptimizing={isEcommerceExtraDirectionOptimizing}
+		          height={height}
+		          isEcommerceGenerating={isEcommerceGenerating}
+		          isCategoryKitPlanning={isCategoryKitPlanning}
+		          isEcommerceExtraDirectionOptimizing={isEcommerceExtraDirectionOptimizing}
 	          isGenerating={isGenerating}
           isPromptOptimizing={isPromptOptimizing}
           mobileReferenceImage={mobileReferenceImage}
@@ -7855,15 +8543,19 @@ export function App() {
           quality={quality}
           selectedRecordId={mobileSelectedRecordId}
           sizePresetId={sizePresetId}
-          stylePreset={stylePreset}
-          user={currentUser}
-          width={width}
-          onApplyPromptStarter={applyPromptStarter}
+	          stylePreset={stylePreset}
+	          user={currentUser}
+	          width={width}
+          appDownloadUrl={mobileAppDownloadUrl}
+          appPlatform={mobilePlatform}
+	          onApplyPromptStarter={applyPromptStarter}
           onCopyHistoryPrompt={(record) => void copyHistoryPrompt(record)}
-          onDownloadHistoryRecord={downloadHistoryRecord}
-	          onNavigate={navigateToRoute}
-	          onOpenGallery={() => navigateToRoute("gallery")}
-	          onOptimizeEcommerceExtraDirection={() => void optimizeEcommerceExtraDirection()}
+	          onDownloadHistoryRecord={downloadHistoryRecord}
+		          onNavigate={navigateToRoute}
+		          onOpenGallery={() => navigateToRoute("gallery")}
+          onOpenMobileApp={openMobileApp}
+          onOpenMobileAppPrompt={() => setIsMobileAppPromptOpen(true)}
+		          onOptimizeEcommerceExtraDirection={() => void optimizeEcommerceExtraDirection()}
 	          onOptimizePrompt={() => void optimizePrompt()}
 	          onRerunHistoryRecord={(record) => void rerunHistoryRecord(record)}
 	          onRemoveEcommerceDocument={removeEcommerceDocument}
@@ -8313,6 +9005,7 @@ export function App() {
                         onChange={(event) => {
                           setEcommerceCategoryPath(event.target.value);
                           setCategoryKitPrepare(emptyCategoryKitPrepare);
+                          resetCategoryKitPlanning();
                         }}
                       />
                     </label>
@@ -8325,6 +9018,7 @@ export function App() {
                         onChange={(event) => {
                           setEcommerceCategoryName(event.target.value);
                           setCategoryKitPrepare(emptyCategoryKitPrepare);
+                          resetCategoryKitPlanning();
                         }}
                       />
                     </label>
@@ -8358,6 +9052,33 @@ export function App() {
                       {categoryKitPrepare.requiredAssets.slice(0, 5).map((item) => (
                         <span key={item}>{item}</span>
                       ))}
+                    </div>
+                  ) : null}
+                  {categoryKitPlan.status !== "idle" ? (
+                    <div className="category-kit-plan">
+                      <div className="category-kit-plan__head">
+                        <strong>{categoryKitPlan.status === "loading" ? "正在规划套图" : categoryKitPlan.status === "error" ? "规划失败" : `已规划 ${categoryKitPlan.imagePlan.length} 张图`}</strong>
+                        <span>{categoryKitPlan.message}</span>
+                      </div>
+                      {categoryKitPlan.status === "ready" ? (
+                        <div className="category-kit-plan__list">
+                          {categoryKitPlan.imagePlan.map((item, index) => (
+                            <div className="category-kit-plan__item" key={`${index}-${item.title}`}>
+                              <input
+                                aria-label={`第 ${index + 1} 张标题`}
+                                value={item.title}
+                                onChange={(event) => updateCategoryKitPlanItem(index, { title: event.target.value })}
+                              />
+                              <textarea
+                                aria-label={`第 ${index + 1} 张生图提示词`}
+                                rows={4}
+                                value={item.prompt}
+                                onChange={(event) => updateCategoryKitPlanItem(index, { prompt: event.target.value })}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
                     </div>
                   ) : null}
                   <div className="category-kit-assets">
@@ -8515,7 +9236,10 @@ export function App() {
 	                    className="prompt-textarea mt-2 h-24 w-full resize-none rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm leading-6 text-neutral-950 outline-none transition focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100"
 	                    placeholder="例如：保留原构图；模特不露脸；不要新增夸大宣传文字"
 	                    value={ecommerceExtraDirection}
-	                    onChange={(event) => setEcommerceExtraDirection(event.target.value)}
+	                    onChange={(event) => {
+	                      setEcommerceExtraDirection(event.target.value);
+	                      resetCategoryKitPlanning();
+	                    }}
 	                  />
 	                </div>
               </section>
@@ -8981,10 +9705,10 @@ export function App() {
         {activeSidebarTab !== "video" ? (
           <div className="ai-panel-actions grid grid-cols-1 gap-3 border-t border-neutral-200 bg-white px-5 py-4">
             {activeSidebarTab === "plugins" ? (
-              <button className="primary-action" disabled={isEcommerceGenerating} type="button" onClick={() => void submitEcommerceGeneration()}>
-                {isEcommerceGenerating ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Workflow className="size-4" aria-hidden="true" />}
-                {isEcommerceGenerating ? "电商图生成中" : ecommerceMode === "category-kit" ? "生成品类套图到画布" : ecommerceMode === "one-click-replace" ? "一键换装/换品到画布" : "生成电商图到画布"}
-              </button>
+		              <button className="primary-action" disabled={isEcommerceGenerating || isCategoryKitPlanning} type="button" onClick={() => void submitEcommerceGeneration()}>
+		                {isEcommerceGenerating || isCategoryKitPlanning ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Workflow className="size-4" aria-hidden="true" />}
+		                {isEcommerceGenerating ? "电商图生成中" : isCategoryKitPlanning ? "正在规划品类套图" : ecommerceMode === "category-kit" ? categoryKitPlan.status === "ready" ? "提交品类套图到队列" : categoryKitPlan.status === "loading" ? "正在规划品类套图" : "规划品类套图" : ecommerceMode === "one-click-replace" ? "一键换装/换品到画布" : "生成电商图到画布"}
+	              </button>
             ) : (
               <button
                 className="primary-action"
@@ -9056,6 +9780,17 @@ export function App() {
         />
       ) : null}
       {visibleRoute === "admin" && isAdminUser(currentUser) ? <AdminPage /> : null}
+      {isMobileAppPromptOpen ? (
+        <MobileAppPromptOverlay
+          downloadUrl={mobileAppDownloadUrl}
+          platform={mobilePlatform}
+          onClose={closeMobileAppPrompt}
+          onOpenApp={(target) => {
+            closeMobileAppPrompt();
+            openMobileApp(target);
+          }}
+        />
+      ) : null}
       {isPluginGuideOpen && visibleRoute === "canvas" ? (
         <PluginGuideOverlay
           browserLabel={pluginBrowserLabel}

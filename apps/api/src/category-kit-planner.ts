@@ -18,7 +18,9 @@ import type {
   PromptOptimizeRequest,
   PromptOptimizeResponse,
   ReferenceImageInput,
-  SaveCategoryKitPlannerConfigRequest
+  SaveCategoryKitPlannerConfigRequest,
+  SeedanceVideoStoryboardPlanRequest,
+  SeedanceVideoStoryboardPlanResponse
 } from "./contracts.js";
 import { getSystemSetting, saveSystemSetting } from "./system-settings.js";
 
@@ -29,7 +31,14 @@ const OPENAI_RESPONSES_BASE_URL = "https://api.openai.com/v1";
 const OPENAI_CHAT_BASE_URL = "https://api.openai.com/v1";
 const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
 const DEEPSEEK_DEFAULT_MODEL = "deepseek-v4-flash";
-const ALL_TEXT_MODEL_MODULES: CategoryKitPlannerModule[] = ["prompt-optimizer", "category-kit-planner", "category-classifier"];
+const ALL_TEXT_MODEL_MODULES: CategoryKitPlannerModule[] = [
+  "prompt-optimizer",
+  "category-kit-planner",
+  "category-classifier",
+  "video-storyboard-planner"
+];
+const SEEDANCE_FACE_SAFE_PROMPT_NOTE =
+  "Seedance 合规限制：画面中不出现可识别真人脸、真实人物肖像或身份特征；如需人物互动，仅使用手部、背影、肩颈以下裁切、虚化远景人物、无脸模特或人体模特道具，产品始终是主体。";
 
 interface StoredCategoryKitPlannerConfigEntry extends Omit<CategoryKitPlannerConfigEntry, "apiKeySaved"> {
   encryptedApiKey: string;
@@ -155,13 +164,13 @@ export async function generateCategoryKitPlan(
       hasApiKey: Boolean(model.apiKey)
     }))
   });
-  const activeConfigs = activeTextModelConfigs(configs.models, "category-kit-planner");
+  const activeConfigs = activeVisionTextModelConfigs(configs.models, "category-kit-planner");
   if (activeConfigs.length === 0) {
     logCategoryKitPlanner("blocked", {
       jobId: debug?.jobId,
       reason: "no_active_models"
     });
-    throw new ProviderError("missing_api_key", "后台未配置可用的品类套图文本模型，请先在管理后台保存并启用至少一个模型。", 503);
+    throw new ProviderError("missing_api_key", "后台未配置可看图的品类套图 OpenAI 文本模型，请先在管理后台保存并启用至少一个 OpenAI/兼容视觉模型。", 503);
   }
 
   const errors: string[] = [];
@@ -224,6 +233,41 @@ export async function optimizeImagePrompt(input: PromptOptimizeRequest): Promise
   );
 }
 
+export async function planSeedanceVideoStoryboard(
+  input: SeedanceVideoStoryboardPlanRequest
+): Promise<SeedanceVideoStoryboardPlanResponse> {
+  const configs = await resolveCategoryKitPlannerConfigs();
+  const activeConfigs = activeVisionTextModelConfigs(configs.models, "video-storyboard-planner");
+  if (activeConfigs.length === 0) {
+    throw new ProviderError("missing_api_key", "后台未配置可看图的视频分镜 OpenAI 文本模型，请先在管理后台保存并启用 OpenAI/兼容视觉模型。", 503);
+  }
+
+  const errors: string[] = [];
+  for (const [index, config] of activeConfigs.entries()) {
+    try {
+      return await runVideoStoryboardPlannerAttempt(config, input, index + 1, activeConfigs.length);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      errors.push(`${config.name} (${config.model}): ${message}`);
+      logCategoryKitPlanner("video-storyboard-attempt-failed", {
+        attempt: index + 1,
+        attemptCount: activeConfigs.length,
+        name: config.name,
+        role: config.role,
+        priority: config.priority,
+        model: config.model,
+        message
+      });
+    }
+  }
+
+  throw new ProviderError(
+    "upstream_failure",
+    `视频分镜规划失败，已尝试 ${activeConfigs.length} 个模型：${errors.join("；")}`,
+    502
+  );
+}
+
 export async function classifyCategoryKitCategory(
   input: CategoryKitCategoryClassificationInput,
   debug?: CategoryKitPlannerDebugContext
@@ -232,7 +276,7 @@ export async function classifyCategoryKitCategory(
     return undefined;
   }
   const configs = await resolveCategoryKitPlannerConfigs();
-  const activeConfigs = activeTextModelConfigs(configs.models, "category-classifier");
+  const activeConfigs = activeVisionTextModelConfigs(configs.models, "category-classifier");
   if (activeConfigs.length === 0) {
     logCategoryKitPlanner("classify-skipped", {
       jobId: debug?.jobId,
@@ -290,19 +334,19 @@ async function resolveCategoryKitPlannerConfigs(): Promise<ResolvedCategoryKitPl
   return {
     source: "default",
     models: [
-    normalizeCategoryKitPlannerConfig({
-      id: "default-category-kit-planner-primary",
-      enabled: true,
-      name: "品类套图共享文本模型",
-      role: "primary",
-      priority: 1,
-      apiKey: "",
-      provider: "openai-responses",
-      modules: ALL_TEXT_MODEL_MODULES,
-      baseUrl: OPENAI_RESPONSES_BASE_URL,
-      model: DEFAULT_MODEL,
-      timeoutMs: DEFAULT_TIMEOUT_MS
-    })
+      normalizeCategoryKitPlannerConfig({
+        id: "default-category-kit-planner-primary",
+        enabled: true,
+        name: "品类套图共享文本模型",
+        role: "primary",
+        priority: 1,
+        apiKey: "",
+        provider: "openai-responses",
+        modules: ALL_TEXT_MODEL_MODULES,
+        baseUrl: OPENAI_RESPONSES_BASE_URL,
+        model: DEFAULT_MODEL,
+        timeoutMs: DEFAULT_TIMEOUT_MS
+      })
     ]
   };
 }
@@ -997,6 +1041,234 @@ function runPromptOptimizerAttempt(
     });
 }
 
+function runVideoStoryboardPlannerAttempt(
+  config: ResolvedCategoryKitPlannerConfigEntry,
+  input: SeedanceVideoStoryboardPlanRequest,
+  attempt: number,
+  attemptCount: number
+): Promise<SeedanceVideoStoryboardPlanResponse> {
+  const provider = normalizeProvider(config.provider, config.baseUrl);
+  const baseUrl = normalizeBaseUrl(config.baseUrl) || defaultBaseUrlForProvider(provider);
+  const startedAt = Date.now();
+  let failureLogged = false;
+  const schema = videoStoryboardSchema();
+  const referenceImages = input.referenceImages.slice(0, 4);
+  logCategoryKitPlanner("video-storyboard-request-start", {
+    attempt,
+    attemptCount,
+    name: config.name,
+    id: config.id,
+    role: config.role,
+    priority: config.priority,
+    provider,
+    baseUrl,
+    model: config.model,
+    timeoutMs: config.timeoutMs,
+    referenceImageCount: referenceImages.length,
+    intentLength: input.intent.length,
+    ratio: input.ratio || "auto",
+    duration: input.duration ?? 4,
+    resolution: input.resolution || "auto"
+  });
+
+  if (provider === "openai-responses") {
+    return fetch(`${baseUrl}/responses`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: config.model,
+        store: false,
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: composeVideoStoryboardPrompt(input)
+              },
+              ...referenceImages.map((image) => ({
+                type: "input_image",
+                image_url: image.dataUrl,
+                detail: "auto"
+              }))
+            ]
+          }
+        ],
+        text: {
+          format: {
+            type: "json_schema",
+            name: "seedance_video_storyboard_plan",
+            strict: true,
+            schema
+          }
+        }
+      }),
+      signal: AbortSignal.timeout(Math.min(config.timeoutMs, 180_000))
+    })
+      .then(async (response) => {
+        const responseText = await response.text();
+        const body = parseJsonMaybe(responseText);
+        if (!response.ok) {
+          const message = responseErrorMessage(body) || `视频分镜规划失败：HTTP ${response.status}`;
+          failureLogged = true;
+          logCategoryKitPlanner("video-storyboard-upstream-error", {
+            attempt,
+            attemptCount,
+            name: config.name,
+            id: config.id,
+            durationMs: Date.now() - startedAt,
+            status: response.status,
+            statusText: response.statusText,
+            requestId: response.headers.get("x-request-id") || response.headers.get("request-id"),
+            bodySnippet: responseText.slice(0, 1000),
+            message
+          });
+          throw new ProviderError("upstream_failure", message, response.status >= 400 ? response.status : 502);
+        }
+
+        try {
+          const result = parseVideoStoryboardResponse(responseTextFromBody(body), config.model, input);
+          logCategoryKitPlanner("video-storyboard-success", {
+            attempt,
+            attemptCount,
+            name: config.name,
+            id: config.id,
+            durationMs: Date.now() - startedAt,
+            sceneCount: result.scenes.length,
+            model: result.model
+          });
+          return result;
+        } catch (error) {
+          failureLogged = true;
+          logCategoryKitPlanner("video-storyboard-parse-error", {
+            attempt,
+            attemptCount,
+            name: config.name,
+            id: config.id,
+            durationMs: Date.now() - startedAt,
+            message: error instanceof Error ? error.message : String(error),
+            responseLength: responseText.length,
+            responseSnippet: responseText.slice(0, 2000)
+          });
+          throw error;
+        }
+      })
+      .catch((error) => {
+        if (!failureLogged) {
+          logCategoryKitPlanner("video-storyboard-request-error", {
+            attempt,
+            attemptCount,
+            name: config.name,
+            id: config.id,
+            durationMs: Date.now() - startedAt,
+            message: error instanceof Error ? error.message : String(error)
+          });
+        }
+        throw error;
+      });
+  }
+
+  return fetch(`${baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: config.model,
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: composeVideoStoryboardPrompt(input)
+            },
+            ...referenceImages.map((image) => ({
+              type: "image_url",
+              image_url: {
+                url: image.dataUrl
+              }
+            }))
+          ]
+        }
+      ],
+      response_format: {
+        type: "json_object"
+      }
+    }),
+    signal: AbortSignal.timeout(Math.min(config.timeoutMs, 180_000))
+  })
+    .then(async (response) => {
+      const responseText = await response.text();
+      const body = parseJsonMaybe(responseText);
+      if (!response.ok) {
+        const message = responseErrorMessage(body) || `视频分镜规划失败：HTTP ${response.status}`;
+        failureLogged = true;
+        logCategoryKitPlanner("video-storyboard-upstream-error", {
+          attempt,
+          attemptCount,
+          name: config.name,
+          id: config.id,
+          provider,
+          durationMs: Date.now() - startedAt,
+          status: response.status,
+          statusText: response.statusText,
+          requestId: response.headers.get("x-request-id") || response.headers.get("request-id"),
+          bodySnippet: responseText.slice(0, 1000),
+          message
+        });
+        throw new ProviderError("upstream_failure", message, response.status >= 400 ? response.status : 502);
+      }
+
+      try {
+        const result = parseVideoStoryboardResponse(responseTextFromChatBody(body), config.model, input);
+        logCategoryKitPlanner("video-storyboard-success", {
+          attempt,
+          attemptCount,
+          name: config.name,
+          id: config.id,
+          provider,
+          durationMs: Date.now() - startedAt,
+          sceneCount: result.scenes.length,
+          model: result.model
+        });
+        return result;
+      } catch (error) {
+        failureLogged = true;
+        logCategoryKitPlanner("video-storyboard-parse-error", {
+          attempt,
+          attemptCount,
+          name: config.name,
+          id: config.id,
+          provider,
+          durationMs: Date.now() - startedAt,
+          message: error instanceof Error ? error.message : String(error),
+          responseLength: responseText.length,
+          responseSnippet: responseText.slice(0, 2000)
+        });
+        throw error;
+      }
+    })
+    .catch((error) => {
+      if (!failureLogged) {
+        logCategoryKitPlanner("video-storyboard-request-error", {
+          attempt,
+          attemptCount,
+          name: config.name,
+          id: config.id,
+          provider,
+          durationMs: Date.now() - startedAt,
+          message: error instanceof Error ? error.message : String(error)
+        });
+      }
+      throw error;
+    });
+}
+
 function normalizeCategoryKitPlannerConfig(input: {
   id?: string;
   enabled?: boolean;
@@ -1041,6 +1313,20 @@ function activeTextModelConfigs(
   module: CategoryKitPlannerModule
 ): ResolvedCategoryKitPlannerConfigEntry[] {
   return sortCategoryKitPlannerConfigs(configs).filter((model) => model.enabled && Boolean(model.apiKey) && model.modules.includes(module));
+}
+
+function activeVisionTextModelConfigs(
+  configs: ResolvedCategoryKitPlannerConfigEntry[],
+  module: CategoryKitPlannerModule
+): ResolvedCategoryKitPlannerConfigEntry[] {
+  const exactConfigs = activeTextModelConfigs(configs, module).filter((model) => normalizeProvider(model.provider, model.baseUrl) !== "deepseek");
+  if (exactConfigs.length > 0 || module !== "video-storyboard-planner") {
+    return exactConfigs;
+  }
+
+  return sortCategoryKitPlannerConfigs(configs).filter(
+    (model) => model.enabled && Boolean(model.apiKey) && normalizeProvider(model.provider, model.baseUrl) !== "deepseek"
+  );
 }
 
 function normalizeProvider(value: unknown, baseUrl?: unknown): CategoryKitPlannerProvider {
@@ -1110,6 +1396,36 @@ function composePromptOptimizerPrompt(input: PromptOptimizeRequest): string {
   ].filter(Boolean).join("\n");
 }
 
+function composeVideoStoryboardPrompt(input: SeedanceVideoStoryboardPlanRequest): string {
+  const requestedDuration = clampStoryboardDuration(input.duration);
+  const requestedRatio = normalizeStoryboardRatio(input.ratio) || "9:16";
+  const requestedResolution = normalizeStoryboardResolution(input.resolution) || "720p";
+  return [
+    "You are a senior commercial video director and AI-video prompt planner for a Chinese e-commerce creative tool.",
+    "Use the reference images as visual evidence for product identity, shape, color, material, packaging, labels, and brand style.",
+    "The user only provides one intent sentence. Turn it into a practical shot-by-shot storyboard for image-to-video generation.",
+    "Return only JSON matching the schema. No markdown, no explanation, no code fences.",
+    "Each scene must be independently executable: include one video prompt, one first-frame image prompt, and one last-frame image prompt.",
+    "The first and last frame prompts will be sent to the existing image-generation backend before video generation. They must describe still images, not videos.",
+    "Do not assume the uploaded reference image is already a correct first or last frame. Infer the needed frames from the script.",
+    "Keep product identity faithful to references. Do not redesign the product, invent labels, add fake certifications, fake platform badges, unsupported claims, medical effects, or unreadable text.",
+    "Important Seedance compliance: the final video API may reject input images containing real people or recognizable faces. Avoid recognizable real human faces in every video prompt and every first/last-frame prompt.",
+    "If the user asks for a model, person, lifestyle scene, face, portrait, selfie, influencer, or if a reference image contains a person, replace the human presence with anonymous safe alternatives: hands only, back view, below-neck crop, partial body without face, mannequin, blurred distant figure, silhouette, or product-only still life. Preserve the product, not the person's identity.",
+    `Every scene prompt should include this constraint when relevant: ${SEEDANCE_FACE_SAFE_PROMPT_NOTE}`,
+    "Prefer 1 to 3 scenes. Use more than one scene only when the user intent clearly needs a sequence.",
+    "Default each scene duration to 4 seconds. Do not exceed 6 seconds per scene unless the user explicitly asks for a longer shot.",
+    "Video prompts should be concise but complete, with subject, scene, camera motion, action progression, lighting, style, and continuity from first frame to last frame.",
+    "Frame prompts should be photorealistic commercial stills suitable as opening/closing keyframes for the video.",
+    "If text appears in frames, keep it minimal, readable, and only use text provided by the user or visibly supported by the references.",
+    `User intent: ${input.intent}.`,
+    `Requested ratio: ${requestedRatio}.`,
+    `Requested scene duration: ${requestedDuration} seconds.`,
+    `Requested resolution: ${requestedResolution}.`,
+    `Requested audio: ${input.generateAudio === true ? "on" : "off"}.`,
+    jsonSchemaInstruction("seedance_video_storyboard_plan", videoStoryboardSchema())
+  ].join("\n");
+}
+
 function promptOptimizerSchema(): Record<string, unknown> {
   return {
     type: "object",
@@ -1126,6 +1442,83 @@ function promptOptimizerSchema(): Record<string, unknown> {
   };
 }
 
+function videoStoryboardSchema(): Record<string, unknown> {
+  return {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      summary: { type: "string" },
+      recommendations: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          ratio: { type: "string" },
+          resolution: { type: "string" },
+          duration: { type: "number" },
+          generateAudio: { type: "boolean" },
+          notes: {
+            type: "array",
+            items: { type: "string" }
+          }
+        },
+        required: ["ratio", "resolution", "duration", "generateAudio", "notes"]
+      },
+      scenes: {
+        type: "array",
+        minItems: 1,
+        maxItems: 3,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            id: { type: "string" },
+            title: { type: "string" },
+            overview: { type: "string" },
+            scene: { type: "string" },
+            camera: { type: "string" },
+            plot: { type: "string" },
+            extra: { type: "string" },
+            videoPrompt: { type: "string" },
+            firstFrame: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                prompt: { type: "string" },
+                notes: { type: "string" }
+              },
+              required: ["prompt", "notes"]
+            },
+            lastFrame: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                prompt: { type: "string" },
+                notes: { type: "string" }
+              },
+              required: ["prompt", "notes"]
+            },
+            duration: { type: "number" }
+          },
+          required: [
+            "id",
+            "title",
+            "overview",
+            "scene",
+            "camera",
+            "plot",
+            "extra",
+            "videoPrompt",
+            "firstFrame",
+            "lastFrame",
+            "duration"
+          ]
+        }
+      }
+    },
+    required: ["summary", "recommendations", "scenes"]
+  };
+}
+
 function parsePromptOptimizerResponse(text: string, model: string, originalPrompt: string): PromptOptimizeResponse {
   const root = asRecord(jsonFromText(text));
   const optimizedPrompt = normalizeText(root.optimizedPrompt ?? root.optimized_prompt ?? root.prompt);
@@ -1138,6 +1531,125 @@ function parsePromptOptimizerResponse(text: string, model: string, originalPromp
     changes: stringArrayFrom(root.changes)?.slice(0, 5),
     model
   };
+}
+
+function parseVideoStoryboardResponse(
+  text: string,
+  model: string,
+  input: SeedanceVideoStoryboardPlanRequest
+): SeedanceVideoStoryboardPlanResponse {
+  const root = asRecord(jsonFromText(text));
+  const rawScenes = Array.isArray(root.scenes)
+    ? root.scenes
+    : Array.isArray(root.storyboard)
+      ? root.storyboard
+      : Array.isArray(root.shots)
+        ? root.shots
+        : [];
+  const scenes = rawScenes.flatMap((item, index): SeedanceVideoStoryboardPlanResponse["scenes"] => {
+    const scene = asRecord(item);
+    const firstFrame = asRecord(scene.firstFrame ?? scene.first_frame ?? scene.openingFrame ?? scene.opening_frame);
+    const lastFrame = asRecord(scene.lastFrame ?? scene.last_frame ?? scene.endingFrame ?? scene.ending_frame);
+    const title = firstString(scene, ["title", "name"]) || `镜头 ${index + 1}`;
+    const overview = firstString(scene, ["overview", "summary", "goal"]) || title;
+    const sceneText = firstString(scene, ["scene", "setting", "environment"]) || "商业产品拍摄场景，主体清晰，背景干净。";
+    const camera = firstString(scene, ["camera", "cameraMotion", "camera_motion"]) || "稳定轻微推进，保持主体清晰。";
+    const plot = firstString(scene, ["plot", "action", "story"]) || overview;
+    const extra = firstString(scene, ["extra", "notes", "constraints"]) || "保持参考图商品身份、颜色、材质与比例一致。";
+    const videoPrompt = firstString(scene, ["videoPrompt", "video_prompt", "prompt"]) || "";
+    const firstFramePrompt = firstString(firstFrame, ["prompt", "imagePrompt", "image_prompt"]) || "";
+    const lastFramePrompt = firstString(lastFrame, ["prompt", "imagePrompt", "image_prompt"]) || "";
+    if (!videoPrompt || !firstFramePrompt || !lastFramePrompt) {
+      return [];
+    }
+    return [
+      {
+        id: firstString(scene, ["id", "sceneId", "scene_id"]) || `scene-${index + 1}`,
+        title: title.slice(0, 80),
+        overview: overview.slice(0, 600),
+        scene: sceneText.slice(0, 800),
+        camera: camera.slice(0, 800),
+        plot: plot.slice(0, 800),
+        extra: appendSeedanceFaceSafeNote(extra).slice(0, 800),
+        videoPrompt: appendSeedanceFaceSafeNote(videoPrompt).slice(0, 2000),
+        firstFrame: {
+          prompt: appendSeedanceFaceSafeNote(firstFramePrompt).slice(0, 2000),
+          notes: firstString(firstFrame, ["notes", "note"])?.slice(0, 400)
+        },
+        lastFrame: {
+          prompt: appendSeedanceFaceSafeNote(lastFramePrompt).slice(0, 2000),
+          notes: firstString(lastFrame, ["notes", "note"])?.slice(0, 400)
+        },
+        duration: clampStoryboardDuration(typeof scene.duration === "number" ? scene.duration : input.duration)
+      }
+    ];
+  });
+
+  if (scenes.length === 0) {
+    throw new ProviderError("upstream_failure", "文本模型没有返回可用的视频分镜。", 502);
+  }
+
+  const recommendations = asRecord(root.recommendations ?? root.suggestions);
+  const ratio = normalizeStoryboardRatio(recommendations.ratio) || normalizeStoryboardRatio(input.ratio) || "9:16";
+  const resolution = normalizeStoryboardResolution(recommendations.resolution) || normalizeStoryboardResolution(input.resolution) || "720p";
+  const duration = clampStoryboardDuration(typeof recommendations.duration === "number" ? recommendations.duration : input.duration);
+  const generateAudio = typeof recommendations.generateAudio === "boolean"
+    ? recommendations.generateAudio
+    : typeof recommendations.generate_audio === "boolean"
+      ? recommendations.generate_audio
+      : input.generateAudio === true;
+  const notes = stringArrayFrom(recommendations.notes)?.slice(0, 5) ?? [
+    "建议单镜头默认 4 秒，最长不超过 6 秒，稳定性更好。",
+    "首尾帧先用生图模型生成并确认，再提交视频生成。"
+  ];
+
+  return {
+    summary: normalizeText(root.summary ?? root.productSummary ?? root.product_summary) || "已根据参考图和意图完成视频分镜规划。",
+    scenes: scenes.slice(0, 3),
+    recommendations: {
+      ratio,
+      resolution,
+      duration,
+      generateAudio,
+      notes
+    },
+    model
+  };
+}
+
+function normalizeStoryboardRatio(value: unknown): string | undefined {
+  const ratio = normalizeText(value);
+  if (!ratio) {
+    return undefined;
+  }
+  return /^\d{1,2}:\d{1,2}$/u.test(ratio) ? ratio : undefined;
+}
+
+function normalizeStoryboardResolution(value: unknown): string | undefined {
+  const resolution = normalizeText(value)?.toLowerCase();
+  if (!resolution || resolution === "auto") {
+    return "auto";
+  }
+  return /^(?:480p|720p|1080p|2k|4k)$/u.test(resolution) ? resolution : undefined;
+}
+
+function clampStoryboardDuration(value: unknown): number {
+  const duration = typeof value === "number" ? value : Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(duration)) {
+    return 4;
+  }
+  return Math.min(Math.max(Math.round(duration), 1), 6);
+}
+
+function appendSeedanceFaceSafeNote(prompt: string): string {
+  const normalized = normalizeText(prompt) || "";
+  if (!normalized) {
+    return SEEDANCE_FACE_SAFE_PROMPT_NOTE;
+  }
+  if (normalized.includes("可识别真人脸") || normalized.includes("无脸模特") || normalized.includes("below-neck") || normalized.includes("hands only")) {
+    return normalized;
+  }
+  return `${normalized}\n${SEEDANCE_FACE_SAFE_PROMPT_NOTE}`;
 }
 
 function jsonSchemaInstruction(name: string, schema: Record<string, unknown>): string {

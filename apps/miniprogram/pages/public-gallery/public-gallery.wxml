@@ -1,0 +1,85 @@
+<view class="gallery-page">
+  <view class="gallery-hero">
+    <view>
+      <view class="eyebrow">PUBLIC GALLERY</view>
+      <view class="page-title">公开作品</view>
+      <view class="page-copy">平台公开展示的精选成品，所有用户都可以查看。点击图片可放大预览。</view>
+    </view>
+    <button class="refresh-button" loading="{{loading}}" bindtap="loadGallery">刷新</button>
+  </view>
+
+  <view wx:if="{{loading && !publicWorks.length}}" class="state-card">
+    <view class="state-title">正在加载公开作品</view>
+    <view class="state-copy">稍等一下，正在取回平台精选案例。</view>
+  </view>
+
+  <view wx:elif="{{error}}" class="state-card">
+    <view class="state-title">加载失败</view>
+    <view class="state-copy">{{error}}</view>
+    <button class="state-button" bindtap="retry">重新加载</button>
+  </view>
+
+  <view wx:elif="{{!publicWorks.length}}" class="state-card">
+    <view class="state-title">暂无公开作品</view>
+    <view class="state-copy">后台开启公开展示后，这里会展示全部平台精选作品。</view>
+  </view>
+
+  <view wx:else class="work-grid">
+    <view wx:for="{{publicWorks}}" wx:key="imageId" class="work-card" bindtap="openWork" data-id="{{item.imageId}}">
+      <image class="work-image" src="{{item.imageUrl}}" mode="aspectFill" />
+      <view class="work-body">
+        <view class="work-prompt">{{item.promptText}}</view>
+        <view class="work-meta">
+          <text>{{item.tagText}}</text>
+          <text>{{item.createdAtText}}</text>
+        </view>
+      </view>
+    </view>
+  </view>
+
+  <view wx:if="{{selectedWork}}" class="preview-mask" catchtap="closePreview">
+    <view class="preview-panel" catchtap="noop">
+      <view class="preview-head">
+        <view>
+          <view class="preview-count">{{selectedIndex + 1}} / {{publicWorks.length}}</view>
+          <view class="preview-title">公开作品</view>
+        </view>
+        <view class="preview-close" bindtap="closePreview">×</view>
+      </view>
+
+      <image class="preview-image" src="{{selectedWork.imageUrl}}" mode="aspectFit" />
+
+      <view wx:if="{{promptVisible}}" class="prompt-sheet">
+        <view class="prompt-title">提示词</view>
+        <scroll-view scroll-y class="prompt-scroll">
+          <view class="prompt-text">{{selectedWork.promptText}}</view>
+        </scroll-view>
+        <view class="prompt-meta">{{selectedWork.tagText}} · {{selectedWork.createdAtText}}</view>
+      </view>
+      <view wx:else class="preview-meta">
+        <view>{{selectedWork.tagText}}</view>
+        <view>{{selectedWork.createdAtText}}</view>
+      </view>
+
+      <view class="preview-nav">
+        <view class="nav-button {{selectedIndex <= 0 ? 'disabled' : ''}}" bindtap="showPrev">‹</view>
+        <view class="nav-button {{selectedIndex >= publicWorks.length - 1 ? 'disabled' : ''}}" bindtap="showNext">›</view>
+      </view>
+
+      <view class="action-dock">
+        <view class="action-item" bindtap="saveSelectedWork">
+          <view class="action-icon">↓</view>
+          <view>{{saving ? '保存中' : '保存'}}</view>
+        </view>
+        <view class="action-item" bindtap="togglePrompt">
+          <view class="action-icon">文</view>
+          <view>{{promptVisible ? '收起' : '提示词'}}</view>
+        </view>
+        <view class="action-item" bindtap="reuseSelectedWork">
+          <view class="action-icon">用</view>
+          <view>套用生成</view>
+        </view>
+      </view>
+    </view>
+  </view>
+</view>

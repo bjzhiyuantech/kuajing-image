@@ -1,4 +1,6 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createSign, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { connect as connectHttp2, constants as http2Constants, type IncomingHttpHeaders } from "node:http2";
 import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import type { RequestTenant } from "./auth-context.js";
 import type {
@@ -15,19 +17,27 @@ import type {
 } from "./contracts.js";
 import { getWechatMiniAppConfig, getWechatMiniAppServerConfig } from "./auth-service.js";
 import { db } from "./database.js";
-import { getuiRuntimeConfig } from "./runtime.js";
+import { apnsRuntimeConfig, getuiRuntimeConfig } from "./runtime.js";
 import { appNotifications, notificationDevices, wechatAccounts } from "./schema.js";
 
 const DEFAULT_NOTIFICATION_POLLING_INTERVAL_MS = 20_000;
 const GETUI_PROVIDER = "getui";
+const APNS_PROVIDER = "apns";
 const WECHAT_PROVIDER = "miniapp";
 const WECHAT_ACCESS_TOKEN_URL = "https://api.weixin.qq.com/cgi-bin/token";
 const WECHAT_SUBSCRIBE_SEND_URL = "https://api.weixin.qq.com/cgi-bin/message/subscribe/send";
 const WECHAT_TOKEN_REFRESH_SKEW_SECONDS = 120;
+const APNS_REQUEST_TIMEOUT_MS = 10_000;
 
 let cachedWechatAccessToken:
   | {
       appId: string;
+      token: string;
+      expiresAt: number;
+    }
+  | undefined;
+let cachedApnsJwt:
+  | {
       token: string;
       expiresAt: number;
     }
@@ -107,7 +117,7 @@ export async function registerNotificationDevice(
 ): Promise<{ deviceId: string; enabled: boolean }> {
   const channel = normalizeChannel(input.channel);
   const platform = normalizePlatform(input.platform);
-  const provider = normalizeProvider(input.provider, channel);
+  const provider = normalizeProvider(input.provider, channel, platform);
   const pushToken = limitString(input.pushToken, 512);
   const deviceId = limitString(input.deviceId, 255) || stableDeviceId(tenant.userId, provider, pushToken || input.userAgent || channel);
   const now = new Date().toISOString();
@@ -232,6 +242,7 @@ export async function createEcommerceJobFinishedNotification(input: {
 async function deliverNotification(tenant: RequestTenant, notification: AppNotification): Promise<void> {
   await Promise.allSettled([
     deliverGetuiNotification(tenant, notification),
+    deliverApnsNotification(tenant, notification),
     deliverWechatMiniAppSubscribeNotification(tenant, notification)
   ]);
   await db.update(appNotifications).set({ deliveredAt: new Date().toISOString() }).where(eq(appNotifications.id, notification.id));
@@ -322,6 +333,157 @@ async function getGetuiAuthToken(): Promise<string> {
     throw new Error(`Getui auth failed: ${body?.msg || response.status}`);
   }
   return token;
+}
+
+async function deliverApnsNotification(tenant: RequestTenant, notification: AppNotification): Promise<void> {
+  if (!apnsRuntimeConfig.enabled || !apnsRuntimeConfig.bundleId || !apnsRuntimeConfig.teamId || !apnsRuntimeConfig.keyId || !getApnsPrivateKey()) {
+    return;
+  }
+
+  const rows = await db
+    .select()
+    .from(notificationDevices)
+    .where(and(eq(notificationDevices.userId, tenant.userId), eq(notificationDevices.provider, APNS_PROVIDER), eq(notificationDevices.enabled, 1)));
+  const deviceTokens = rows.flatMap((row) => (row.pushToken ? [row.pushToken] : []));
+  if (!deviceTokens.length) {
+    return;
+  }
+
+  const authToken = createApnsJwt();
+  const payload = buildApnsPayload(notification);
+  await Promise.all(
+    deviceTokens.map((deviceToken) => sendApnsRequest(deviceToken, authToken, payload))
+  );
+}
+
+function sendApnsRequest(deviceToken: string, authToken: string, payload: Record<string, unknown>): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const client = connectHttp2(apnsRuntimeConfig.baseUrl);
+    const body = JSON.stringify(payload);
+    let settled = false;
+    let status = 0;
+    let responseBody = "";
+
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      client.removeAllListeners();
+      client.close();
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    };
+
+    client.setTimeout(APNS_REQUEST_TIMEOUT_MS, () => finish(new Error("APNs push failed: request timed out")));
+    client.on("error", (error) => finish(error));
+
+    const stream = client.request({
+      [http2Constants.HTTP2_HEADER_METHOD]: http2Constants.HTTP2_METHOD_POST,
+      [http2Constants.HTTP2_HEADER_PATH]: `/3/device/${encodeURIComponent(deviceToken)}`,
+      [http2Constants.HTTP2_HEADER_AUTHORIZATION]: `bearer ${authToken}`,
+      [http2Constants.HTTP2_HEADER_CONTENT_TYPE]: "application/json",
+      "apns-topic": apnsRuntimeConfig.bundleId || "",
+      "apns-push-type": "alert",
+      "apns-priority": "10",
+      "apns-expiration": String(Math.floor(Date.now() / 1000) + 24 * 60 * 60)
+    });
+
+    stream.setEncoding("utf8");
+    stream.setTimeout(APNS_REQUEST_TIMEOUT_MS, () => finish(new Error("APNs push failed: request timed out")));
+    stream.on("response", (headers: IncomingHttpHeaders) => {
+      status = Number(headers[http2Constants.HTTP2_HEADER_STATUS] ?? 0);
+    });
+    stream.on("data", (chunk: string) => {
+      responseBody += chunk;
+    });
+    stream.on("error", (error) => finish(error));
+    stream.on("end", () => {
+      if (status >= 200 && status < 300) {
+        finish();
+        return;
+      }
+      finish(new Error(`APNs push failed: HTTP ${status || "unknown"} ${responseBody}`));
+    });
+    stream.end(body);
+  });
+}
+
+function buildApnsPayload(notification: AppNotification): Record<string, unknown> {
+  return {
+    aps: {
+      alert: {
+        title: notification.title,
+        body: notification.body
+      },
+      sound: "default"
+    },
+    notificationId: notification.id,
+    type: notification.type,
+    actionUrl: notification.actionUrl,
+    route: "jobs",
+    payload: notification.payload
+  };
+}
+
+function createApnsJwt(): string {
+  const now = Math.floor(Date.now() / 1000);
+  if (cachedApnsJwt && cachedApnsJwt.expiresAt > now + 60) {
+    return cachedApnsJwt.token;
+  }
+
+  const header = base64UrlJson({
+    alg: "ES256",
+    kid: apnsRuntimeConfig.keyId
+  });
+  const payload = base64UrlJson({
+    iss: apnsRuntimeConfig.teamId,
+    iat: now
+  });
+  const signingInput = `${header}.${payload}`;
+  const signer = createSign("SHA256");
+  signer.update(signingInput, "utf8");
+  signer.end();
+  const signature = signer.sign({ key: normalizePrivateKey(getApnsPrivateKey() || ""), dsaEncoding: "ieee-p1363" });
+  const token = `${signingInput}.${signature.toString("base64url")}`;
+  cachedApnsJwt = {
+    token,
+    expiresAt: now + 50 * 60
+  };
+  return token;
+}
+
+function base64UrlJson(value: unknown): string {
+  return Buffer.from(JSON.stringify(value)).toString("base64url");
+}
+
+function normalizePrivateKey(value: string): string {
+  return normalizePem(value, "PRIVATE KEY");
+}
+
+function getApnsPrivateKey(): string | undefined {
+  if (apnsRuntimeConfig.privateKey) {
+    return apnsRuntimeConfig.privateKey;
+  }
+  if (!apnsRuntimeConfig.keyFile) {
+    return undefined;
+  }
+  try {
+    return readFileSync(apnsRuntimeConfig.keyFile, "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizePem(value: string, label: string): string {
+  const trimmed = value.trim().replace(/\\n/gu, "\n");
+  if (trimmed.includes(`-----BEGIN ${label}-----`)) {
+    return trimmed;
+  }
+  const cleaned = trimmed.replace(/\s+/gu, "");
+  const chunks = cleaned.match(/.{1,64}/gu) ?? [];
+  return `-----BEGIN ${label}-----\n${chunks.join("\n")}\n-----END ${label}-----`;
 }
 
 async function deliverWechatMiniAppSubscribeNotification(tenant: RequestTenant, notification: AppNotification): Promise<void> {
@@ -446,9 +608,10 @@ function normalizePlatform(value: unknown): NotificationDevicePlatform {
   return value === "web" || value === "ios" || value === "android" || value === "wechat_miniapp" || value === "unknown" ? value : "unknown";
 }
 
-function normalizeProvider(value: unknown, channel: NotificationChannel): string {
+function normalizeProvider(value: unknown, channel: NotificationChannel, platform: NotificationDevicePlatform): string {
   const provider = limitString(value, 64);
   if (provider) return provider;
+  if (channel === "native" && platform === "ios") return APNS_PROVIDER;
   return channel === "native" ? GETUI_PROVIDER : channel;
 }
 
