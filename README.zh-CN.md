@@ -266,6 +266,29 @@ corepack pnpm standalone:package -- --clean --with-images
 
 `--with-images` 会把本地 Docker 镜像归档放入 `images/local-images.tar`，适合离线交付；不带该参数时，交付包仍可在线构建安装。
 
+## 桌面单机安装包
+
+桌面单机版使用 Electron 包装本地 Docker 单机包。桌面应用会把内置的 `shangtu-ai-standalone` 资源复制到用户数据目录，保留 `.env`、`data/`、`downloads/`、`secrets/` 等本地数据，并提供初始化、启动、停止、状态、日志、自检和打开本地工作台入口。
+
+当前桌面单机版仍依赖目标机器安装并启动 Docker Desktop 或兼容 Docker Engine。生成 macOS 安装包：
+
+```sh
+corepack pnpm desktop:dist -- --clean
+```
+
+生成产物位于 `dist/desktop/`，其中 macOS 默认输出 `.dmg`。如需 Windows 或 Linux 包，可在对应构建环境运行：
+
+```sh
+corepack pnpm desktop:dist -- --platform win --target nsis --clean
+corepack pnpm desktop:dist -- --platform linux --target AppImage --clean
+```
+
+只生成未打包目录用于快速验收：
+
+```sh
+corepack pnpm desktop:dist -- --dir --skip-standalone
+```
+
 任务完成通知支持站内消息、App 个推离线推送和小程序订阅消息。生产环境建议在 API 服务 `.env` 中配置：
 
 ```env

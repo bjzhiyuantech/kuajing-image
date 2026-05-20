@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>商图 AI 单机版</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="topbar">
+        <div>
+          <p class="eyebrow">Desktop Standalone</p>
+          <h1>商图 AI 单机版</h1>
+        </div>
+        <div class="top-actions">
+          <button id="open-service" class="primary">打开工作台</button>
+          <button id="open-config">配置文件</button>
+          <button id="open-dir">运行目录</button>
+        </div>
+      </section>
+
+      <section class="status-grid">
+        <article class="status-panel">
+          <div class="status-title">
+            <span id="docker-dot" class="dot pending"></span>
+            <span>Docker</span>
+          </div>
+          <p id="docker-status" class="status-value">检查中</p>
+          <p id="docker-detail" class="muted">等待状态刷新</p>
+        </article>
+        <article class="status-panel">
+          <div class="status-title">
+            <span id="standalone-dot" class="dot pending"></span>
+            <span>单机资源</span>
+          </div>
+          <p id="standalone-status" class="status-value">检查中</p>
+          <p id="service-dir" class="muted path">-</p>
+        </article>
+        <article class="status-panel">
+          <div class="status-title">
+            <span id="busy-dot" class="dot pending"></span>
+            <span>任务状态</span>
+          </div>
+          <p id="busy-status" class="status-value">空闲</p>
+          <p id="service-url" class="muted">http://127.0.0.1:8787</p>
+        </article>
+      </section>
+
+      <section class="workspace">
+        <aside class="actions-panel">
+          <button data-action="install" class="primary">初始化安装</button>
+          <button data-action="start">启动服务</button>
+          <button data-action="status">查看状态</button>
+          <button data-action="logs">查看日志</button>
+          <button data-action="smoke">运行自检</button>
+          <button data-action="stop" class="danger">停止服务</button>
+        </aside>
+        <section class="log-panel">
+          <div class="log-header">
+            <h2>运行日志</h2>
+            <button id="clear-log" class="ghost">清空</button>
+          </div>
+          <pre id="log-output">桌面控制台已就绪。</pre>
+        </section>
+      </section>
+    </main>
+    <script src="./renderer.js"></script>
+  </body>
+</html>

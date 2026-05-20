@@ -90,14 +90,14 @@
 
 目标：先实现可打包的本地 Web 单机版，再演进桌面安装包。
 
-- D1. 新增 `deploy/profiles/local.env.example`。
-- D2. 修正文档里的数据库描述，明确当前代码依赖 MySQL。
-- D3. 做本地 Docker 单机包：app + mysql + data volume + local storage。
+- D1. 已完成：新增 `deploy/profiles/local.env.example`。
+- D2. 已完成：修正文档里的数据库描述，明确当前代码依赖 MySQL。
+- D3. 已完成：做本地 Docker 单机包：app + mysql + data volume + local storage。
 - D4. 增加本地配置向导页面或启动检查页面，提示配置模型 key、存储、本地数据目录。
-- D5. 单机 profile 下隐藏 App、小程序、IAP、SaaS 支付、推送、公开图库等能力。
-- D6. 评估并选择桌面壳：Tauri 或 Electron。
-- D7. 桌面壳启动/停止本地服务，打开本地 Web，提供日志导出。
-- D8. 打包 Windows exe、macOS dmg，并补签名/公证策略。
+- D5. 已完成：单机 profile 下隐藏 App、小程序、IAP、SaaS 支付、推送、公开图库等能力。
+- D6. 已完成：选择 Electron 作为第一阶段桌面壳，复用当前 Docker 单机包。
+- D7. 已完成：桌面壳启动/停止本地服务，打开本地 Web，提供状态、自检和日志查看。
+- D8. 进行中：已新增桌面打包脚本，macOS 可生成 `.dmg`；Windows exe 需要在 Windows 构建环境或 CI 中产出，签名/公证策略待证书就绪后接入。
 - D9. 增加单机 license 激活与离线授权。
 
 验收：
@@ -111,6 +111,7 @@
 - 本地安装/升级：`corepack pnpm deployment:rollout -- install --profile local --env-file .env` / `corepack pnpm deployment:rollout -- upgrade --profile local --env-file .env`。
 - 交付包生成：`corepack pnpm deployment:bundle -- --profile local --clean --archive`，解压后可 `cp .env.example .env && ./install.sh` 在线构建安装，或加载镜像 tar 后 `./install.sh --offline --no-build --skip-smoke`。
 - 单机发布包生成：`corepack pnpm standalone:package -- --clean` 或 `corepack pnpm standalone:package -- --clean --with-images`。
+- 桌面安装包生成：`corepack pnpm desktop:dist -- --clean`，输出到 `dist/desktop/`；跨平台目标可使用 `--platform win|linux --target <target>`。
 - 本地启动后运行：`node scripts/check-deployment-profile.mjs --profile local --base-url http://127.0.0.1:8787`。
 - 本地发布后运行：`node scripts/post-deploy-smoke.mjs --profile local --base-url http://127.0.0.1:8787`。
 
