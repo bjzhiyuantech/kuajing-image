@@ -1674,6 +1674,45 @@ function createEcommerceProgressRecord(input: {
   };
 }
 
+function createTemporaryEcommerceRecord(input: {
+  jobId: string;
+  prompt: string;
+  size: ImageSize;
+  presetId: StylePresetId;
+  outputFormat: OutputFormat;
+  count: number;
+  createdAt?: string;
+  message?: string;
+}): GenerationRecord {
+  return {
+    id: input.jobId,
+    mode: "edit",
+    prompt: input.prompt,
+    effectivePrompt: input.prompt,
+    presetId: input.presetId,
+    size: input.size,
+    quality: "auto",
+    outputFormat: input.outputFormat,
+    count: input.count,
+    status: "running",
+    error: input.message,
+    createdAt: input.createdAt ?? new Date().toISOString(),
+    outputs: []
+  };
+}
+
+function mergeGenerationRecordsForJob(
+  history: GenerationRecord[],
+  temporaryRecordId: string,
+  records: GenerationRecord[]
+): GenerationRecord[] {
+  const recordIds = new Set(records.map((record) => record.id));
+  return [
+    ...records,
+    ...history.filter((record) => record.id !== temporaryRecordId && !recordIds.has(record.id))
+  ].slice(0, 20);
+}
+
 function promptExcerpt(promptValue: string): string {
   const compact = promptValue.replace(/\s+/gu, " ").trim();
   return compact.length > 72 ? `${compact.slice(0, 72)}...` : compact;
@@ -3749,7 +3788,9 @@ function MobileWorkbench({
   onSubmitGeneration: () => void;
   isPromptOptimizing: boolean;
 }) {
-  const selectedRecord = generationHistory.find((record) => record.id === selectedRecordId) ?? generationHistory[0] ?? null;
+  const selectedRecord = selectedRecordId
+    ? generationHistory.find((record) => record.id === selectedRecordId) ?? null
+    : generationHistory[0] ?? null;
   const resultAssets = selectedRecord ? generatedAssetsForRecord(selectedRecord) : [];
   const packageRemaining = user.packageRemaining ?? Math.max(0, (user.quotaTotal ?? 0) - (user.quotaUsed ?? 0));
   const activeScenes = ecommerceMode === "category-kit" ? [] : ECOMMERCE_SCENE_TEMPLATES.filter((item) => item.mode === ecommerceMode);
@@ -7907,13 +7948,29 @@ export function App() {
     }
 
     const generateEndpoint = ecommerceMode === "category-kit" ? "/api/ecommerce/images/category-kit-generate" : "/api/ecommerce/images/batch-generate";
+    const ecommercePrompt = `${ecommerceModeLabels[ecommerceMode]}：${title || (isMobileDrawer ? "移动端快捷生成" : "画布生成")}`;
 
     if (isMobileDrawer) {
       const controller = new AbortController();
       setIsEcommerceGenerating(true);
       setActiveGenerationCount((value) => value + 1);
       setMobileCreateTab("history");
-      setMobileSelectedRecordId(null);
+      const pendingRecordId = `local-ecommerce-${generationRequestRef.current + 1}`;
+      generationRequestRef.current += 1;
+      const pendingRecord = createTemporaryEcommerceRecord({
+        jobId: pendingRecordId,
+        prompt: ecommercePrompt,
+        size: {
+          width: selectedSize.width,
+          height: selectedSize.height
+        },
+        presetId: ecommercePresetId,
+        outputFormat: "png",
+        count: totalOutputs,
+        message: "电商批量任务提交中。"
+      });
+      setMobileSelectedRecordId(pendingRecord.id);
+      setGenerationHistory((history) => [pendingRecord, ...history.filter((record) => record.id !== pendingRecord.id)].slice(0, 20));
 
       try {
         const response = await authFetch(generateEndpoint, {
@@ -7929,25 +7986,59 @@ export function App() {
         }
         const createdJob = (await response.json()) as EcommerceBatchGenerateResponse;
         setGenerationMessage(createdJob.message || "电商批量任务已创建。");
-        const completedJob = await pollEcommerceJob(createdJob.jobId, controller.signal);
-        await Promise.all(
-          completedJob.records.flatMap((record) =>
-            record.outputs.flatMap((output) => (output?.asset ? [preloadGeneratedAssetPreview(output.asset, controller.signal)] : []))
-          )
-        );
-        const succeededCount = completedJob.records.reduce((total, record) => total + successfulOutputCount(record), 0);
+        const placeholderCount = ecommerceMode === "category-kit" ? Math.max(1, createdJob.totalScenes || totalOutputs) : totalOutputs;
+        const jobRecord = createTemporaryEcommerceRecord({
+          jobId: createdJob.jobId,
+          prompt: ecommercePrompt,
+          size: {
+            width: selectedSize.width,
+            height: selectedSize.height
+          },
+          presetId: ecommercePresetId,
+          outputFormat: "png",
+          count: placeholderCount,
+          createdAt: createdJob.createdAt,
+          message: createdJob.message
+        });
+        setMobileSelectedRecordId(createdJob.jobId);
         setGenerationHistory((history) => [
-          ...completedJob.records,
-          ...history.filter((record) => !completedJob.records.some((item) => item.id === record.id))
+          jobRecord,
+          ...history.filter((record) => record.id !== pendingRecord.id && record.id !== createdJob.jobId)
         ].slice(0, 20));
-        setMobileSelectedRecordId(completedJob.records[0]?.id ?? null);
+        const completedJob = await pollEcommerceJob(createdJob.jobId, controller.signal, (job) => {
+          const progressRecord = createEcommerceCombinedRecord({
+            job,
+            prompt: ecommercePrompt,
+            size: {
+              width: selectedSize.width,
+              height: selectedSize.height
+            },
+            presetId: ecommercePresetId,
+            outputFormat: "png",
+            count: ecommerceMode === "category-kit" ? Math.max(1, job.totalScenes || placeholderCount) : placeholderCount
+          });
+          setGenerationHistory((history) => [progressRecord, ...history.filter((record) => record.id !== progressRecord.id)].slice(0, 20));
+          setMobileSelectedRecordId((selectedId) =>
+            selectedId === pendingRecord.id || selectedId === createdJob.jobId || selectedId === null ? createdJob.jobId : selectedId
+          );
+          void preloadGenerationRecordPreviews(progressRecord, controller.signal);
+        });
+        const succeededCount = completedJob.records.reduce((total, record) => total + successfulOutputCount(record), 0);
+        setGenerationHistory((history) => mergeGenerationRecordsForJob(history, createdJob.jobId, completedJob.records));
+        setMobileSelectedRecordId((selectedId) => (selectedId === createdJob.jobId ? completedJob.records[0]?.id ?? createdJob.jobId : selectedId));
         if (succeededCount > 0) {
           setGenerationMessage(`已生成 ${succeededCount} 张电商图，结果已保存到作品图库。`);
         } else {
           setGenerationError(completedJob.message || "电商生成未返回可用图片。");
         }
       } catch (error) {
-        setGenerationError(error instanceof Error ? error.message : "电商生成失败，请重试。");
+        const message = error instanceof Error ? error.message : "电商生成失败，请重试。";
+        setGenerationHistory((history) =>
+          history.map((record) =>
+            record.id === pendingRecord.id ? { ...record, status: "failed", error: message } : record
+          )
+        );
+        setGenerationError(message);
       } finally {
         setIsEcommerceGenerating(false);
         setActiveGenerationCount((value) => Math.max(0, value - 1));
@@ -7987,11 +8078,10 @@ export function App() {
       const totalProgressUnits = Math.max(1, placeholderCount);
       let syncedOutputCount = 0;
       const insertedRecordIds = new Set<string>();
-      const ecommercePrompt = `${ecommerceModeLabels[ecommerceMode]}：${title || "移动端快捷生成"}`;
       const syncEcommerceCanvasProgress = async (job: EcommerceBatchGenerateResponse): Promise<void> => {
-      if (!placeholderSet || controller.signal.aborted) {
-        return;
-      }
+        if (!placeholderSet || controller.signal.aborted) {
+          return;
+        }
 
         const freshRecords = job.records.filter((record) => record.outputs.length > 0 && !insertedRecordIds.has(record.id));
         if (freshRecords.length === 0) {
