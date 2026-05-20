@@ -19,6 +19,9 @@ Examples:
 `;
 
 function parseArgs(argv) {
+  if (argv[0] === "--") {
+    argv = argv.slice(1);
+  }
   const options = {
     baseUrl: process.env.API_BASE_URL || process.env.PUBLIC_API_BASE_URL || DEFAULT_BASE_URL,
     timeoutMs: DEFAULT_TIMEOUT_MS

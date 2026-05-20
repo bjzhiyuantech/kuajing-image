@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_OUTPUT_DIR = "dist/standalone";
-const DEFAULT_BUNDLE_ROOT = "dist/deployment";
+const DEFAULT_BUNDLE_ROOT = "dist/standalone/.bundle";
 const PROFILE = "local";
 
 const HELP = `Usage:
@@ -28,6 +28,9 @@ Examples:
 `;
 
 function parseArgs(argv) {
+  if (argv[0] === "--") {
+    argv = argv.slice(1);
+  }
   const options = {
     outputDir: DEFAULT_OUTPUT_DIR,
     bundleRoot: DEFAULT_BUNDLE_ROOT,

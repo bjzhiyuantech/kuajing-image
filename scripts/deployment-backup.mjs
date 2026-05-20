@@ -32,6 +32,9 @@ Examples:
 `;
 
 function parseArgs(argv) {
+  if (argv[0] === "--") {
+    argv = argv.slice(1);
+  }
   if (argv[0] === "--help" || argv[0] === "-h") {
     return { help: true };
   }
