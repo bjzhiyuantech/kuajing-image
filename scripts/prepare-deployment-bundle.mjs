@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { spawnSync } from "node:child_process";
 import { copyFile, mkdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,47 +14,48 @@ const PROFILE_CONFIG = {
     title: "商图 AI 单机版",
     env: "deploy/profiles/local.env.example",
     composeFiles: ["docker-compose.yml"],
-    extraFiles: ["README.zh-CN.md"],
+    extraFiles: ["README.zh-CN.md", "scripts/deployment-preflight.mjs", "scripts/deployment-backup.mjs", "scripts/post-deploy-smoke.mjs"],
     nextSteps: [
       "复制 .env.example 为 .env，并填写模型密钥、管理员账号和本地端口。",
       "运行 docker compose --env-file .env up -d --build。",
       "浏览器访问 http://127.0.0.1:8787，完成账号登录和模型/存储检查。"
     ],
-    smokeExample: "node scripts/check-deployment-profile.mjs --profile local --base-url http://127.0.0.1:8787"
+    smokeExample: "node scripts/post-deploy-smoke.mjs --profile local --base-url http://127.0.0.1:8787"
   },
   "private-cloud": {
     title: "商图 AI 私有化部署版",
     env: "deploy/profiles/private-cloud.env.example",
     composeFiles: ["docker-compose.private-cloud.yml"],
-    extraFiles: ["README.zh-CN.md"],
+    extraFiles: ["README.zh-CN.md", "scripts/deployment-preflight.mjs", "scripts/deployment-backup.mjs", "scripts/post-deploy-smoke.mjs"],
     nextSteps: [
       "复制 .env.example 为 .env，并填写客户域名、数据库、对象存储、模型和管理员账号。",
       "运行 docker compose -f docker-compose.private-cloud.yml --env-file .env up -d --build。",
       "确认反向代理、证书和内网对象存储策略后，对外开放服务。"
     ],
-    smokeExample: "node scripts/check-deployment-profile.mjs --profile private-cloud --base-url http://<server-host>:8787"
+    smokeExample: "node scripts/post-deploy-smoke.mjs --profile private-cloud --base-url http://<server-host>:8787"
   },
   saas: {
     title: "商图 AI SaaS 版",
     env: "deploy/profiles/saas.env.example",
     composeFiles: ["docker-compose.server.yml", "docker-compose.bluegreen.yml", "docker-compose.server-bluegreen.yml"],
-    extraFiles: ["README.zh-CN.md", "scripts/server-release.sh", "scripts/server-bluegreen-deploy-dev.sh", "scripts/server-bluegreen-promote.sh"],
+    extraFiles: ["README.zh-CN.md", "scripts/deployment-preflight.mjs", "scripts/deployment-backup.mjs", "scripts/post-deploy-smoke.mjs", "scripts/server-release.sh", "scripts/server-bluegreen-deploy-dev.sh", "scripts/server-bluegreen-promote.sh"],
     nextSteps: [
       "复制 .env.example 为官方环境配置，并补齐生产密钥、对象存储、推送和支付配置。",
       "按现有 blue-green 流程发布到 dev/prod color。",
       "发布后运行 health、deployment-profile、插件 release 和 App release smoke test。"
     ],
-    smokeExample: "API_BASE_URL=https://<saas-domain> node scripts/check-deployment-profile.mjs --profile saas"
+    smokeExample: "API_BASE_URL=https://<saas-domain> node scripts/post-deploy-smoke.mjs --profile saas"
   }
 };
 
 const HELP = `Usage:
-  node scripts/prepare-deployment-bundle.mjs --profile <local|private-cloud|saas> [--output-dir <dir>] [--clean]
+  node scripts/prepare-deployment-bundle.mjs --profile <local|private-cloud|saas> [--output-dir <dir>] [--clean] [--archive]
 
 Options:
   --profile, --edition <profile>  Deployment profile to bundle.
   --output-dir <dir>              Output root. Defaults to ${DEFAULT_OUTPUT_ROOT}.
   --clean                         Remove the profile output directory before writing.
+  --archive                       Also create <profile>.tar.gz next to the bundle directory.
   --help, -h                      Show this help.
 
 Examples:
@@ -77,6 +79,11 @@ function parseArgs(argv) {
 
     if (arg === "--clean") {
       options.clean = true;
+      continue;
+    }
+
+    if (arg === "--archive") {
+      options.archive = true;
       continue;
     }
 
@@ -174,6 +181,17 @@ node scripts/prepare-deployment-bundle.mjs --profile ${profile}
 `;
 }
 
+function writeArchive(outputRoot, profile) {
+  const result = spawnSync("tar", ["-czf", `${profile}.tar.gz`, profile], {
+    cwd: outputRoot,
+    encoding: "utf8"
+  });
+  if (result.status !== 0) {
+    throw new Error(`tar archive failed: ${(result.stderr || result.stdout).trim()}`);
+  }
+  return `${profile}.tar.gz`;
+}
+
 async function writeBundleManifest(outputRoot, profile, copiedFiles) {
   const manifestPath = outputPath(outputRoot, profile, "MANIFEST.json");
   await writeFile(
@@ -235,6 +253,10 @@ async function main() {
   console.log(`OK ${profile}: ${path.relative(REPO_ROOT, bundleDir)}`);
   for (const file of copiedFiles) {
     console.log(`- ${file}`);
+  }
+  if (options.archive) {
+    const archive = writeArchive(outputRoot, profile);
+    console.log(`Archive: ${path.relative(REPO_ROOT, path.join(outputRoot, archive))}`);
   }
 }
 
