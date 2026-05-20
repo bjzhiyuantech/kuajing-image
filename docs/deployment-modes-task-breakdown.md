@@ -35,6 +35,7 @@
 - 离线镜像包：`corepack pnpm deployment:images -- save --profile <local|private-cloud|saas>`，输出到 `dist/deployment-images/<profile>-images.tar`。
 - 安装/升级/回滚编排：`corepack pnpm deployment:rollout -- <install|upgrade|rollback|status> --profile <local|private-cloud|saas>`。
 - 交付包：`corepack pnpm deployment:bundle -- --profile <local|private-cloud|saas> --clean --archive`，输出到 `dist/deployment/<profile>/` 和 `<profile>.tar.gz`，包内包含 Docker 构建源码、Compose、`.env.example`、部署脚本和 `install.sh`/`upgrade.sh`/`status.sh`/`smoke.sh` 快捷入口。
+- 单机发布包：`corepack pnpm standalone:package -- --clean [--with-images]`，输出到 `dist/standalone/shangtu-ai-standalone/`、`.tar.gz` 和可选 `.zip`，可包含 `images/local-images.tar` 用于离线交付。
 
 ## 任务流 B：私有化部署版
 
@@ -109,6 +110,7 @@
 - 本地离线镜像包：`corepack pnpm deployment:images -- save --profile local`。
 - 本地安装/升级：`corepack pnpm deployment:rollout -- install --profile local --env-file .env` / `corepack pnpm deployment:rollout -- upgrade --profile local --env-file .env`。
 - 交付包生成：`corepack pnpm deployment:bundle -- --profile local --clean --archive`，解压后可 `cp .env.example .env && ./install.sh` 在线构建安装，或加载镜像 tar 后 `./install.sh --offline --no-build --skip-smoke`。
+- 单机发布包生成：`corepack pnpm standalone:package -- --clean` 或 `corepack pnpm standalone:package -- --clean --with-images`。
 - 本地启动后运行：`node scripts/check-deployment-profile.mjs --profile local --base-url http://127.0.0.1:8787`。
 - 本地发布后运行：`node scripts/post-deploy-smoke.mjs --profile local --base-url http://127.0.0.1:8787`。
 

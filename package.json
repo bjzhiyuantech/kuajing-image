@@ -21,6 +21,7 @@
     "deployment:rollout": "node scripts/deployment-rollout.mjs",
     "deployment:smoke": "node scripts/post-deploy-smoke.mjs",
     "mirror:tldraw-assets": "node scripts/mirror-tldraw-assets.mjs",
+    "standalone:package": "node scripts/package-standalone.mjs",
     "typecheck": "corepack pnpm --filter @gpt-image-canvas/shared typecheck && corepack pnpm --filter @gpt-image-canvas/web typecheck && corepack pnpm --filter @gpt-image-canvas/api typecheck && corepack pnpm --filter @gpt-image-canvas/extension typecheck",
     "start": "corepack pnpm --filter @gpt-image-canvas/api start"
   },

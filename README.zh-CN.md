@@ -254,6 +254,15 @@ corepack pnpm deployment:preflight -- --profile private-cloud --env-file .env
 corepack pnpm deployment:smoke -- --profile private-cloud --base-url http://127.0.0.1:8787
 ```
 
+单机版发布包可用一条命令生成，默认输出 `dist/standalone/shangtu-ai-standalone/`、`dist/standalone/shangtu-ai-standalone.tar.gz`，在有 `zip` 命令的系统上也会额外生成 `.zip`：
+
+```sh
+corepack pnpm standalone:package -- --clean
+corepack pnpm standalone:package -- --clean --with-images
+```
+
+`--with-images` 会把本地 Docker 镜像归档放入 `images/local-images.tar`，适合离线交付；不带该参数时，交付包仍可在线构建安装。
+
 任务完成通知支持站内消息、App 个推离线推送和小程序订阅消息。生产环境建议在 API 服务 `.env` 中配置：
 
 ```env

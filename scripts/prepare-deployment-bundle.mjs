@@ -239,6 +239,20 @@ function isIgnoredSourcePath(item) {
 }
 
 function shellScript(profile, command) {
+  if (command === "backup") {
+    return `#!/usr/bin/env sh
+set -eu
+cd "$(dirname "$0")"
+
+if [ ! -f ".env" ] && [ -f ".env.example" ]; then
+  cp .env.example .env
+  echo "Created .env from .env.example. Review it before using this environment."
+fi
+
+node scripts/deployment-backup.mjs backup --env-file "\${ENV_FILE:-.env}" "$@"
+`;
+  }
+
   if (command === "smoke") {
     return `#!/usr/bin/env sh
 set -eu
@@ -268,18 +282,67 @@ node scripts/deployment-rollout.mjs ${command} --profile ${profile} --env-file "
 `;
 }
 
+function powershellScript(profile, command) {
+  const common = `$ErrorActionPreference = "Stop"
+Set-Location $PSScriptRoot
+
+if (!(Test-Path ".env") -and (Test-Path ".env.example")) {
+  Copy-Item ".env.example" ".env"
+  Write-Host "Created .env from .env.example. Review it before using this environment."
+}
+
+$EnvFileValue = if ($env:ENV_FILE) { $env:ENV_FILE } else { ".env" }
+`;
+
+  if (command === "backup") {
+    return `${common}
+& node "scripts/deployment-backup.mjs" "backup" "--env-file" $EnvFileValue @args
+exit $LASTEXITCODE
+`;
+  }
+
+  if (command === "smoke") {
+    return `${common}
+if ($env:BASE_URL) {
+  $BaseUrlValue = $env:BASE_URL
+} else {
+  $PortValue = if ($env:PORT) { $env:PORT } else { "8787" }
+  $BaseUrlValue = "http://127.0.0.1:$PortValue"
+}
+
+& node "scripts/post-deploy-smoke.mjs" "--profile" "${profile}" "--base-url" $BaseUrlValue @args
+exit $LASTEXITCODE
+`;
+  }
+
+  return `${common}
+& node "scripts/deployment-rollout.mjs" "${command}" "--profile" "${profile}" "--env-file" $EnvFileValue @args
+exit $LASTEXITCODE
+`;
+}
+
 async function writeHelperScripts(outputRoot, profile) {
   const scripts = [
     ["install.sh", shellScript(profile, "install")],
     ["upgrade.sh", shellScript(profile, "upgrade")],
     ["status.sh", shellScript(profile, "status")],
-    ["smoke.sh", shellScript(profile, "smoke")]
+    ["backup.sh", shellScript(profile, "backup")],
+    ["rollback.sh", shellScript(profile, "rollback")],
+    ["smoke.sh", shellScript(profile, "smoke")],
+    ["install.ps1", powershellScript(profile, "install")],
+    ["upgrade.ps1", powershellScript(profile, "upgrade")],
+    ["status.ps1", powershellScript(profile, "status")],
+    ["backup.ps1", powershellScript(profile, "backup")],
+    ["rollback.ps1", powershellScript(profile, "rollback")],
+    ["smoke.ps1", powershellScript(profile, "smoke")]
   ];
   const written = [];
   for (const [fileName, content] of scripts) {
     const target = outputPath(outputRoot, profile, fileName);
     await writeFile(target, content, "utf8");
-    await chmod(target, 0o755);
+    if (fileName.endsWith(".sh")) {
+      await chmod(target, 0o755);
+    }
     written.push(fileName);
   }
   return written;
@@ -302,6 +365,20 @@ cp .env.example .env
 ./status.sh
 ./smoke.sh
 ./upgrade.sh
+./backup.sh
+./rollback.sh --backup-dir backups/<timestamp>
+\`\`\`
+
+Windows PowerShell:
+
+\`\`\`powershell
+Copy-Item .env.example .env
+.\\install.ps1
+.\\status.ps1
+.\\smoke.ps1
+.\\upgrade.ps1
+.\\backup.ps1
+.\\rollback.ps1 --backup-dir backups/<timestamp>
 \`\`\`
 
 For offline installs, place the image archive next to this directory and run:
