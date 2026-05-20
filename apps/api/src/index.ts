@@ -98,6 +98,7 @@ import {
 } from "./contracts.js";
 import { closeDatabase, ensureTenant, initializeDatabase } from "./database.js";
 import { db } from "./database.js";
+import { getDeploymentProfile } from "./deployment-profile.js";
 import {
   BillingError,
   createRechargeOrder,
@@ -348,6 +349,7 @@ app.get("/api/health", (c) =>
 app.get("/api/config", async (c) => {
   const models = await getConfiguredImageModelNames();
   const configuredModel = models[0];
+  const deployment = getDeploymentProfile();
   const config: AppConfig = {
     model: configuredModel,
     models,
@@ -356,11 +358,14 @@ app.get("/api/config", async (c) => {
     qualities: IMAGE_QUALITIES,
     outputFormats: OUTPUT_FORMATS,
     counts: GENERATION_COUNTS,
-    notifications: await getNotificationClientConfig()
+    notifications: await getNotificationClientConfig(),
+    deployment
   };
 
   return c.json(config);
 });
+
+app.get("/api/deployment-profile", (c) => c.json(getDeploymentProfile()));
 
 app.get("/api/extension-release", async (c) => c.json(await getExtensionReleaseConfig()));
 

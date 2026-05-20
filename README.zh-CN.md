@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-基于 tldraw、Hono、SQLite 和 GPT Image 2 构建的本地专业 AI 画布。`v0.1.1` 支持阿里云 OSS / 腾讯云 COS 备份、PackyCode / `gpt-image` 返回格式兼容，并优化了生成资产相关体验。
+基于 tldraw、Hono、MySQL 和 GPT Image 2 构建的专业 AI 画布。`v0.1.1` 支持阿里云 OSS / 腾讯云 COS 备份、PackyCode / `gpt-image` 返回格式兼容，并优化了生成资产相关体验。
 
 ## 效果图
 
@@ -144,7 +144,7 @@ EXTENSION_RELEASE_NOTES=$'新增版本检测\n优化批量生成体验' node scr
 
 ## Docker
 
-Docker Compose 会把共享契约、Web 应用和 API 构建到同一个镜像中。Hono API 会在同一个本地端口同时提供 `/api` 和构建后的 Web bundle，SQLite 数据和生成资产会持久化到宿主机 `./data`。
+Docker Compose 会把共享契约、Web 应用和 API 构建到同一个镜像中。Hono API 会在同一个本地端口同时提供 `/api` 和构建后的 Web bundle，业务数据存储在 MySQL 中，生成资产会持久化到宿主机 `./data`。
 
 Windows PowerShell：
 
@@ -163,8 +163,6 @@ docker compose up --build
 ```
 
 默认在 `http://localhost:8787` 打开应用。如需使用其他本地端口，请在启动 Docker Compose 前设置 `.env` 中的 `PORT`。
-
-Docker Compose 还会默认设置 `SQLITE_JOURNAL_MODE=DELETE` 和 `SQLITE_LOCKING_MODE=EXCLUSIVE`。这样可以避开 Docker Desktop 绑定挂载 `./data` 目录时常见的 SQLite `SQLITE_IOERR_SHMOPEN` 错误，同时仍然把项目和生成资产保存在宿主机上。
 
 应用使用 MySQL 存储业务数据。蓝绿部署不会启动本地 MySQL，请在 `.env` 中指向外部 MySQL（例如阿里云 RDS）。如果是宿主机已经运行的 MySQL，可以这样设置：
 
@@ -331,17 +329,17 @@ COS 表单默认值来自 `.env`：
 
 运行时状态存储在 `DATA_DIR` 下，本地默认是 `./data`，Docker 中默认是 `/app/data`。该目录包含：
 
-- `gpt-image-canvas.sqlite`：默认项目、生成历史、资产元数据、云端上传元数据和可选云存储配置。
-- `assets/`：生成的图像文件。
+- MySQL：保存项目、生成历史、资产元数据、用户、计费和系统设置。
+- `assets/`：未启用云存储时保存生成图像和本地预览。
 
-Docker Compose 会将宿主机 `./data` 绑定挂载到 `/app/data`，因此项目和生成资产会在容器重建后保留。不要提交 `.env`、`data/`、生成图像、SQLite 文件或构建输出。
+Docker Compose 会将宿主机 `./data` 绑定挂载到 `/app/data`，因此项目和生成资产会在容器重建后保留。不要提交 `.env`、`data/`、生成图像、数据库备份或构建输出。
 
 ## 安全与隐私说明
 
 - 密钥只从 `.env` 或运行时环境变量读取。不要提交 `.env`、展开后的 Docker Compose 配置输出、包含 key 的 shell 历史或包含密钥值的日志。
 - 从 UI 保存的 OSS AccessKey Secret / COS SecretKey 会存储在本地数据库中，并由设置接口掩码返回。配置云存储后，请将运行数据也视为敏感文件。
-- 提示词、项目状态、生成资产和 SQLite 数据都是 `DATA_DIR` 下的本地运行时数据。除非你有意导出特定资产，否则应将 `data/` 视为私有数据。
-- 发布分支前，请检查 `git status --short`，确认只暂存了源代码、文档和预期 metadata。`.env`、`.ralph/`、`.codex-temp/`、`data/`、生成图像、SQLite 数据库和构建输出都应保持未跟踪。
+- 提示词、项目状态、生成资产和数据库记录都是运行时数据；生成文件存放在 `DATA_DIR` 下。除非你有意导出特定资产，否则应将 `data/` 视为私有数据。
+- 发布分支前，请检查 `git status --short`，确认只暂存了源代码、文档和预期 metadata。`.env`、`.ralph/`、`.codex-temp/`、`data/`、生成图像和构建输出都应保持未跟踪。
 - 如果真实 API key 曾被提交过，请先轮换该 key。Git ignore 规则只能防止之后泄露，不能从已有 Git 历史中移除密钥。
 
 ## 故障排查
@@ -353,8 +351,6 @@ Docker Compose 会将宿主机 `./data` 绑定挂载到 `/app/data`，因此项�
 - 端口已被占用：为 API/Docker 运行时设置 `.env` 中的 `PORT`；如果 Web 的 `5173` 被占用，请先关闭占用进程，或显式运行 `pnpm web:dev -- --port 5174` 并打开打印出来的地址。
 - Docker 构建无法拉取 Node 基础镜像：在 macOS/Linux 可用 `NODE_IMAGE=public.ecr.aws/docker/library/node:22-bookworm-slim docker compose up --build` 使用镜像源；在 Windows PowerShell 可先运行 `$env:NODE_IMAGE = 'public.ecr.aws/docker/library/node:22-bookworm-slim'`，再运行 `docker compose up --build`；也可以恢复 Docker Hub 访问后重新运行 `docker compose up --build`。
 - Docker config 默认会输出 `.env` 值。真实凭证存在时，请使用 `docker compose config --quiet --no-env-resolution` 做验证，不要分享展开后的 config 输出。
-- Docker 中出现 SQLite `SQLITE_IOERR_SHMOPEN`：保留 Compose 默认的 `SQLITE_JOURNAL_MODE=DELETE` 和 `SQLITE_LOCKING_MODE=EXCLUSIVE`，重新构建，并确认没有本地 API 进程同时占用同一个 `data/` 数据库。
-- SQLite `SQLITE_CORRUPT`：停止所有应用进程，备份 `data/`，再从备份恢复，或删除 SQLite 文件让应用创建新数据库。`data/assets/` 下的生成图片文件可以保留。
 - `/api/project` 自动保存返回 400：查看 Docker 日志中的 `Project save rejected`。大画布快照支持到 100 MB；导入的 data URL 图片仍可能让快照变得很大。
 - 本地状态过期或不需要：停止应用并删除 `data/` 下的文件。这会删除本地项目状态、历史记录和生成资产。
 

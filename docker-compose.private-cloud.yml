@@ -1,4 +1,20 @@
 services:
+  mysql:
+    image: ${MYSQL_IMAGE:-public.ecr.aws/docker/library/mysql:8.4}
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-gpt_image_canvas}
+      MYSQL_USER: ${MYSQL_USER:-gpt_image_canvas}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-gpt_image_canvas}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$${MYSQL_USER} -p$${MYSQL_PASSWORD} --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
   app:
     build:
       context: .
@@ -19,7 +35,7 @@ services:
       HOST: 0.0.0.0
       PORT: ${PORT:-8787}
       DATA_DIR: /app/data
-      MYSQL_HOST: ${MYSQL_HOST:-host.docker.internal}
+      MYSQL_HOST: ${MYSQL_HOST:-mysql}
       MYSQL_PORT: ${MYSQL_PORT:-3306}
       MYSQL_USER: ${MYSQL_USER:-gpt_image_canvas}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-gpt_image_canvas}
@@ -30,14 +46,20 @@ services:
       - ./data:/app/data
       - ./downloads:/app/apps/web/dist/downloads
       - ./secrets/apns:/run/secrets/apns:ro
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:${PORT:-8787}/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
     restart: unless-stopped
+
+volumes:
+  mysql-data:
 
 networks:
   default:
     driver: bridge
-    ipam:
-      config:
-        - subnet: 192.168.241.0/24
-          gateway: 192.168.241.1

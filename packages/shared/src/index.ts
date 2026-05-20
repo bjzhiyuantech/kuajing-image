@@ -1007,6 +1007,45 @@ export interface AppConfig {
   outputFormats: OutputFormat[];
   counts: readonly GenerationCount[];
   notifications?: NotificationClientConfig;
+  deployment?: DeploymentProfileResponse;
+}
+
+export type DeploymentEdition = "local" | "private-cloud" | "saas";
+export type DeploymentTarget = "desktop" | "server" | "managed-cloud";
+export type StorageCapability = "local" | "oss" | "cos" | "s3" | "minio";
+export type ModelCapability = "official" | "openai-compatible" | "private" | "local";
+export type AuthCapability = "local-account" | "saas-account" | "sso";
+export type BillingCapability = "none" | "alipay" | "apple-iap" | "license" | "balance";
+export type NotificationCapability = "web" | "apns" | "getui" | "wechat-miniapp";
+
+export interface DeploymentCapabilities {
+  web: boolean;
+  desktop: boolean;
+  extension: boolean;
+  miniprogram: boolean;
+  mobileApp: boolean;
+  publicGallery: boolean;
+  categoryKit: boolean;
+  photoshopPackage: boolean;
+  seedanceVideo: boolean;
+  billing: boolean;
+  appleIap: boolean;
+  license: boolean;
+  multiTenant: boolean;
+  adminConsole: boolean;
+  cloudSync: boolean;
+  storageProviders: StorageCapability[];
+  modelProviders: ModelCapability[];
+  authProviders: AuthCapability[];
+  billingProviders: BillingCapability[];
+  notificationProviders: NotificationCapability[];
+}
+
+export interface DeploymentProfileResponse {
+  edition: DeploymentEdition;
+  target: DeploymentTarget;
+  name: string;
+  capabilities: DeploymentCapabilities;
 }
 
 export type AppNotificationType = "ecommerce_job_finished" | "system";

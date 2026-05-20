@@ -127,7 +127,7 @@ UI 和 API 都基于能力清单显隐或拒绝不可用能力。
 ### Phase 4：单机版
 
 - 设计 Desktop shell：本地前端 + 本地 API + 本地 Worker。
-- 默认 SQLite/local file storage，可选 OSS/MinIO/private model。
+- 默认 MySQL/local file storage，可选 OSS/MinIO/private model。
 - 隐藏 App、小程序、SaaS 支付、云端多租户相关能力。
 - 增加本地 license、日志导出、配置向导和一键诊断。
 

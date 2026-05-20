@@ -41,6 +41,8 @@ ARG APT_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/debian
 ARG APT_SECURITY_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/debian-security
 
 ENV NODE_ENV="production"
+ENV DEPLOYMENT_PROFILE="local"
+ENV DEPLOYMENT_TARGET="server"
 ENV HOST="0.0.0.0"
 ENV PORT="8787"
 ENV DATA_DIR="/app/data"
