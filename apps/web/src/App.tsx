@@ -218,7 +218,7 @@ const LOCAL_DEPLOYMENT_PROFILE: DeploymentProfileResponse = {
     miniprogram: false,
     mobileApp: false,
     publicGallery: false,
-    categoryKit: false,
+    categoryKit: true,
     photoshopPackage: false,
     seedanceVideo: false,
     billing: false,

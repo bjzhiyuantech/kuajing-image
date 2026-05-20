@@ -25,7 +25,7 @@ const DEFAULT_CAPABILITIES: Record<DeploymentEdition, DeploymentCapabilities> = 
     miniprogram: false,
     mobileApp: false,
     publicGallery: false,
-    categoryKit: false,
+    categoryKit: true,
     photoshopPackage: false,
     seedanceVideo: false,
     billing: false,

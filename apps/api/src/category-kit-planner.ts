@@ -31,6 +31,7 @@ const OPENAI_RESPONSES_BASE_URL = "https://api.openai.com/v1";
 const OPENAI_CHAT_BASE_URL = "https://api.openai.com/v1";
 const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
 const DEEPSEEK_DEFAULT_MODEL = "deepseek-v4-flash";
+const AGENT_ENV_MODEL_ID = "env-agent-foundation-model";
 const ALL_TEXT_MODEL_MODULES: CategoryKitPlannerModule[] = [
   "prompt-optimizer",
   "category-kit-planner",
@@ -170,7 +171,7 @@ export async function generateCategoryKitPlan(
       jobId: debug?.jobId,
       reason: "no_active_models"
     });
-    throw new ProviderError("missing_api_key", "后台未配置可看图的品类套图 OpenAI 文本模型，请先在管理后台保存并启用至少一个 OpenAI/兼容视觉模型。", 503);
+    throw new ProviderError("missing_api_key", "未配置可看图的 Agent 基础模型，请先在单机版配置里填写支持图像理解的多模态模型。", 503);
   }
 
   const errors: string[] = [];
@@ -204,7 +205,7 @@ export async function optimizeImagePrompt(input: PromptOptimizeRequest): Promise
   const configs = await resolveCategoryKitPlannerConfigs();
   const activeConfigs = activeTextModelConfigs(configs.models, "prompt-optimizer");
   if (activeConfigs.length === 0) {
-    throw new ProviderError("missing_api_key", "后台未配置可用的提示词优化文本模型，请先在管理后台保存并启用共享文本模型。", 503);
+    throw new ProviderError("missing_api_key", "未配置 Agent 基础模型，请先在单机版配置里填写用于提示词优化的多模态模型。", 503);
   }
 
   const errors: string[] = [];
@@ -239,7 +240,7 @@ export async function planSeedanceVideoStoryboard(
   const configs = await resolveCategoryKitPlannerConfigs();
   const activeConfigs = activeVisionTextModelConfigs(configs.models, "video-storyboard-planner");
   if (activeConfigs.length === 0) {
-    throw new ProviderError("missing_api_key", "后台未配置可看图的视频分镜 OpenAI 文本模型，请先在管理后台保存并启用 OpenAI/兼容视觉模型。", 503);
+    throw new ProviderError("missing_api_key", "未配置可看图的 Agent 基础模型，请先在单机版配置里填写支持图像理解的多模态模型。", 503);
   }
 
   const errors: string[] = [];
@@ -314,6 +315,13 @@ export async function classifyCategoryKitCategory(
 }
 
 async function resolveCategoryKitPlannerConfigs(): Promise<ResolvedCategoryKitPlannerConfigs> {
+  if (isLocalAgentEnvMode()) {
+    return {
+      source: "default",
+      models: [envFallbackAgentConfig()]
+    };
+  }
+
   const row = await getSystemSetting(SETTING_KEY);
   const stored = parseStoredConfig(row?.valueJson);
   if (stored) {
@@ -333,22 +341,29 @@ async function resolveCategoryKitPlannerConfigs(): Promise<ResolvedCategoryKitPl
 
   return {
     source: "default",
-    models: [
-      normalizeCategoryKitPlannerConfig({
-        id: "default-category-kit-planner-primary",
-        enabled: true,
-        name: "品类套图共享文本模型",
-        role: "primary",
-        priority: 1,
-        apiKey: "",
-        provider: "openai-responses",
-        modules: ALL_TEXT_MODEL_MODULES,
-        baseUrl: OPENAI_RESPONSES_BASE_URL,
-        model: DEFAULT_MODEL,
-        timeoutMs: DEFAULT_TIMEOUT_MS
-      })
-    ]
+    models: [envFallbackAgentConfig()]
   };
+}
+
+function isLocalAgentEnvMode(): boolean {
+  return process.env.DEPLOYMENT_PROFILE === "local" || process.env.DEPLOYMENT_TARGET === "desktop";
+}
+
+function envFallbackAgentConfig(): ResolvedCategoryKitPlannerConfigEntry {
+  const provider = normalizeProvider(process.env.AGENT_MODEL_PROVIDER, process.env.AGENT_BASE_URL);
+  return normalizeCategoryKitPlannerConfig({
+    id: AGENT_ENV_MODEL_ID,
+    enabled: true,
+    name: "Agent 基础模型",
+    role: "primary",
+    priority: 1,
+    apiKey: process.env.AGENT_API_KEY || process.env.OPENAI_API_KEY || "",
+    provider,
+    modules: ALL_TEXT_MODEL_MODULES,
+    baseUrl: process.env.AGENT_BASE_URL || process.env.OPENAI_BASE_URL || defaultBaseUrlForProvider(provider),
+    model: process.env.AGENT_MODEL || DEFAULT_MODEL,
+    timeoutMs: parsePositiveInteger(process.env.AGENT_TIMEOUT_MS, DEFAULT_TIMEOUT_MS)
+  });
 }
 
 function parseStoredConfig(valueJson: string | undefined): ResolvedCategoryKitPlannerConfigEntry[] | undefined {

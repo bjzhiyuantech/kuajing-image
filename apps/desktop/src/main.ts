@@ -28,6 +28,9 @@ const DESKTOP_ENV_DEFAULTS: Record<string, string> = {
   DATA_DIR: "./data",
   OPENAI_IMAGE_MODEL: "gpt-image-2",
   OPENAI_IMAGE_TIMEOUT_MS: "1200000",
+  AGENT_MODEL_PROVIDER: "openai-responses",
+  AGENT_MODEL: "gpt-5.5",
+  AGENT_TIMEOUT_MS: "1200000",
   EXTENSION_LOCAL_API_BASE_URL: "http://127.0.0.1:8787",
   EXTENSION_LOCAL_DOWNLOAD_URL: "/downloads/kuajing-image-extension-local-latest.zip",
   EXTENSION_LOCAL_LATEST_DOWNLOAD_URL: "/downloads/kuajing-image-extension-local-latest.zip",
@@ -125,8 +128,14 @@ const CONFIG_FIELDS = [
   "OPENAI_API_KEY",
   "OPENAI_BASE_URL",
   "OPENAI_IMAGE_MODEL",
+  "AGENT_API_KEY",
+  "AGENT_BASE_URL",
+  "AGENT_MODEL_PROVIDER",
+  "AGENT_MODEL",
   "PORT"
 ];
+
+const DESKTOP_EDITABLE_KEYS = new Set(CONFIG_FIELDS);
 
 let mainWindow: BrowserWindow | null = null;
 let workbenchWindow: BrowserWindow | null = null;
@@ -349,6 +358,7 @@ function serializeEnv(values: Map<string, string>) {
   const groups: Array<[string, string[]]> = [
     ["# 桌面单机版常用配置", ["DEPLOYMENT_PROFILE", "DEPLOYMENT_PROFILE_NAME", "DEPLOYMENT_TARGET", "HOST", "PORT", "PUBLIC_PORT", "DATA_DIR"]],
     ["# 生图模型", ["OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_IMAGE_MODEL", "OPENAI_IMAGE_TIMEOUT_MS"]],
+    ["# Agent 基础模型", ["AGENT_API_KEY", "AGENT_BASE_URL", "AGENT_MODEL_PROVIDER", "AGENT_MODEL", "AGENT_TIMEOUT_MS"]],
     ["# 本地浏览器插件", ["EXTENSION_LOCAL_API_BASE_URL", "EXTENSION_LOCAL_DOWNLOAD_URL", "EXTENSION_LOCAL_LATEST_DOWNLOAD_URL", "EXTENSION_LOCAL_INSTALL_HELP_URL"]],
     ["# 自动维护：单机免登录", ["JWT_SECRET", "ALLOW_DEMO_AUTH"]],
     ["# 自动维护：内置 MySQL", ["MYSQL_HOST", "MYSQL_PORT", "MYSQL_USER", "MYSQL_PASSWORD", "MYSQL_DATABASE", "MYSQL_ROOT_PASSWORD"]],
@@ -389,7 +399,7 @@ function applyDesktopDefaults(env: Map<string, string>) {
   }
 
   for (const [key, value] of Object.entries(DESKTOP_ENV_DEFAULTS)) {
-    if (env.get(key) !== value && key !== "OPENAI_API_KEY" && key !== "OPENAI_BASE_URL" && key !== "OPENAI_IMAGE_MODEL" && key !== "PORT") {
+    if (env.get(key) !== value && !DESKTOP_EDITABLE_KEYS.has(key)) {
       env.set(key, value);
       changed = true;
     } else if (!env.has(key)) {
