@@ -207,6 +207,33 @@ const DEFAULT_DEPLOYMENT_PROFILE: DeploymentProfileResponse = {
     notificationProviders: ["web", "apns", "getui", "wechat-miniapp"]
   }
 };
+const LOCAL_DEPLOYMENT_PROFILE: DeploymentProfileResponse = {
+  edition: "local",
+  target: "desktop",
+  name: "商图 AI 单机版",
+  capabilities: {
+    web: true,
+    desktop: true,
+    extension: true,
+    miniprogram: false,
+    mobileApp: false,
+    publicGallery: false,
+    categoryKit: false,
+    photoshopPackage: false,
+    seedanceVideo: false,
+    billing: false,
+    appleIap: false,
+    license: false,
+    multiTenant: false,
+    adminConsole: false,
+    cloudSync: false,
+    storageProviders: ["local"],
+    modelProviders: ["official", "openai-compatible"],
+    authProviders: [],
+    billingProviders: ["none"],
+    notificationProviders: []
+  }
+};
 const LOCAL_DESKTOP_USER: AuthUser = {
   id: "local-desktop-user",
   email: "",
@@ -222,6 +249,27 @@ const LOCAL_DESKTOP_USER: AuthUser = {
   storageQuotaBytes: 0,
   storageUsedBytes: 0
 };
+
+function isLocalRuntimeHost(): boolean {
+  const hostname = window.location.hostname.toLowerCase();
+  return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1";
+}
+
+function initialDeploymentProfile(): DeploymentProfileResponse {
+  return isLocalRuntimeHost() ? LOCAL_DEPLOYMENT_PROFILE : DEFAULT_DEPLOYMENT_PROFILE;
+}
+
+function initialAuthStatus(): AuthStatus {
+  if (isLocalRuntimeHost()) {
+    return "authenticated";
+  }
+  return consumeAuthTokenFromUrl() || getStoredAuthToken() ? "checking" : "anonymous";
+}
+
+function initialAuthUser(): AuthUser | null {
+  return isLocalRuntimeHost() ? LOCAL_DESKTOP_USER : null;
+}
+
 const initialCanvasPreviewWidths = new Map<string, AssetPreviewWidth>();
 const shapeUtils = [GenerationPlaceholderShapeUtil];
 const tldrawOptions = {
@@ -1166,6 +1214,9 @@ function parseDeploymentProfile(value: unknown): DeploymentProfileResponse {
     value.target === "desktop" || value.target === "server" || value.target === "managed-cloud"
       ? value.target
       : fallback.target;
+  if (edition === "local" || target === "desktop") {
+    return LOCAL_DEPLOYMENT_PROFILE;
+  }
   const capabilities = { ...fallback.capabilities };
   for (const key of Object.keys(fallback.capabilities) as Array<keyof DeploymentCapabilities>) {
     const nextValue = rawCapabilities[key];
@@ -5859,9 +5910,9 @@ function PanelStatusIcon({ tone }: { tone: PanelStatusTone }) {
 export function App() {
   const [route, setRoute] = useState<AppRoute>(() => routeFromLocation());
   const [publicPath, setPublicPath] = useState(() => window.location.pathname);
-  const [authStatus, setAuthStatus] = useState<AuthStatus>(() => (consumeAuthTokenFromUrl() || getStoredAuthToken() ? "checking" : "anonymous"));
+  const [authStatus, setAuthStatus] = useState<AuthStatus>(() => initialAuthStatus());
   const [authMode, setAuthMode] = useState<AuthMode>("login");
-  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => initialAuthUser());
   const [generationMode, setGenerationMode] = useState<GenerationMode>("text");
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("plugins");
   const [ecommerceMode, setEcommerceMode] = useState<EcommerceGenerationMode>("enhance");
@@ -5929,7 +5980,7 @@ export function App() {
   const [isMobileAppPromptOpen, setIsMobileAppPromptOpen] = useState(false);
   const [demoCanvasExamples, setDemoCanvasExamples] = useState<DemoCanvasExample[]>(demoComparisonExamples);
   const [selectedDemoExampleId, setSelectedDemoExampleId] = useState(demoComparisonExamples[0]?.id ?? "");
-  const [deploymentProfile, setDeploymentProfile] = useState<DeploymentProfileResponse>(DEFAULT_DEPLOYMENT_PROFILE);
+  const [deploymentProfile, setDeploymentProfile] = useState<DeploymentProfileResponse>(() => initialDeploymentProfile());
 
   function resetCategoryKitPlanning(): void {
     setCategoryKitPlan(emptyCategoryKitPlan);
@@ -5949,7 +6000,8 @@ export function App() {
     [browserKind, pluginGuideLinks]
   );
   const pluginBrowserLabel = useMemo(() => browserLabel(browserKind), [browserKind]);
-  const isLocalEdition = deploymentProfile.edition === "local";
+  const isLocalHost = isLocalRuntimeHost();
+  const isLocalEdition = deploymentProfile.edition === "local" || deploymentProfile.target === "desktop" || isLocalHost;
   const canUseExtension = deploymentCapabilityEnabled(deploymentProfile, "extension");
   const canUseMobileApp = deploymentCapabilityEnabled(deploymentProfile, "mobileApp");
   const canUsePublicGallery = isLocalEdition || deploymentCapabilityEnabled(deploymentProfile, "publicGallery");
@@ -5981,13 +6033,17 @@ export function App() {
     setPublicPath(nextPath);
   }, []);
   const navigateToAuth = useCallback((mode: AuthMode): void => {
+    if (isLocalRuntimeHost()) {
+      navigateToRoute("canvas");
+      return;
+    }
     const nextPath = mode === "register" ? "/register" : "/login";
     if (window.location.pathname !== nextPath) {
       window.history.pushState(null, "", nextPath);
     }
     setAuthMode(mode);
     setPublicPath(nextPath);
-  }, []);
+  }, [navigateToRoute]);
   const isGenerating = activeGenerationCount > 0;
   const isAuthenticated = authStatus === "authenticated" && currentUser !== null;
   const ecommerceImage = ecommerceImages[0] ?? null;
@@ -6467,6 +6523,10 @@ export function App() {
   }, [isLocalEdition, navigateToRoute, route]);
 
   useEffect(() => {
+    if (isLocalEdition && (window.location.pathname === "/login" || window.location.pathname === "/register" || route === "account" || route === "admin" || route === "help")) {
+      navigateToRoute("canvas");
+      return;
+    }
     if (isAuthenticated && (window.location.pathname === "/login" || window.location.pathname === "/register")) {
       navigateToRoute("canvas");
       return;
@@ -6474,7 +6534,7 @@ export function App() {
     if (isAuthenticated && route === "admin" && !isAdminUser(currentUser)) {
       navigateToRoute("canvas");
     }
-  }, [currentUser, isAuthenticated, navigateToRoute, route]);
+  }, [currentUser, isAuthenticated, isLocalEdition, navigateToRoute, route]);
 
   const refreshCurrentUser = useCallback(async (): Promise<void> => {
     if (isLocalEdition) {
@@ -10079,6 +10139,8 @@ export function App() {
         <AccountPage
           billingEnabled={canUseBilling}
           mobile={isMobileDrawer}
+          phoneVerificationEnabled={!isLocalEdition}
+          showAdminEntry={canUseAdminConsole && isAdminUser(currentUser)}
           user={currentUser}
           onLogout={handleLogout}
           onNavigate={(nextRoute) => {

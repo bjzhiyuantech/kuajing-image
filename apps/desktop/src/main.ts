@@ -42,6 +42,85 @@ const DESKTOP_ENV_DEFAULTS: Record<string, string> = {
   ALLOW_DEMO_AUTH: "true"
 };
 
+const DESKTOP_ENV_REMOVED_KEYS = new Set([
+  "ADMIN_EMAIL",
+  "ADMIN_PASSWORD",
+  "ADMIN_DISPLAY_NAME",
+  "ARK_API_KEY",
+  "ARK_BASE_URL",
+  "SEEDANCE_MODEL",
+  "SMTP_ENABLED",
+  "SMTP_HOST",
+  "SMTP_PORT",
+  "SMTP_SECURE",
+  "SMTP_USERNAME",
+  "SMTP_PASSWORD",
+  "SMTP_FROM_NAME",
+  "SMTP_FROM_EMAIL",
+  "ALIYUN_SMS_ENABLED",
+  "ALIYUN_SMS_ACCESS_KEY_ID",
+  "ALIYUN_SMS_ACCESS_KEY_SECRET",
+  "ALIYUN_SMS_ENDPOINT",
+  "ALIYUN_SMS_SIGN_NAME",
+  "ALIYUN_SMS_REGISTER_TEMPLATE_CODE",
+  "ALIYUN_SMS_BIND_TEMPLATE_CODE",
+  "GETUI_ENABLED",
+  "GETUI_APP_ID",
+  "GETUI_APP_KEY",
+  "GETUI_MASTER_SECRET",
+  "GETUI_BASE_URL",
+  "APNS_ENABLED",
+  "APNS_BUNDLE_ID",
+  "APNS_TEAM_ID",
+  "APNS_KEY_ID",
+  "APNS_PRIVATE_KEY",
+  "APNS_KEY_FILE",
+  "APNS_ENVIRONMENT",
+  "WECHAT_MINIAPP_ENABLED",
+  "WECHAT_MINIAPP_APP_ID",
+  "WECHAT_MINIAPP_APP_SECRET",
+  "WECHAT_MINIAPP_TASK_COMPLETE_TEMPLATE_ID",
+  "APPLE_IAP_BUNDLE_ID",
+  "APPLE_IAP_ISSUER_ID",
+  "APPLE_IAP_KEY_ID",
+  "APPLE_IAP_PRIVATE_KEY",
+  "APPLE_IAP_PRODUCT_PREFIX",
+  "APPLE_IAP_PRODUCT_IDS_JSON",
+  "APP_RELEASE_IOS_VERSION",
+  "APP_RELEASE_IOS_BUILD_NUMBER",
+  "APP_RELEASE_IOS_DOWNLOAD_URL",
+  "APP_RELEASE_ANDROID_VERSION",
+  "APP_RELEASE_ANDROID_BUILD_NUMBER",
+  "APP_RELEASE_ANDROID_DOWNLOAD_URL",
+  "EXTENSION_DEV_API_BASE_URL",
+  "EXTENSION_PROD_API_BASE_URL",
+  "EXTENSION_DEV_NAME",
+  "EXTENSION_PROD_NAME",
+  "EXTENSION_DEV_VERSION",
+  "EXTENSION_PROD_VERSION",
+  "EXTENSION_DEV_DOWNLOAD_URL",
+  "EXTENSION_PROD_DOWNLOAD_URL",
+  "EXTENSION_DEV_LATEST_DOWNLOAD_URL",
+  "EXTENSION_PROD_LATEST_DOWNLOAD_URL",
+  "EXTENSION_DEV_INSTALL_HELP_URL",
+  "EXTENSION_PROD_INSTALL_HELP_URL",
+  "OSS_ACCESS_KEY_ID",
+  "OSS_ACCESS_KEY_SECRET",
+  "OSS_DEFAULT_BUCKET",
+  "OSS_DEFAULT_REGION",
+  "OSS_DEFAULT_KEY_PREFIX",
+  "COS_SECRET_ID",
+  "COS_SECRET_KEY",
+  "COS_DEFAULT_BUCKET",
+  "COS_DEFAULT_REGION",
+  "COS_DEFAULT_KEY_PREFIX",
+  "ASSET_CDN_BASE_URL",
+  "CAPABILITIES_OVERRIDES_JSON",
+  "DEV_PUBLIC_PORT",
+  "BLUE_PORT",
+  "GREEN_PORT"
+]);
+
 const CONFIG_FIELDS = [
   "OPENAI_API_KEY",
   "OPENAI_BASE_URL",
@@ -303,8 +382,25 @@ function serializeEnv(values: Map<string, string>) {
 
 function applyDesktopDefaults(env: Map<string, string>) {
   let changed = false;
+  for (const key of DESKTOP_ENV_REMOVED_KEYS) {
+    if (env.delete(key)) {
+      changed = true;
+    }
+  }
+
   for (const [key, value] of Object.entries(DESKTOP_ENV_DEFAULTS)) {
-    if (!env.has(key)) {
+    if (env.get(key) !== value && key !== "OPENAI_API_KEY" && key !== "OPENAI_BASE_URL" && key !== "OPENAI_IMAGE_MODEL" && key !== "PORT") {
+      env.set(key, value);
+      changed = true;
+    } else if (!env.has(key)) {
+      env.set(key, value);
+      changed = true;
+    }
+  }
+
+  for (const key of ["DEPLOYMENT_PROFILE", "DEPLOYMENT_PROFILE_NAME", "DEPLOYMENT_TARGET", "HOST", "DATA_DIR", "ALLOW_DEMO_AUTH"]) {
+    const value = DESKTOP_ENV_DEFAULTS[key];
+    if (value !== undefined && env.get(key) !== value) {
       env.set(key, value);
       changed = true;
     }
@@ -511,7 +607,7 @@ async function runAction(action: DesktopAction) {
 
   const argsByAction: Record<Exclude<DesktopAction, "smoke">, string[]> = {
     install: ["up", "-d", "--remove-orphans", "--build"],
-    start: ["up", "-d", "--remove-orphans"],
+    start: ["up", "-d", "--remove-orphans", "--build"],
     stop: ["down"],
     status: ["ps"],
     logs: ["logs", "--tail", "240"]

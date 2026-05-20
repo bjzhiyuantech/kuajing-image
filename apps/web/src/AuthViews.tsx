@@ -697,6 +697,8 @@ export function AccountPage({
   billingEnabled = true,
   user,
   mobile = false,
+  phoneVerificationEnabled = true,
+  showAdminEntry = user.role === "admin",
   onLogout,
   onNavigate,
   onUserUpdated,
@@ -706,6 +708,8 @@ export function AccountPage({
   billingEnabled?: boolean;
   user: AuthUser;
   mobile?: boolean;
+  phoneVerificationEnabled?: boolean;
+  showAdminEntry?: boolean;
   onLogout?: () => void;
   onNavigate?: (route: "canvas" | "gallery" | "account" | "help" | "admin") => void;
   onUserUpdated?: (user: AuthUser) => void;
@@ -718,7 +722,7 @@ export function AccountPage({
   const [bindSmsCode, setBindSmsCode] = useState("");
   const [bindPhoneError, setBindPhoneError] = useState("");
   const [bindPhoneNotice, setBindPhoneNotice] = useState("");
-  const [isPhoneDialogOpen, setIsPhoneDialogOpen] = useState(!user.phone);
+  const [isPhoneDialogOpen, setIsPhoneDialogOpen] = useState(phoneVerificationEnabled && !user.phone);
   const [isSendingBindCode, setIsSendingBindCode] = useState(false);
   const [isBindingPhone, setIsBindingPhone] = useState(false);
   const [referralLoading, setReferralLoading] = useState(true);
@@ -762,10 +766,11 @@ export function AccountPage({
       new Date(currentPlanExpiresAt).getTime() > Date.now() &&
       quotaRemaining > 0
   );
+  const needsPhoneVerification = phoneVerificationEnabled && !user.phone;
 
   useEffect(() => {
-    setIsPhoneDialogOpen(!user.phone);
-  }, [user.phone]);
+    setIsPhoneDialogOpen(needsPhoneVerification);
+  }, [needsPhoneVerification]);
 
   async function loadBilling({ preserveNotice = false, signal }: { preserveNotice?: boolean; signal?: AbortSignal } = {}): Promise<void> {
     if (!billingEnabled) {
@@ -775,7 +780,7 @@ export function AccountPage({
       setBillingAction("");
       return;
     }
-    if (!user.phone) {
+    if (phoneVerificationEnabled && !user.phone) {
       setBilling(createAccountBillingState(user));
       setBillingLoading(false);
       setBillingError("");
@@ -955,16 +960,20 @@ export function AccountPage({
     const controller = new AbortController();
     void loadReferral({ signal: controller.signal });
     return () => controller.abort();
-  }, [user.id]);
+  }, [phoneVerificationEnabled, user.id]);
 
   useEffect(() => {
+    if (!phoneVerificationEnabled) {
+      setIsInviteDialogOpen(false);
+      return;
+    }
     const params = new URLSearchParams(window.location.search);
     const dismissedKey = `referral-campaign-dismissed:${user.id}`;
     const shouldForceOpen = params.get("inviteCampaign") === "1" || params.get("source") === "extension";
     if (shouldForceOpen || !window.localStorage.getItem(dismissedKey)) {
       setIsInviteDialogOpen(true);
     }
-  }, [user.id]);
+  }, [phoneVerificationEnabled, user.id]);
 
   useEffect(() => {
     let active = true;
@@ -991,7 +1000,13 @@ export function AccountPage({
   }, [inviteUrl]);
 
   async function loadReferral({ signal }: { signal?: AbortSignal } = {}): Promise<void> {
-    if (!user.phone) {
+    if (!phoneVerificationEnabled) {
+      setReferral(createInviteSummaryState(user));
+      setReferralLoading(false);
+      setReferralError("");
+      return;
+    }
+    if (phoneVerificationEnabled && !user.phone) {
       setReferral(createInviteSummaryState(user));
       setReferralLoading(false);
       setReferralError("");
@@ -1359,7 +1374,7 @@ export function AccountPage({
             <MobileAccountRow icon={<Package className="size-5" aria-hidden="true" />} label="当前套餐" value={currentPlanName} />
           </section>
 
-          {user.role === "admin" ? (
+          {showAdminEntry ? (
             <button className="mobile-account-admin" type="button" onClick={() => onNavigate?.("admin")}>
               <Database className="size-5" aria-hidden="true" />
               <span><strong>管理后台</strong><small>仅管理员可访问</small></span>
@@ -1752,7 +1767,7 @@ export function AccountPage({
           onRefresh={() => void loadReferral()}
         />
       ) : null}
-      {!user.phone && isPhoneDialogOpen ? (
+      {phoneVerificationEnabled && !user.phone && isPhoneDialogOpen ? (
         <PhoneVerificationDialog
           error={bindPhoneError}
           isBinding={isBindingPhone}

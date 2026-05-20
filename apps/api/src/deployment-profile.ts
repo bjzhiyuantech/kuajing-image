@@ -95,6 +95,10 @@ export function getDeploymentProfile(): DeploymentProfileResponse {
     capabilities: cloneCapabilities(DEFAULT_CAPABILITIES[edition])
   };
 
+  if (edition === "local" || baseProfile.target === "desktop") {
+    return baseProfile;
+  }
+
   return applyCapabilityOverrides(baseProfile, process.env.CAPABILITIES_OVERRIDES_JSON);
 }
 
