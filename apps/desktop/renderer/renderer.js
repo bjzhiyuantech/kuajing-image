@@ -9,14 +9,30 @@ const elements = {
   serviceDir: document.querySelector("#service-dir"),
   serviceUrl: document.querySelector("#service-url"),
   logOutput: document.querySelector("#log-output"),
-  actionButtons: [...document.querySelectorAll("[data-action]")]
+  actionButtons: [...document.querySelectorAll("[data-action]")],
+  form: document.querySelector("#config-form"),
+  saveConfig: document.querySelector("#save-config"),
+  reloadConfig: document.querySelector("#reload-config"),
+  openDocker: document.querySelector("#open-docker"),
+  tabs: [...document.querySelectorAll("[data-tab]")],
+  panels: [...document.querySelectorAll(".tab-panel")]
 };
 
 let logText = "桌面控制台已就绪。\n";
+let currentSnapshot = null;
 
 function setDot(node, state) {
   node.classList.remove("ok", "warn", "error", "pending");
   node.classList.add(state);
+}
+
+function switchTab(tabName) {
+  elements.tabs.forEach((tab) => {
+    tab.classList.toggle("active", tab.dataset.tab === tabName);
+  });
+  elements.panels.forEach((panel) => {
+    panel.classList.toggle("active", panel.id === `panel-${tabName}`);
+  });
 }
 
 function appendLog(stream, text) {
@@ -34,9 +50,11 @@ function setBusy(isBusy) {
   elements.actionButtons.forEach((button) => {
     button.disabled = isBusy;
   });
+  elements.saveConfig.disabled = isBusy;
 }
 
 function renderSnapshot(snapshot) {
+  currentSnapshot = snapshot;
   const docker = snapshot.docker;
   if (docker.cliAvailable && docker.engineAvailable) {
     setDot(elements.dockerDot, "ok");
@@ -70,6 +88,41 @@ function renderSnapshot(snapshot) {
   setBusy(snapshot.busy);
 }
 
+function readFormValues() {
+  const values = {};
+  const formData = new FormData(elements.form);
+  for (const [key, value] of formData.entries()) {
+    values[key] = String(value);
+  }
+  return values;
+}
+
+function writeFormValues(values) {
+  for (const [key, value] of Object.entries(values)) {
+    const input = elements.form.elements.namedItem(key);
+    if (input) input.value = value ?? "";
+  }
+}
+
+async function loadConfig() {
+  const config = await window.desktop.getConfig();
+  writeFormValues(config.values);
+}
+
+async function saveConfig() {
+  elements.saveConfig.disabled = true;
+  try {
+    const config = await window.desktop.saveConfig(readFormValues());
+    writeFormValues(config.values);
+    appendLog("system", "配置已保存。\n");
+    await refreshSnapshot();
+  } catch (error) {
+    appendLog("stderr", `${error?.message || String(error)}\n`);
+  } finally {
+    setBusy(currentSnapshot?.busy ?? false);
+  }
+}
+
 async function refreshSnapshot() {
   const snapshot = await window.desktop.getSnapshot();
   renderSnapshot(snapshot);
@@ -78,6 +131,7 @@ async function refreshSnapshot() {
 async function runAction(action) {
   setBusy(true);
   appendLog("system", `\n开始执行：${action}\n`);
+  if (action === "logs") switchTab("logs");
   try {
     const result = await window.desktop.runAction(action);
     appendLog(result.ok ? "system" : "stderr", result.ok ? `完成：${action}\n` : `失败：${action}\n`);
@@ -108,12 +162,34 @@ document.querySelector("#open-config").addEventListener("click", () => {
   void window.desktop.openConfigFile();
 });
 
+document.querySelector("#generate-secret").addEventListener("click", async () => {
+  const input = elements.form.elements.namedItem("JWT_SECRET");
+  input.value = await window.desktop.generateSecret();
+});
+
+elements.saveConfig.addEventListener("click", () => {
+  void saveConfig();
+});
+
+elements.reloadConfig.addEventListener("click", () => {
+  void loadConfig();
+});
+
+elements.openDocker.addEventListener("click", () => {
+  void window.desktop.openDockerDownload();
+});
+
+elements.tabs.forEach((tab) => {
+  tab.addEventListener("click", () => switchTab(tab.dataset.tab));
+});
+
 elements.actionButtons.forEach((button) => {
   button.addEventListener("click", () => {
     void runAction(button.dataset.action);
   });
 });
 
+void loadConfig();
 void refreshSnapshot();
 setInterval(() => {
   void refreshSnapshot();

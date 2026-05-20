@@ -182,7 +182,41 @@ h2 {
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr);
   gap: 14px;
-  min-height: 430px;
+  min-height: 510px;
+}
+
+.side-panel,
+.content-panel {
+  border: 1px solid #d8e0e4;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 12px 34px rgba(15, 23, 42, 0.06);
+}
+
+.side-panel {
+  overflow: hidden;
+}
+
+.tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0;
+  border-bottom: 1px solid #d8e0e4;
+  padding: 8px;
+}
+
+.tab {
+  min-height: 36px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  padding: 0 8px;
+  color: #53636d;
+}
+
+.tab.active {
+  background: #e6f4f1;
+  color: #0f766e;
 }
 
 .actions-panel {
@@ -194,6 +228,117 @@ h2 {
 
 .actions-panel button {
   width: 100%;
+}
+
+.content-panel {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.tab-panel {
+  display: none;
+  min-height: 100%;
+}
+
+.tab-panel.active {
+  display: flex;
+}
+
+#panel-config,
+#panel-runtime {
+  flex-direction: column;
+}
+
+.panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  border-bottom: 1px solid #d8e0e4;
+  padding: 18px 20px;
+}
+
+.panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.config-form {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 16px;
+  overflow: auto;
+  padding: 18px 20px 22px;
+}
+
+fieldset {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  border: 1px solid #d8e0e4;
+  border-radius: 8px;
+  margin: 0;
+  padding: 16px;
+}
+
+legend {
+  padding: 0 8px;
+  color: #0f766e;
+  font-weight: 780;
+}
+
+.field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.field.full {
+  grid-column: 1 / -1;
+}
+
+.field span {
+  color: #53636d;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+input {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid #c8d2d8;
+  border-radius: 8px;
+  padding: 0 12px;
+  background: #ffffff;
+  color: #172026;
+  font: inherit;
+  font-size: 0.92rem;
+}
+
+input:focus {
+  border-color: #0f766e;
+  outline: 3px solid rgba(15, 118, 110, 0.16);
+}
+
+.inline-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.runtime-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  padding: 20px;
+}
+
+.runtime-grid button {
+  min-height: 64px;
 }
 
 .log-panel {
@@ -246,6 +391,11 @@ pre {
   }
 
   .status-grid {
+    grid-template-columns: 1fr;
+  }
+
+  fieldset,
+  .runtime-grid {
     grid-template-columns: 1fr;
   }
 }

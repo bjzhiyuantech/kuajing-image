@@ -15,7 +15,7 @@
         </div>
         <div class="top-actions">
           <button id="open-service" class="primary">打开工作台</button>
-          <button id="open-config">配置文件</button>
+          <button id="open-config">高级配置</button>
           <button id="open-dir">运行目录</button>
         </div>
       </section>
@@ -48,20 +48,125 @@
       </section>
 
       <section class="workspace">
-        <aside class="actions-panel">
-          <button data-action="install" class="primary">初始化安装</button>
-          <button data-action="start">启动服务</button>
-          <button data-action="status">查看状态</button>
-          <button data-action="logs">查看日志</button>
-          <button data-action="smoke">运行自检</button>
-          <button data-action="stop" class="danger">停止服务</button>
-        </aside>
-        <section class="log-panel">
-          <div class="log-header">
-            <h2>运行日志</h2>
-            <button id="clear-log" class="ghost">清空</button>
+        <aside class="side-panel">
+          <nav class="tabs" aria-label="桌面单机版导航">
+            <button data-tab="config" class="tab active">配置</button>
+            <button data-tab="runtime" class="tab">运行</button>
+            <button data-tab="logs" class="tab">日志</button>
+          </nav>
+          <div class="actions-panel">
+            <button data-action="install" class="primary">初始化安装</button>
+            <button data-action="start">启动服务</button>
+            <button data-action="status">查看状态</button>
+            <button data-action="logs">查看日志</button>
+            <button data-action="smoke">运行自检</button>
+            <button data-action="stop" class="danger">停止服务</button>
           </div>
-          <pre id="log-output">桌面控制台已就绪。</pre>
+        </aside>
+
+        <section class="content-panel">
+          <section id="panel-config" class="tab-panel active">
+            <div class="panel-header">
+              <div>
+                <h2>界面配置</h2>
+                <p class="muted">填写常用项即可启动；高级参数仍可打开原始配置文件。</p>
+              </div>
+              <div class="panel-actions">
+                <button id="reload-config" class="ghost">重载</button>
+                <button id="save-config" class="primary">保存配置</button>
+              </div>
+            </div>
+            <form id="config-form" class="config-form">
+              <fieldset>
+                <legend>模型服务</legend>
+                <label class="field full">
+                  <span>OpenAI API Key</span>
+                  <input name="OPENAI_API_KEY" type="password" autocomplete="off" placeholder="sk-..." />
+                </label>
+                <label class="field">
+                  <span>OpenAI Base URL</span>
+                  <input name="OPENAI_BASE_URL" type="url" placeholder="留空使用官方 OpenAI" />
+                </label>
+                <label class="field">
+                  <span>图像模型</span>
+                  <input name="OPENAI_IMAGE_MODEL" type="text" placeholder="gpt-image-2" />
+                </label>
+                <label class="field full">
+                  <span>火山 Ark API Key</span>
+                  <input name="ARK_API_KEY" type="password" autocomplete="off" placeholder="用于视频生成，可先留空" />
+                </label>
+                <label class="field">
+                  <span>Ark Base URL</span>
+                  <input name="ARK_BASE_URL" type="url" placeholder="留空使用火山默认地址" />
+                </label>
+                <label class="field">
+                  <span>Seedance 模型</span>
+                  <input name="SEEDANCE_MODEL" type="text" />
+                </label>
+              </fieldset>
+
+              <fieldset>
+                <legend>本机服务</legend>
+                <label class="field">
+                  <span>访问端口</span>
+                  <input name="PORT" type="number" min="1" max="65535" />
+                </label>
+                <label class="field">
+                  <span>内置 MySQL 密码</span>
+                  <input name="MYSQL_PASSWORD" type="password" autocomplete="off" />
+                </label>
+              </fieldset>
+
+              <fieldset>
+                <legend>管理员账号</legend>
+                <label class="field">
+                  <span>管理员邮箱</span>
+                  <input name="ADMIN_EMAIL" type="email" placeholder="admin@example.com" />
+                </label>
+                <label class="field">
+                  <span>管理员密码</span>
+                  <input name="ADMIN_PASSWORD" type="password" autocomplete="new-password" />
+                </label>
+                <label class="field">
+                  <span>显示名称</span>
+                  <input name="ADMIN_DISPLAY_NAME" type="text" />
+                </label>
+                <label class="field secret-field">
+                  <span>登录密钥</span>
+                  <div class="inline-field">
+                    <input name="JWT_SECRET" type="password" autocomplete="off" />
+                    <button id="generate-secret" type="button">生成</button>
+                  </div>
+                </label>
+              </fieldset>
+            </form>
+          </section>
+
+          <section id="panel-runtime" class="tab-panel">
+            <div class="panel-header">
+              <div>
+                <h2>运行控制</h2>
+                <p class="muted">首次使用先保存配置，再初始化安装并启动服务。</p>
+              </div>
+              <button id="open-docker" class="ghost">获取 Docker</button>
+            </div>
+            <div class="runtime-grid">
+              <button data-action="install" class="primary">初始化安装</button>
+              <button data-action="start">启动服务</button>
+              <button data-action="status">查看状态</button>
+              <button data-action="smoke">运行自检</button>
+              <button data-action="logs">查看日志</button>
+              <button data-action="stop" class="danger">停止服务</button>
+            </div>
+          </section>
+
+          <section id="panel-logs" class="tab-panel log-panel">
+            <div class="log-header">
+              <h2>运行日志</h2>
+              <button id="clear-log" class="ghost">清空</button>
+            </div>
+            <pre id="log-output">桌面控制台已就绪。</pre>
+          </section>
         </section>
       </section>
     </main>

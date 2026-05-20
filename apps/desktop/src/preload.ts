@@ -4,11 +4,15 @@ type DesktopAction = "install" | "start" | "stop" | "status" | "logs" | "smoke";
 type Listener<T> = (payload: T) => void;
 
 contextBridge.exposeInMainWorld("desktop", {
+  generateSecret: () => ipcRenderer.invoke("desktop:generateSecret"),
+  getConfig: () => ipcRenderer.invoke("desktop:getConfig"),
   getSnapshot: () => ipcRenderer.invoke("desktop:getSnapshot"),
+  openDockerDownload: () => ipcRenderer.invoke("desktop:openDockerDownload"),
   openConfigFile: () => ipcRenderer.invoke("desktop:openConfigFile"),
   openService: () => ipcRenderer.invoke("desktop:openService"),
   openServiceDir: () => ipcRenderer.invoke("desktop:openServiceDir"),
   runAction: (action: DesktopAction) => ipcRenderer.invoke("desktop:runAction", action),
+  saveConfig: (values: Record<string, string>) => ipcRenderer.invoke("desktop:saveConfig", values),
   onLog: (callback: Listener<{ stream: "stdout" | "stderr" | "system"; text: string }>) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: { stream: "stdout" | "stderr" | "system"; text: string }) => callback(payload);
     ipcRenderer.on("desktop:log", listener);
