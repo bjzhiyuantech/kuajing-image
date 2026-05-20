@@ -2947,7 +2947,10 @@ async function runEcommerceBatchJob(jobId: string): Promise<void> {
                 { skipCharge: true, createComparisonCollage: job.input.createComparisonCollage === true }
               )
             : await runTextToImageGenerationWithFallback(job.tenant, generationInput, job.providerConfigs, undefined, { skipCharge: true });
-          records[sceneItem.index] = response.record;
+          records[sceneItem.index] = {
+            ...response.record,
+            ecommerceBatchIndex: sceneItem.index * Math.max(1, job.input.countPerScene ?? 1)
+          };
         } catch (error) {
           records[sceneItem.index] = failedEcommerceSceneRecord(job.input, sceneItem, errorToMessage(error));
         } finally {
@@ -3125,14 +3128,13 @@ function failedEcommerceSceneRecord(
     count: input.countPerScene ?? 1,
     status: "failed",
     error: message,
+    ecommerceBatchIndex: sceneItem.index * Math.max(1, input.countPerScene ?? 1),
     createdAt: new Date().toISOString(),
-    outputs: [
-      {
-        id: randomUUID(),
-        status: "failed",
-        error: message
-      }
-    ]
+    outputs: Array.from({ length: Math.max(1, input.countPerScene ?? 1) }, () => ({
+      id: randomUUID(),
+      status: "failed" as const,
+      error: message
+    }))
   };
 }
 

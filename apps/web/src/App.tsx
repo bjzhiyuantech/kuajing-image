@@ -1504,11 +1504,11 @@ function sizePresetIdForSize(widthValue: number, heightValue: number): string {
 }
 
 function firstDownloadableAsset(record: GenerationRecord): GeneratedAsset | undefined {
-  return record.outputs.find((output) => output.status === "succeeded" && output.asset)?.asset;
+  return record.outputs.find((output) => output?.status === "succeeded" && output.asset)?.asset;
 }
 
 function successfulOutputCount(record: GenerationRecord): number {
-  return record.outputs.filter((output) => output.status === "succeeded" && output.asset).length;
+  return record.outputs.filter((output) => output?.status === "succeeded" && output.asset).length;
 }
 
 function recordOutputUnitLabel(record: GenerationRecord): string {
@@ -1516,7 +1516,11 @@ function recordOutputUnitLabel(record: GenerationRecord): string {
 }
 
 function cloudFailureCount(record: GenerationRecord): number {
-  return record.outputs.filter((output) => output.asset?.cloud?.status === "failed").length;
+  return record.outputs.filter((output) => output?.asset?.cloud?.status === "failed").length;
+}
+
+function outputSlotCount(record: GenerationRecord): number {
+  return Math.max(record.count, record.outputs.length);
 }
 
 function GeneratedAssetPreview({
@@ -1546,7 +1550,7 @@ function GeneratedAssetPreview({
 }
 
 function firstCloudFailureMessage(record: GenerationRecord): string | undefined {
-  return record.outputs.find((output) => output.asset?.cloud?.status === "failed")?.asset?.cloud?.lastError;
+  return record.outputs.find((output) => output?.asset?.cloud?.status === "failed")?.asset?.cloud?.lastError;
 }
 
 function generationModeToRecordMode(mode: GenerationMode): GenerationRecord["mode"] {
@@ -1587,7 +1591,16 @@ function createEcommerceCombinedRecord(input: {
   count: number;
 }): GenerationRecord {
   const records = input.job.records;
-  const outputs = records.flatMap((record) => record.outputs);
+  const indexedOutputs: Array<GenerationRecord["outputs"][number] | undefined> = [];
+  let fallbackIndex = 0;
+  for (const record of records) {
+    const startIndex = ecommerceRecordStartIndex(record, fallbackIndex);
+    record.outputs.forEach((output, outputIndex) => {
+      indexedOutputs[startIndex + outputIndex] = output;
+    });
+    fallbackIndex += ecommerceOutputCount(record);
+  }
+  indexedOutputs.length = Math.max(input.count, indexedOutputs.length);
   const failedRecords = records.filter((record) => record.status === "failed").length;
   const status: GenerationStatus =
     input.job.status === "failed"
@@ -1611,7 +1624,53 @@ function createEcommerceCombinedRecord(input: {
     status,
     error: status === "failed" ? input.job.message : undefined,
     createdAt: input.job.createdAt,
-    outputs
+    outputs: indexedOutputs as GenerationRecord["outputs"]
+  };
+}
+
+function ecommerceRecordStartIndex(record: GenerationRecord, fallbackIndex: number): number {
+  return Number.isInteger(record.ecommerceBatchIndex) && record.ecommerceBatchIndex !== undefined
+    ? record.ecommerceBatchIndex
+    : fallbackIndex;
+}
+
+function ecommerceOutputCount(record: GenerationRecord): number {
+  return Math.max(1, record.outputs.length || record.count || 1);
+}
+
+function createEcommerceProgressRecord(input: {
+  job: EcommerceBatchGenerateResponse;
+  records: GenerationRecord[];
+  prompt: string;
+  size: ImageSize;
+  presetId: StylePresetId;
+  outputFormat: OutputFormat;
+}): GenerationRecord {
+  const indexedOutputs: Array<GenerationRecord["outputs"][number] | undefined> = [];
+  let fallbackIndex = 0;
+
+  for (const record of input.records) {
+    const startIndex = ecommerceRecordStartIndex(record, fallbackIndex);
+    record.outputs.forEach((output, outputIndex) => {
+      indexedOutputs[startIndex + outputIndex] = output;
+    });
+    fallbackIndex += ecommerceOutputCount(record);
+  }
+
+  return {
+    id: input.job.jobId,
+    mode: "edit",
+    prompt: input.prompt,
+    effectivePrompt: input.prompt,
+    presetId: input.presetId,
+    size: input.size,
+    quality: "auto",
+    outputFormat: input.outputFormat,
+    count: indexedOutputs.length,
+    status: input.job.status === "failed" ? "failed" : input.job.status === "partial" ? "partial" : "running",
+    error: input.job.status === "failed" ? input.job.message : undefined,
+    createdAt: input.job.createdAt,
+    outputs: indexedOutputs as GenerationRecord["outputs"]
   };
 }
 
@@ -2048,7 +2107,13 @@ function insertGalleryImageOnCanvas(editor: Editor, item: GalleryImageItem): TLS
   return insertGeneratedAssetOnCanvas(editor, item.asset, item.prompt);
 }
 
-function replaceGenerationPlaceholders(editor: Editor, placeholderSet: ActiveGenerationPlaceholders, record: GenerationRecord): number {
+function replaceGenerationPlaceholders(
+  editor: Editor,
+  placeholderSet: ActiveGenerationPlaceholders,
+  record: GenerationRecord,
+  options: { markMissingOutputsFailed?: boolean; skipMissingPlaceholders?: boolean } = {}
+): number {
+  const markMissingOutputsFailed = options.markMissingOutputsFailed ?? true;
   const assets: TLAsset[] = [];
   const queuedAssetIds = new Set<TLAssetId>();
   const mediaShapes: GeneratedMediaShape[] = [];
@@ -2057,9 +2122,17 @@ function replaceGenerationPlaceholders(editor: Editor, placeholderSet: ActiveGen
 
   placeholderSet.placements.forEach((placement, index) => {
     const output = record.outputs[index];
+    const existingPlaceholder = editor.getShape(placement.id);
+    const hasLivePlaceholder = isGenerationPlaceholderShape(existingPlaceholder);
+    if (!hasLivePlaceholder && options.skipMissingPlaceholders) {
+      return;
+    }
+    if (!output && !markMissingOutputsFailed) {
+      return;
+    }
     if (output?.status === "succeeded" && output.asset) {
       if (!isCanvasInsertableAsset(output.asset)) {
-        if (isGenerationPlaceholderShape(editor.getShape(placement.id))) {
+        if (hasLivePlaceholder) {
           failedUpdates.push({
             id: placement.id,
             type: GENERATION_PLACEHOLDER_TYPE,
@@ -2079,13 +2152,13 @@ function replaceGenerationPlaceholders(editor: Editor, placeholderSet: ActiveGen
         assets.push(createMediaAsset(output.asset));
       }
       mediaShapes.push(createMediaShape(output.asset, resolvedPlacement, record.prompt));
-      if (isGenerationPlaceholderShape(editor.getShape(placement.id))) {
+      if (hasLivePlaceholder) {
         replacedPlaceholderIds.push(placement.id);
       }
       return;
     }
 
-    if (isGenerationPlaceholderShape(editor.getShape(placement.id))) {
+    if (hasLivePlaceholder) {
       failedUpdates.push({
         id: placement.id,
         type: GENERATION_PLACEHOLDER_TYPE,
@@ -2120,11 +2193,15 @@ function replaceGenerationPlaceholders(editor: Editor, placeholderSet: ActiveGen
 }
 
 function generatedAssetsForRecord(record: GenerationRecord): GeneratedAsset[] {
-  return record.outputs.flatMap((output) => (output.status === "succeeded" && output.asset ? [output.asset] : []));
+  return record.outputs.flatMap((output) => (output?.status === "succeeded" && output.asset ? [output.asset] : []));
 }
 
 async function preloadGenerationRecordPreviews(record: GenerationRecord, signal: AbortSignal): Promise<void> {
-  await Promise.all(generatedAssetsForRecord(record).map((asset) => preloadGeneratedAssetPreview(asset, signal)));
+  await preloadGeneratedAssetPreviews(generatedAssetsForRecord(record), signal);
+}
+
+async function preloadGeneratedAssetPreviews(assets: GeneratedAsset[], signal: AbortSignal): Promise<void> {
+  await Promise.allSettled(assets.map((asset) => preloadGeneratedAssetPreview(asset, signal)));
 }
 
 async function preloadGeneratedAssetPreview(asset: GeneratedAsset, signal: AbortSignal): Promise<void> {
@@ -2637,7 +2714,7 @@ function previewWidthForAssetContext(asset: Extract<TLAsset, { type: "image" }>,
 
 function findCanvasImageShape(editor: Editor, record: GenerationRecord): TLShapeId | undefined {
   const assetIds = new Set(
-    record.outputs.flatMap((output) => (output.status === "succeeded" && output.asset ? [output.asset.id] : []))
+    record.outputs.flatMap((output) => (output?.status === "succeeded" && output.asset ? [output.asset.id] : []))
   );
   if (assetIds.size === 0) {
     return undefined;
@@ -4605,7 +4682,7 @@ function MobileWorkbench({
                         {asset ? <GeneratedAssetPreview alt={record.prompt} asset={asset} /> : <div className="grid place-items-center bg-neutral-100"><Loader2 className={record.status === "running" ? "size-5 animate-spin" : "size-5"} aria-hidden="true" /></div>}
                         <span className="grid content-center gap-1">
                           <strong className="truncate text-sm">{promptExcerpt(record.prompt)}</strong>
-                          <small className="text-xs font-semibold text-neutral-500">{statusLabels[record.status]} · {successfulOutputCount(record)} / {record.outputs.length || record.count} {recordOutputUnitLabel(record)} · {formatCreatedTime(record.createdAt)}</small>
+                          <small className="text-xs font-semibold text-neutral-500">{statusLabels[record.status]} · {successfulOutputCount(record)} / {outputSlotCount(record)} {recordOutputUnitLabel(record)} · {formatCreatedTime(record.createdAt)}</small>
                         </span>
                       </button>
                     );
@@ -7519,7 +7596,11 @@ export function App() {
     );
   }
 
-  async function pollEcommerceJob(jobId: string, signal: AbortSignal): Promise<EcommerceBatchGenerateResponse> {
+  async function pollEcommerceJob(
+    jobId: string,
+    signal: AbortSignal,
+    onProgress?: (job: EcommerceBatchGenerateResponse) => Promise<void> | void
+  ): Promise<EcommerceBatchGenerateResponse> {
     for (;;) {
       if (signal.aborted) {
         throw new DOMException("Ecommerce generation was aborted.", "AbortError");
@@ -7529,11 +7610,12 @@ export function App() {
         throw new Error(await readErrorMessage(response));
       }
       const body = (await response.json()) as EcommerceBatchGenerateResponse;
+      await onProgress?.(body);
       if (body.status === "succeeded" || body.status === "partial" || body.status === "failed") {
         return body;
       }
       setGenerationMessage(body.message || `电商任务生成中：${body.completedScenes}/${body.totalScenes}`);
-      await new Promise((resolve) => window.setTimeout(resolve, 1400));
+      await new Promise((resolve) => window.setTimeout(resolve, 900));
     }
   }
 
@@ -7850,7 +7932,7 @@ export function App() {
         const completedJob = await pollEcommerceJob(createdJob.jobId, controller.signal);
         await Promise.all(
           completedJob.records.flatMap((record) =>
-            record.outputs.flatMap((output) => (output.asset ? [preloadGeneratedAssetPreview(output.asset, controller.signal)] : []))
+            record.outputs.flatMap((output) => (output?.asset ? [preloadGeneratedAssetPreview(output.asset, controller.signal)] : []))
           )
         );
         const succeededCount = completedJob.records.reduce((total, record) => total + successfulOutputCount(record), 0);
@@ -7902,11 +7984,55 @@ export function App() {
       const placeholderCount = ecommerceMode === "category-kit" ? Math.max(1, createdJob.totalScenes || totalOutputs) : totalOutputs;
       placeholderSet = createEcommerceBatchPlaceholders(editor, placeholderCount, selectedSize, requestId);
       setGenerationMessage(createdJob.message || "电商批量任务已创建。");
-      const completedJob = await pollEcommerceJob(createdJob.jobId, controller.signal);
+      const totalProgressUnits = Math.max(1, placeholderCount);
+      let syncedOutputCount = 0;
+      const insertedRecordIds = new Set<string>();
+      const ecommercePrompt = `${ecommerceModeLabels[ecommerceMode]}：${title || "移动端快捷生成"}`;
+      const syncEcommerceCanvasProgress = async (job: EcommerceBatchGenerateResponse): Promise<void> => {
+      if (!placeholderSet || controller.signal.aborted) {
+        return;
+      }
+
+        const freshRecords = job.records.filter((record) => record.outputs.length > 0 && !insertedRecordIds.has(record.id));
+        if (freshRecords.length === 0) {
+          return;
+        }
+
+        const progressRecord = createEcommerceProgressRecord({
+          job,
+          records: freshRecords,
+          prompt: ecommercePrompt,
+          size: {
+            width: selectedSize.width,
+            height: selectedSize.height
+          },
+          presetId: ecommercePresetId,
+          outputFormat: "png"
+        });
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        const changedCount = replaceGenerationPlaceholders(editor, placeholderSet, progressRecord, {
+          markMissingOutputsFailed: false,
+          skipMissingPlaceholders: true
+        });
+        void preloadGeneratedAssetPreviews(generatedAssetsForRecord(progressRecord), controller.signal);
+        if (changedCount > 0 || freshRecords.some((record) => record.status === "failed")) {
+          freshRecords.forEach((record) => insertedRecordIds.add(record.id));
+          syncedOutputCount += freshRecords.reduce((total, record) => total + ecommerceOutputCount(record), 0);
+          setGenerationMessage(
+            job.status === "running"
+              ? `已更新 ${Math.min(syncedOutputCount, totalProgressUnits)}/${totalProgressUnits} 张电商图到画布，剩余图片继续生成中。`
+              : job.message
+          );
+        }
+      };
+      const completedJob = await pollEcommerceJob(createdJob.jobId, controller.signal, syncEcommerceCanvasProgress);
       const finalOutputCount = ecommerceMode === "category-kit" ? Math.max(1, completedJob.totalScenes || completedJob.records.length) : placeholderCount;
       const combinedRecord = createEcommerceCombinedRecord({
         job: completedJob,
-        prompt: `${ecommerceModeLabels[ecommerceMode]}：${title || "移动端快捷生成"}`,
+        prompt: ecommercePrompt,
         size: {
           width: selectedSize.width,
           height: selectedSize.height
@@ -7921,19 +8047,24 @@ export function App() {
 	      if (ecommerceMode === "category-kit" && finalOutputCount < placeholderSet.placements.length) {
 	        placeholderSet = trimGenerationPlaceholders(editor, placeholderSet, finalOutputCount);
 	      }
-	      await Promise.all(combinedRecord.outputs.flatMap((output) => (output.asset ? [preloadGeneratedAssetPreview(output.asset, controller.signal)] : [])));
-      const insertedCount = replaceGenerationPlaceholders(editor, placeholderSet, combinedRecord);
-      const failedCount = Math.max(0, finalOutputCount - insertedCount);
+      const finalInsertedCount = replaceGenerationPlaceholders(editor, placeholderSet, combinedRecord, {
+        skipMissingPlaceholders: true
+      });
+	      void preloadGeneratedAssetPreviews(generatedAssetsForRecord(combinedRecord), controller.signal);
+      const succeededCount = successfulOutputCount(combinedRecord);
+      const failedCount = Math.max(0, finalOutputCount - succeededCount);
       setGenerationHistory((history) => [
         ...completedJob.records,
         ...history.filter((record) => !completedJob.records.some((item) => item.id === record.id))
       ].slice(0, 20));
-      if (insertedCount > 0) {
+      if (succeededCount > 0) {
         setGenerationMessage(
           failedCount > 0
-            ? `已生成并插入 ${insertedCount} 张电商图，${failedCount} 张失败。`
-            : `已生成并插入 ${insertedCount} 张电商图。`
+            ? `已生成并插入 ${succeededCount} 张电商图，${failedCount} 张失败。`
+            : `已生成并插入 ${succeededCount} 张电商图。`
         );
+      } else if (finalInsertedCount > 0) {
+        setGenerationMessage(`已生成并插入 ${finalInsertedCount} 张电商图。`);
       } else {
         setGenerationError(completedJob.message || "电商生成未返回可插入图片。");
       }
@@ -8027,13 +8158,13 @@ export function App() {
         throw new Error("生成服务返回了无法识别的结果。");
       }
 
-      await preloadGenerationRecordPreviews(body.record, controller.signal);
       const succeededCount = successfulOutputCount(body.record);
-      const failedCount = body.record.outputs.filter((output) => output.status === "failed").length;
+      const failedCount = body.record.outputs.filter((output) => output?.status === "failed").length;
       setGenerationHistory((history) =>
         [body.record, ...history.filter((record) => record.id !== temporaryRecord.id && record.id !== body.record.id)].slice(0, 20)
       );
       setMobileSelectedRecordId(body.record.id);
+      void preloadGenerationRecordPreviews(body.record, controller.signal);
 
       if (succeededCount > 0) {
         setGenerationMessage(
@@ -8154,7 +8285,6 @@ export function App() {
         return;
       }
 
-      await preloadGenerationRecordPreviews(body.record, controller.signal);
       if (controller.signal.aborted || !activeGenerationsRef.current.has(requestId)) {
         return;
       }
@@ -8163,8 +8293,9 @@ export function App() {
         [body.record, ...history.filter((record) => record.id !== temporaryRecord.id && record.id !== body.record.id)].slice(0, 20)
       );
       const insertedCount = replaceGenerationPlaceholders(editor, placeholderSet, body.record);
+      void preloadGenerationRecordPreviews(body.record, controller.signal);
       const failedCount =
-        body.record.outputs.filter((output) => output.status === "failed").length +
+        body.record.outputs.filter((output) => output?.status === "failed").length +
         Math.max(0, placeholderSet.placements.length - body.record.outputs.length);
       const cloudFailedCount = cloudFailureCount(body.record);
       if (insertedCount > 0) {
@@ -8564,7 +8695,7 @@ export function App() {
   function removeGalleryOutputFromHistory(outputId: string): void {
     setGenerationHistory((history) =>
       history.flatMap((record) => {
-        const nextOutputs = record.outputs.filter((output) => output.id !== outputId);
+        const nextOutputs = record.outputs.filter((output) => output?.id !== outputId);
         if (nextOutputs.length === record.outputs.length) {
           return [record];
         }
@@ -9954,7 +10085,7 @@ export function App() {
                 {visibleHistory.map((record) => {
                   const downloadableAsset = firstDownloadableAsset(record);
                   const excerpt = promptExcerpt(record.prompt);
-                  const totalOutputs = record.outputs.length || record.count;
+                  const totalOutputs = outputSlotCount(record);
                   const activeTask = Array.from(activeGenerationsRef.current.values()).find((task) => task.temporaryRecordId === record.id);
                   const isRecordRunning = record.status === "running" && Boolean(activeTask);
                   const cloudFailedCount = cloudFailureCount(record);

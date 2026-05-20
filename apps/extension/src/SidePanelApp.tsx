@@ -83,6 +83,7 @@ const TEXT_TRANSLATION_IMAGE_READ_TIMEOUT_MS = 60_000;
 const TEXT_TRANSLATION_SUBMIT_TIMEOUT_MS = 90_000;
 const PHONE_VERIFICATION_REQUIRED_CODE = "phone_verification_required";
 const PHONE_VERIFICATION_REQUIRED_MESSAGE = "为了更好提供服务，请完善手机号。";
+const BATCH_JOB_POLLING_INTERVAL_MS = 1000;
 const IMAGE_HOVER_PREVIEW_SIZE = 280;
 const IMAGE_HOVER_PREVIEW_GAP = 14;
 const MOCK_BILLING_PLANS: BillingPlan[] = [
@@ -2022,7 +2023,7 @@ export function SidePanelApp() {
           }));
         }
       });
-    }, 3000);
+    }, BATCH_JOB_POLLING_INTERVAL_MS);
 
     return () => {
       cancelled = true;

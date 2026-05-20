@@ -923,6 +923,7 @@ export interface GenerationRecord {
   modelDisplayName?: string;
   referenceAssetId?: string;
   referenceMaskDataUrl?: string;
+  ecommerceBatchIndex?: number;
   createdAt: string;
   outputs: GenerationOutput[];
 }
