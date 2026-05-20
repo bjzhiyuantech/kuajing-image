@@ -1,13 +1,44 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { copyFile, mkdir, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, copyFile, cp, mkdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const VALID_PROFILES = new Set(["local", "private-cloud", "saas"]);
 const DEFAULT_OUTPUT_ROOT = "dist/deployment";
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const SOURCE_BUNDLE_PATHS = [
+  ".dockerignore",
+  "package.json",
+  "pnpm-lock.yaml",
+  "pnpm-workspace.yaml",
+  "tsconfig.base.json",
+  "apps/api/package.json",
+  "apps/api/tsconfig.json",
+  "apps/api/drizzle.config.ts",
+  "apps/api/src",
+  "apps/extension/index.html",
+  "apps/extension/manifest.json",
+  "apps/extension/package.json",
+  "apps/extension/public",
+  "apps/extension/scripts",
+  "apps/extension/src",
+  "apps/extension/tsconfig.json",
+  "apps/extension/vite.config.ts",
+  "apps/web/index.html",
+  "apps/web/install-help.html",
+  "apps/web/package.json",
+  "apps/web/postcss.config.cjs",
+  "apps/web/public",
+  "apps/web/src",
+  "apps/web/tailwind.config.ts",
+  "apps/web/tsconfig.json",
+  "apps/web/vite.config.ts",
+  "packages/shared/package.json",
+  "packages/shared/src",
+  "packages/shared/tsconfig.json"
+];
 
 const PROFILE_CONFIG = {
   local: {
@@ -156,6 +187,19 @@ async function copyIntoBundle(outputRoot, profile, sourceRelativePath, targetRel
   return targetRelativePath;
 }
 
+async function copySourceIntoBundle(outputRoot, profile, sourceRelativePath) {
+  const source = repoPath(sourceRelativePath);
+  await ensurePath(source, sourceRelativePath);
+  const target = outputPath(outputRoot, profile, sourceRelativePath);
+  await mkdir(path.dirname(target), { recursive: true });
+  await cp(source, target, {
+    recursive: true,
+    force: true,
+    filter: (item) => !isIgnoredSourcePath(item)
+  });
+  return sourceRelativePath;
+}
+
 async function ensureFile(absolutePath, label) {
   try {
     const fileStat = await stat(absolutePath);
@@ -170,6 +214,77 @@ async function ensureFile(absolutePath, label) {
   }
 }
 
+async function ensurePath(absolutePath, label) {
+  try {
+    await stat(absolutePath);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      throw new Error(`Required path not found: ${label}`);
+    }
+    throw error;
+  }
+}
+
+function isIgnoredSourcePath(item) {
+  const relative = path.relative(REPO_ROOT, item).replace(/\\/gu, "/");
+  return (
+    relative === ".git" ||
+    relative === "node_modules" ||
+    relative === "dist" ||
+    relative === "build" ||
+    relative.endsWith("/node_modules") ||
+    relative.endsWith("/dist") ||
+    relative.endsWith("/build")
+  );
+}
+
+function shellScript(profile, command) {
+  if (command === "smoke") {
+    return `#!/usr/bin/env sh
+set -eu
+cd "$(dirname "$0")"
+
+if [ ! -f ".env" ] && [ -f ".env.example" ]; then
+  cp .env.example .env
+  echo "Created .env from .env.example. Review it before using this environment."
+fi
+
+PORT_VALUE="\${PORT:-8787}"
+BASE_URL_VALUE="\${BASE_URL:-http://127.0.0.1:\${PORT_VALUE}}"
+node scripts/post-deploy-smoke.mjs --profile ${profile} --base-url "\${BASE_URL_VALUE}" "$@"
+`;
+  }
+
+  return `#!/usr/bin/env sh
+set -eu
+cd "$(dirname "$0")"
+
+if [ ! -f ".env" ] && [ -f ".env.example" ]; then
+  cp .env.example .env
+  echo "Created .env from .env.example. Review it before using this environment."
+fi
+
+node scripts/deployment-rollout.mjs ${command} --profile ${profile} --env-file "\${ENV_FILE:-.env}" "$@"
+`;
+}
+
+async function writeHelperScripts(outputRoot, profile) {
+  const scripts = [
+    ["install.sh", shellScript(profile, "install")],
+    ["upgrade.sh", shellScript(profile, "upgrade")],
+    ["status.sh", shellScript(profile, "status")],
+    ["smoke.sh", shellScript(profile, "smoke")]
+  ];
+  const written = [];
+  for (const [fileName, content] of scripts) {
+    const target = outputPath(outputRoot, profile, fileName);
+    await writeFile(target, content, "utf8");
+    await chmod(target, 0o755);
+    written.push(fileName);
+  }
+  return written;
+}
+
 function bundleReadme(profile, config, copiedFiles) {
   return `# ${config.title}
 
@@ -178,6 +293,23 @@ This directory is a generated deployment starter bundle for \`${profile}\`.
 ## Included Files
 
 ${copiedFiles.map((file) => `- \`${file}\``).join("\n")}
+
+## Quick Commands
+
+\`\`\`bash
+cp .env.example .env
+./install.sh
+./status.sh
+./smoke.sh
+./upgrade.sh
+\`\`\`
+
+For offline installs, place the image archive next to this directory and run:
+
+\`\`\`bash
+node scripts/deployment-images.mjs load --archive ${profile}-images.tar
+./install.sh --offline --no-build --skip-smoke
+\`\`\`
 
 ## Next Steps
 
@@ -257,6 +389,9 @@ async function main() {
   const copiedFiles = [];
   copiedFiles.push(await copyIntoBundle(outputRoot, profile, config.env, ".env.example"));
   copiedFiles.push(await copyIntoBundle(outputRoot, profile, "Dockerfile"));
+  for (const sourcePath of SOURCE_BUNDLE_PATHS) {
+    copiedFiles.push(await copySourceIntoBundle(outputRoot, profile, sourcePath));
+  }
   copiedFiles.push(await copyIntoBundle(outputRoot, profile, "scripts/check-deployment-profile.mjs"));
   copiedFiles.push(await copyIntoBundle(outputRoot, profile, "docs/deployment-modes-task-breakdown.md"));
 
@@ -272,6 +407,7 @@ async function main() {
     copiedFiles.push(await writeGeneratedFile(outputRoot, profile, generatedFile));
   }
 
+  copiedFiles.push(...(await writeHelperScripts(outputRoot, profile)));
   const readmePath = outputPath(outputRoot, profile, "README.md");
   await writeFile(readmePath, bundleReadme(profile, config, copiedFiles), "utf8");
   copiedFiles.push("README.md");

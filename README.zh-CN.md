@@ -209,6 +209,16 @@ corepack pnpm deployment:bundle -- --profile private-cloud --clean --archive
 corepack pnpm deployment:bundle -- --profile saas --clean --archive
 ```
 
+交付包位于 `dist/deployment/<profile>/`，归档文件位于 `dist/deployment/<profile>.tar.gz`。包内包含 Docker 构建所需源码、`Dockerfile`、Compose 文件、`.env.example`、部署脚本和快捷入口：
+
+```sh
+cp .env.example .env
+./install.sh
+./status.sh
+./smoke.sh
+./upgrade.sh
+```
+
 生成离线镜像包：
 
 ```sh
@@ -221,7 +231,7 @@ corepack pnpm deployment:images -- save --profile saas
 
 ```sh
 node scripts/deployment-images.mjs load --archive dist/deployment-images/local-images.tar
-node scripts/deployment-rollout.mjs install --profile local --env-file .env --offline
+./install.sh --offline --no-build --skip-smoke
 ```
 
 联网安装或升级可直接运行：

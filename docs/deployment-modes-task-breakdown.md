@@ -34,7 +34,7 @@
 - 发布后 smoke test：`node scripts/post-deploy-smoke.mjs --profile <local|private-cloud|saas> --base-url <API_BASE_URL>`。
 - 离线镜像包：`corepack pnpm deployment:images -- save --profile <local|private-cloud|saas>`，输出到 `dist/deployment-images/<profile>-images.tar`。
 - 安装/升级/回滚编排：`corepack pnpm deployment:rollout -- <install|upgrade|rollback|status> --profile <local|private-cloud|saas>`。
-- 交付包骨架：`corepack pnpm deployment:bundle -- --profile <local|private-cloud|saas> --clean --archive`，输出到 `dist/deployment/<profile>/` 和 `<profile>.tar.gz`。
+- 交付包：`corepack pnpm deployment:bundle -- --profile <local|private-cloud|saas> --clean --archive`，输出到 `dist/deployment/<profile>/` 和 `<profile>.tar.gz`，包内包含 Docker 构建源码、Compose、`.env.example`、部署脚本和 `install.sh`/`upgrade.sh`/`status.sh`/`smoke.sh` 快捷入口。
 
 ## 任务流 B：私有化部署版
 
@@ -58,7 +58,7 @@
 - 备份恢复骨架：`corepack pnpm deployment:backup -- backup --env-file .env`。
 - 离线镜像包生成：`corepack pnpm deployment:images -- save --profile private-cloud`。
 - 私有化升级：`corepack pnpm deployment:rollout -- upgrade --profile private-cloud --env-file .env`。
-- 交付包骨架生成：`corepack pnpm deployment:bundle -- --profile private-cloud --clean --archive`。
+- 交付包生成：`corepack pnpm deployment:bundle -- --profile private-cloud --clean --archive`，解压后可 `cp .env.example .env && ./install.sh` 在线构建安装，或加载镜像 tar 后 `./install.sh --offline --no-build --skip-smoke`。
 - 安装后运行：`node scripts/check-deployment-profile.mjs --profile private-cloud --base-url http://<server-host>:8787`。
 - 发布后运行：`node scripts/post-deploy-smoke.mjs --profile private-cloud --base-url http://<server-host>:8787`。
 
@@ -82,7 +82,7 @@
 - 数据备份：`corepack pnpm deployment:backup -- backup --env-file .env`。
 - 镜像包生成：`corepack pnpm deployment:images -- save --profile saas`。
 - 单容器 SaaS 编排：`corepack pnpm deployment:rollout -- upgrade --profile saas --env-file .env`；正式蓝绿仍优先使用 `scripts/server-release.sh`。
-- 交付包骨架生成：`corepack pnpm deployment:bundle -- --profile saas --clean --archive`。
+- 交付包生成：`corepack pnpm deployment:bundle -- --profile saas --clean --archive`。SaaS 正式蓝绿仍优先走 `scripts/server-release.sh`，单节点/蓝绿演练包可用生成目录内快捷脚本验收。
 - 发布后 smoke test：`API_BASE_URL=https://<saas-domain> node scripts/post-deploy-smoke.mjs --profile saas`。
 
 ## 任务流 D：单机版
@@ -108,7 +108,7 @@
 - 本地数据备份：`corepack pnpm deployment:backup -- backup --env-file .env --skip-mysql`。
 - 本地离线镜像包：`corepack pnpm deployment:images -- save --profile local`。
 - 本地安装/升级：`corepack pnpm deployment:rollout -- install --profile local --env-file .env` / `corepack pnpm deployment:rollout -- upgrade --profile local --env-file .env`。
-- 交付包骨架生成：`corepack pnpm deployment:bundle -- --profile local --clean --archive`。
+- 交付包生成：`corepack pnpm deployment:bundle -- --profile local --clean --archive`，解压后可 `cp .env.example .env && ./install.sh` 在线构建安装，或加载镜像 tar 后 `./install.sh --offline --no-build --skip-smoke`。
 - 本地启动后运行：`node scripts/check-deployment-profile.mjs --profile local --base-url http://127.0.0.1:8787`。
 - 本地发布后运行：`node scripts/post-deploy-smoke.mjs --profile local --base-url http://127.0.0.1:8787`。
 
