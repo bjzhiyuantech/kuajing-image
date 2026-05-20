@@ -7632,6 +7632,10 @@ export function App() {
     if (isEcommerceGenerating || isCategoryKitPlanning) {
       return;
     }
+    if ((ecommerceMode === "category-kit" || ecommerceMode === "single-poster") && !canUseCategoryKit) {
+      setGenerationError("当前部署版本未开启品类套图能力。");
+      return;
+    }
 	    const title = ecommerceTitle.trim();
 	    const selectedSize = SIZE_PRESETS.find((item) => item.id === ecommerceSizePresetId) ?? SIZE_PRESETS[0];
 	    const outputCountPerScene = ecommerceMode === "single-poster" || ecommerceMode === "category-kit" || ecommerceMode === "one-click-replace" || ecommerceMode === "text-translation" ? 1 : ecommerceCount;

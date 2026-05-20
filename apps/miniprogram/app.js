@@ -17,6 +17,8 @@ function notificationApi() {
 App({
   globalData: {
     apiBaseUrl: resolveDefaultApiBaseUrl(),
+    deploymentProfile: null,
+    deploymentProfilePromise: null,
     notificationTimer: null,
     seenNotificationIds: [],
     token: "",

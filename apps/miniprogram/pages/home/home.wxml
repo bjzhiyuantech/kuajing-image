@@ -89,7 +89,7 @@
     </view>
   </view>
 
-  <view class="section-block">
+  <view wx:if="{{canUsePublicGallery}}" class="section-block">
     <view class="section-head">
       <view class="section-title">公开作品</view>
       <view class="section-more" bindtap="goPublicGallery">查看更多</view>
