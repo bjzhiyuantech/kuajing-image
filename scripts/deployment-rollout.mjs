@@ -30,7 +30,10 @@ const HELP = `Usage:
   node scripts/deployment-rollout.mjs install --profile <local|private-cloud|saas> [--env-file <path>] [--image-archive <path>] [--offline]
   node scripts/deployment-rollout.mjs upgrade --profile <local|private-cloud|saas> [--env-file <path>] [--image-archive <path>] [--offline]
   node scripts/deployment-rollout.mjs rollback --profile <local|private-cloud|saas> --backup-dir <dir> [--env-file <path>]
+  node scripts/deployment-rollout.mjs start --profile <local|private-cloud|saas> [--env-file <path>]
+  node scripts/deployment-rollout.mjs stop --profile <local|private-cloud|saas> [--env-file <path>]
   node scripts/deployment-rollout.mjs status --profile <local|private-cloud|saas> [--env-file <path>]
+  node scripts/deployment-rollout.mjs logs --profile <local|private-cloud|saas> [--env-file <path>] [--tail <lines>] [--no-follow]
 
 Options:
   --profile, --edition <profile>  Deployment profile.
@@ -44,6 +47,8 @@ Options:
   --backup-output-dir <dir>       Backup root for upgrade. Defaults to backups.
   --base-url <url>                Base URL for post-deploy smoke.
   --skip-smoke                    Skip post-deploy smoke.
+  --tail <lines>                  Log line count for logs. Defaults to 200.
+  --no-follow                     Print logs once instead of following.
   --dry-run                       Print commands without executing them.
   --help, -h                      Show this help.
 
@@ -67,7 +72,9 @@ function parseArgs(argv) {
     noBuild: false,
     skipBackup: false,
     skipSmoke: false,
-    dryRun: false
+    dryRun: false,
+    followLogs: true,
+    logTail: 200
   };
 
   for (let index = 0; index < rest.length; index += 1) {
@@ -95,6 +102,10 @@ function parseArgs(argv) {
     }
     if (arg === "--dry-run") {
       options.dryRun = true;
+      continue;
+    }
+    if (arg === "--no-follow") {
+      options.followLogs = false;
       continue;
     }
     if (arg.startsWith("--profile=") || arg.startsWith("--edition=")) {
@@ -160,9 +171,26 @@ function parseArgs(argv) {
       index += 1;
       continue;
     }
+    if (arg.startsWith("--tail=")) {
+      options.logTail = parsePositiveInteger(arg.slice("--tail=".length), "--tail");
+      continue;
+    }
+    if (arg === "--tail") {
+      options.logTail = parsePositiveInteger(readNextValue(rest, index, arg), "--tail");
+      index += 1;
+      continue;
+    }
     throw new Error(`Unknown argument: ${arg}`);
   }
   return options;
+}
+
+function parsePositiveInteger(value, optionName) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`Invalid ${optionName}: ${value}`);
+  }
+  return parsed;
 }
 
 function readNextValue(argv, index, optionName) {
@@ -297,6 +325,16 @@ async function status(options, resolved) {
   run("docker", composeArgs(resolved.composeFiles, resolved.envFile, "ps"), options);
 }
 
+async function stop(options, resolved) {
+  run("docker", composeArgs(resolved.composeFiles, resolved.envFile, "down"), options);
+}
+
+async function logs(options, resolved) {
+  const args = ["--tail", String(options.logTail)];
+  if (options.followLogs) args.push("-f");
+  run("docker", composeArgs(resolved.composeFiles, resolved.envFile, "logs", args), options);
+}
+
 async function install(options, resolved) {
   await preflight(options, resolved);
   await loadImages(options);
@@ -320,6 +358,11 @@ async function rollback(options, resolved) {
   await smoke(options, resolved);
 }
 
+async function start(options, resolved) {
+  await composeUp({ ...options, noBuild: true }, resolved);
+  await smoke(options, resolved);
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help || !options.command) {
@@ -339,8 +382,20 @@ async function main() {
     await rollback(options, resolved);
     return;
   }
+  if (options.command === "start") {
+    await start(options, resolved);
+    return;
+  }
+  if (options.command === "stop") {
+    await stop(options, resolved);
+    return;
+  }
   if (options.command === "status") {
     await status(options, resolved);
+    return;
+  }
+  if (options.command === "logs") {
+    await logs(options, resolved);
     return;
   }
   throw new Error(`Unknown command: ${options.command}`);

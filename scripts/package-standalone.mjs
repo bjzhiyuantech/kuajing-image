@@ -249,7 +249,10 @@ function standaloneReadme(withImages) {
 \`\`\`bash
 cp .env.example .env
 ./install.sh
+./start.sh
 ./smoke.sh
+./logs.sh --no-follow
+./stop.sh
 \`\`\`
 
 ## Windows PowerShell
@@ -257,7 +260,10 @@ cp .env.example .env
 \`\`\`powershell
 Copy-Item .env.example .env
 .\\install.ps1
+.\\start.ps1
 .\\smoke.ps1
+.\\logs.ps1 --no-follow
+.\\stop.ps1
 \`\`\`
 
 ## 离线安装

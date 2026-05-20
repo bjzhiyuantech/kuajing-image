@@ -325,13 +325,19 @@ async function writeHelperScripts(outputRoot, profile) {
   const scripts = [
     ["install.sh", shellScript(profile, "install")],
     ["upgrade.sh", shellScript(profile, "upgrade")],
+    ["start.sh", shellScript(profile, "start")],
+    ["stop.sh", shellScript(profile, "stop")],
     ["status.sh", shellScript(profile, "status")],
+    ["logs.sh", shellScript(profile, "logs")],
     ["backup.sh", shellScript(profile, "backup")],
     ["rollback.sh", shellScript(profile, "rollback")],
     ["smoke.sh", shellScript(profile, "smoke")],
     ["install.ps1", powershellScript(profile, "install")],
     ["upgrade.ps1", powershellScript(profile, "upgrade")],
+    ["start.ps1", powershellScript(profile, "start")],
+    ["stop.ps1", powershellScript(profile, "stop")],
     ["status.ps1", powershellScript(profile, "status")],
+    ["logs.ps1", powershellScript(profile, "logs")],
     ["backup.ps1", powershellScript(profile, "backup")],
     ["rollback.ps1", powershellScript(profile, "rollback")],
     ["smoke.ps1", powershellScript(profile, "smoke")]
@@ -362,8 +368,11 @@ ${copiedFiles.map((file) => `- \`${file}\``).join("\n")}
 \`\`\`bash
 cp .env.example .env
 ./install.sh
+./start.sh
 ./status.sh
+./logs.sh --no-follow
 ./smoke.sh
+./stop.sh
 ./upgrade.sh
 ./backup.sh
 ./rollback.sh --backup-dir backups/<timestamp>
@@ -374,8 +383,11 @@ Windows PowerShell:
 \`\`\`powershell
 Copy-Item .env.example .env
 .\\install.ps1
+.\\start.ps1
 .\\status.ps1
+.\\logs.ps1 --no-follow
 .\\smoke.ps1
+.\\stop.ps1
 .\\upgrade.ps1
 .\\backup.ps1
 .\\rollback.ps1 --backup-dir backups/<timestamp>

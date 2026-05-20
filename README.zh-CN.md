@@ -214,8 +214,11 @@ corepack pnpm deployment:bundle -- --profile saas --clean --archive
 ```sh
 cp .env.example .env
 ./install.sh
+./start.sh
 ./status.sh
+./logs.sh --no-follow
 ./smoke.sh
+./stop.sh
 ./upgrade.sh
 ```
 
