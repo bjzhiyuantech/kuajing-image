@@ -1,5 +1,6 @@
 services:
   app-blue:
+    image: ${APP_BLUE_IMAGE:-kuajing-image/app:blue}
     build:
       context: .
       dockerfile: Dockerfile
@@ -43,6 +44,7 @@ services:
       start_period: 20s
 
   app-green:
+    image: ${APP_GREEN_IMAGE:-kuajing-image/app:green}
     build:
       context: .
       dockerfile: Dockerfile

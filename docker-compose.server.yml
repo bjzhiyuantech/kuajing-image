@@ -1,5 +1,6 @@
 services:
   app:
+    image: ${APP_IMAGE:-kuajing-image/app:saas}
     build:
       context: .
       dockerfile: Dockerfile

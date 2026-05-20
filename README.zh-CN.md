@@ -193,6 +193,57 @@ NODE_IMAGE=public.ecr.aws/docker/library/node:22-bookworm-slim docker compose up
 
 `OPENAI_API_KEY` 可以在本地启动检查时留空。应用仍会启动，生成端点会返回缺少 key 的 JSON 错误，直到配置凭证为止。
 
+## 交付包、离线镜像与升级
+
+三种交付形态共用一套部署脚本：
+
+- `local`：单机版，默认本机 Docker Compose。
+- `private-cloud`：客户私有化部署版，默认 app + MySQL Compose。
+- `saas`：官方 SaaS 版，默认保留现有蓝绿发布脚本，也可用通用脚本做单节点演练。
+
+生成交付包骨架：
+
+```sh
+corepack pnpm deployment:bundle -- --profile local --clean --archive
+corepack pnpm deployment:bundle -- --profile private-cloud --clean --archive
+corepack pnpm deployment:bundle -- --profile saas --clean --archive
+```
+
+生成离线镜像包：
+
+```sh
+corepack pnpm deployment:images -- save --profile local
+corepack pnpm deployment:images -- save --profile private-cloud
+corepack pnpm deployment:images -- save --profile saas
+```
+
+在离线机器上先加载镜像，再执行安装：
+
+```sh
+node scripts/deployment-images.mjs load --archive dist/deployment-images/local-images.tar
+node scripts/deployment-rollout.mjs install --profile local --env-file .env --offline
+```
+
+联网安装或升级可直接运行：
+
+```sh
+node scripts/deployment-rollout.mjs install --profile private-cloud --env-file .env
+node scripts/deployment-rollout.mjs upgrade --profile private-cloud --env-file .env
+```
+
+`upgrade` 会先执行 `deployment-backup`，复制 `.env` 快照、`data/`、`downloads/`，并在检测到 Compose 中的 `mysql` 服务时导出 `mysql.sql`。如需回滚：
+
+```sh
+node scripts/deployment-rollout.mjs rollback --profile private-cloud --env-file .env --backup-dir backups/20260520-120000
+```
+
+安装前检查和发布后检查可单独运行：
+
+```sh
+corepack pnpm deployment:preflight -- --profile private-cloud --env-file .env
+corepack pnpm deployment:smoke -- --profile private-cloud --base-url http://127.0.0.1:8787
+```
+
 任务完成通知支持站内消息、App 个推离线推送和小程序订阅消息。生产环境建议在 API 服务 `.env` 中配置：
 
 ```env

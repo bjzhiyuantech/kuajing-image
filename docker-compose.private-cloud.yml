@@ -16,6 +16,7 @@ services:
     restart: unless-stopped
 
   app:
+    image: ${APP_IMAGE:-kuajing-image/app:private-cloud}
     build:
       context: .
       dockerfile: Dockerfile

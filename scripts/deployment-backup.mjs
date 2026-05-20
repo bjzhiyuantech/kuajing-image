@@ -16,10 +16,13 @@ const HELP = `Usage:
 
 Options:
   --env-file <path>       Env file to snapshot or read. Defaults to ${DEFAULT_ENV_FILE}.
+  --compose-file <path>   Compose file for MySQL service backup/restore. Can be repeated.
   --output-dir <dir>      Backup root for backup mode. Defaults to ${DEFAULT_BACKUP_ROOT}.
   --backup-dir <dir>      Existing backup directory for restore mode.
   --data-dir <dir>        Data directory. Defaults to DATA_DIR from env or ./data.
   --downloads-dir <dir>   Downloads directory. Defaults to ./downloads.
+  --mysql-mode <mode>     MySQL backup mode: auto, local, or compose. Defaults to auto.
+  --mysql-service <name>  Compose MySQL service name. Defaults to mysql.
   --skip-mysql            Skip optional mysqldump/mysql restore.
   --help, -h              Show this help.
 
@@ -36,7 +39,10 @@ function parseArgs(argv) {
   const [command, ...rest] = argv;
   const options = {
     command,
+    composeFiles: [],
     envFile: DEFAULT_ENV_FILE,
+    mysqlMode: "auto",
+    mysqlService: "mysql",
     outputDir: DEFAULT_BACKUP_ROOT,
     skipMysql: false
   };
@@ -57,6 +63,33 @@ function parseArgs(argv) {
     }
     if (arg === "--env-file") {
       options.envFile = readNextValue(rest, index, arg);
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--compose-file=")) {
+      options.composeFiles.push(arg.slice("--compose-file=".length));
+      continue;
+    }
+    if (arg === "--compose-file") {
+      options.composeFiles.push(readNextValue(rest, index, arg));
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--mysql-mode=")) {
+      options.mysqlMode = arg.slice("--mysql-mode=".length);
+      continue;
+    }
+    if (arg === "--mysql-mode") {
+      options.mysqlMode = readNextValue(rest, index, arg);
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--mysql-service=")) {
+      options.mysqlService = arg.slice("--mysql-service=".length);
+      continue;
+    }
+    if (arg === "--mysql-service") {
+      options.mysqlService = readNextValue(rest, index, arg);
       index += 1;
       continue;
     }
@@ -196,6 +229,32 @@ function commandAvailable(command) {
   return result.status === 0 || result.status === 1;
 }
 
+function normalizeMysqlMode(mode) {
+  if (mode === "auto" || mode === "local" || mode === "compose") return mode;
+  throw new Error(`Invalid --mysql-mode: ${mode}`);
+}
+
+function composeArgs(composeFiles, envFile, command, extraArgs = []) {
+  const args = ["compose"];
+  for (const composeFile of composeFiles.map(resolvePath)) {
+    args.push("-f", composeFile);
+  }
+  if (envFile) {
+    args.push("--env-file", resolvePath(envFile));
+  }
+  args.push(command, ...extraArgs);
+  return args;
+}
+
+function composeServiceRunning(options) {
+  if (options.composeFiles.length === 0 || !commandAvailable("docker")) return false;
+  const result = spawnSync("docker", composeArgs(options.composeFiles, options.envFile, "ps", ["-q", options.mysqlService]), {
+    cwd: REPO_ROOT,
+    encoding: "utf8"
+  });
+  return result.status === 0 && result.stdout.trim().length > 0;
+}
+
 function mysqlEnv(config) {
   return {
     ...process.env,
@@ -206,7 +265,7 @@ function mysqlEnv(config) {
 async function pipeChildToFile(command, args, outputFile, env) {
   await mkdir(path.dirname(outputFile), { recursive: true });
   await new Promise((resolve, reject) => {
-    const child = spawn(command, args, { env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(command, args, { cwd: REPO_ROOT, env, stdio: ["ignore", "pipe", "pipe"] });
     const writer = createWriteStream(outputFile);
     const stderr = [];
 
@@ -229,7 +288,7 @@ async function pipeChildToFile(command, args, outputFile, env) {
 
 async function pipeFileToChild(command, args, inputFile, env) {
   await new Promise((resolve, reject) => {
-    const child = spawn(command, args, { env, stdio: ["pipe", "ignore", "pipe"] });
+    const child = spawn(command, args, { cwd: REPO_ROOT, env, stdio: ["pipe", "ignore", "pipe"] });
     const reader = createReadStream(inputFile);
     const stderr = [];
 
@@ -273,6 +332,32 @@ async function dumpMysql(env, outputFile) {
   }
 }
 
+async function dumpMysqlFromCompose(options, outputFile) {
+  if (!commandAvailable("docker")) {
+    return { ok: false, reason: "docker CLI is not available" };
+  }
+  if (!composeServiceRunning(options)) {
+    return { ok: false, reason: `compose service is not running: ${options.mysqlService}` };
+  }
+  const shell = [
+    'MYSQL_PWD="$MYSQL_PASSWORD"',
+    "exec mysqldump",
+    "--host=127.0.0.1",
+    "--port=3306",
+    '--user="$MYSQL_USER"',
+    "--single-transaction",
+    "--routines",
+    "--triggers",
+    '"$MYSQL_DATABASE"'
+  ].join(" ");
+  try {
+    await pipeChildToFile("docker", composeArgs(options.composeFiles, options.envFile, "exec", ["-T", options.mysqlService, "sh", "-c", shell]), outputFile, process.env);
+    return { ok: true, mode: "compose" };
+  } catch (error) {
+    return { ok: false, reason: error.message || "compose mysqldump failed" };
+  }
+}
+
 async function restoreMysql(env, inputFile) {
   if (!commandAvailable("mysql")) {
     return { ok: false, reason: "mysql client is not available" };
@@ -284,6 +369,46 @@ async function restoreMysql(env, inputFile) {
   } catch (error) {
     return { ok: false, reason: error.message || "mysql restore failed" };
   }
+}
+
+async function restoreMysqlToCompose(options, inputFile) {
+  if (!commandAvailable("docker")) {
+    return { ok: false, reason: "docker CLI is not available" };
+  }
+  if (!composeServiceRunning(options)) {
+    return { ok: false, reason: `compose service is not running: ${options.mysqlService}` };
+  }
+  const shell = ['MYSQL_PWD="$MYSQL_PASSWORD"', "exec mysql", "--host=127.0.0.1", "--port=3306", '--user="$MYSQL_USER"', '"$MYSQL_DATABASE"'].join(" ");
+  try {
+    await pipeFileToChild("docker", composeArgs(options.composeFiles, options.envFile, "exec", ["-T", options.mysqlService, "sh", "-c", shell]), inputFile, process.env);
+    return { ok: true, mode: "compose" };
+  } catch (error) {
+    return { ok: false, reason: error.message || "compose mysql restore failed" };
+  }
+}
+
+async function dumpMysqlWithMode(options, env, outputFile) {
+  const mode = normalizeMysqlMode(options.mysqlMode);
+  if (mode === "compose") return dumpMysqlFromCompose(options, outputFile);
+  if (mode === "local") return dumpMysql(env, outputFile);
+
+  const composeResult = await dumpMysqlFromCompose(options, outputFile);
+  if (composeResult.ok) return composeResult;
+  const localResult = await dumpMysql(env, outputFile);
+  if (localResult.ok) return { ...localResult, mode: "local" };
+  return { ok: false, reason: `compose: ${composeResult.reason}; local: ${localResult.reason}` };
+}
+
+async function restoreMysqlWithMode(options, env, inputFile) {
+  const mode = normalizeMysqlMode(options.mysqlMode);
+  if (mode === "compose") return restoreMysqlToCompose(options, inputFile);
+  if (mode === "local") return restoreMysql(env, inputFile);
+
+  const composeResult = await restoreMysqlToCompose(options, inputFile);
+  if (composeResult.ok) return composeResult;
+  const localResult = await restoreMysql(env, inputFile);
+  if (localResult.ok) return { ...localResult, mode: "local" };
+  return { ok: false, reason: `compose: ${composeResult.reason}; local: ${localResult.reason}` };
 }
 
 async function backup(options) {
@@ -311,10 +436,10 @@ async function backup(options) {
 
   let mysqlDump = null;
   if (!options.skipMysql) {
-    const dumpResult = await dumpMysql(env, path.join(backupDir, "mysql.sql"));
+    const dumpResult = await dumpMysqlWithMode(options, env, path.join(backupDir, "mysql.sql"));
     if (dumpResult.ok) {
-      mysqlDump = "mysql.sql";
-      copied.push(mysqlDump);
+      mysqlDump = { file: "mysql.sql", mode: dumpResult.mode || options.mysqlMode };
+      copied.push(mysqlDump.file);
     } else {
       mysqlDump = { skipped: dumpResult.reason };
     }
@@ -325,13 +450,14 @@ async function backup(options) {
     envFile: path.relative(REPO_ROOT, envFile),
     dataDir: path.relative(REPO_ROOT, dataDir),
     downloadsDir: path.relative(REPO_ROOT, downloadsDir),
+    composeFiles: options.composeFiles.map((composeFile) => path.relative(REPO_ROOT, resolvePath(composeFile))),
     mysqlDump,
     files: copied
   };
   await writeFile(path.join(backupDir, "backup-manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
   console.log(`OK backup: ${path.relative(REPO_ROOT, backupDir)}`);
   for (const item of copied) console.log(`- ${item}`);
-  if (mysqlDump && typeof mysqlDump === "object") console.log(`WARN MySQL dump skipped: ${mysqlDump.skipped}`);
+  if (mysqlDump && typeof mysqlDump === "object" && mysqlDump.skipped) console.log(`WARN MySQL dump skipped: ${mysqlDump.skipped}`);
 }
 
 async function restore(options) {
@@ -360,8 +486,8 @@ async function restore(options) {
 
   const mysqlDumpFile = path.join(backupDir, "mysql.sql");
   if (!options.skipMysql && (await exists(mysqlDumpFile))) {
-    const result = await restoreMysql(env, mysqlDumpFile);
-    if (result.ok) console.log("OK restored MySQL dump");
+    const result = await restoreMysqlWithMode(options, env, mysqlDumpFile);
+    if (result.ok) console.log(`OK restored MySQL dump${result.mode ? ` via ${result.mode}` : ""}`);
     else console.log(`WARN MySQL restore skipped: ${result.reason}`);
   }
 }

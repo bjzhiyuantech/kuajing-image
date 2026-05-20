@@ -32,6 +32,8 @@
 - capabilities 中不返回任何密钥、域名账号、数据库连接信息。
 - 通用 smoke test：`node scripts/check-deployment-profile.mjs --profile <local|private-cloud|saas> --base-url <API_BASE_URL>`。
 - 发布后 smoke test：`node scripts/post-deploy-smoke.mjs --profile <local|private-cloud|saas> --base-url <API_BASE_URL>`。
+- 离线镜像包：`corepack pnpm deployment:images -- save --profile <local|private-cloud|saas>`，输出到 `dist/deployment-images/<profile>-images.tar`。
+- 安装/升级/回滚编排：`corepack pnpm deployment:rollout -- <install|upgrade|rollback|status> --profile <local|private-cloud|saas>`。
 - 交付包骨架：`corepack pnpm deployment:bundle -- --profile <local|private-cloud|saas> --clean --archive`，输出到 `dist/deployment/<profile>/` 和 `<profile>.tar.gz`。
 
 ## 任务流 B：私有化部署版
@@ -54,6 +56,8 @@
 - 离线镜像包可导入并启动。
 - 安装前检查：`corepack pnpm deployment:preflight -- --profile private-cloud --env-file .env`。
 - 备份恢复骨架：`corepack pnpm deployment:backup -- backup --env-file .env`。
+- 离线镜像包生成：`corepack pnpm deployment:images -- save --profile private-cloud`。
+- 私有化升级：`corepack pnpm deployment:rollout -- upgrade --profile private-cloud --env-file .env`。
 - 交付包骨架生成：`corepack pnpm deployment:bundle -- --profile private-cloud --clean --archive`。
 - 安装后运行：`node scripts/check-deployment-profile.mjs --profile private-cloud --base-url http://<server-host>:8787`。
 - 发布后运行：`node scripts/post-deploy-smoke.mjs --profile private-cloud --base-url http://<server-host>:8787`。
@@ -76,6 +80,8 @@
 - 插件和 App release 配置仍可通过后台或脚本更新。
 - 部署前检查：`corepack pnpm deployment:preflight -- --profile saas --env-file .env`。
 - 数据备份：`corepack pnpm deployment:backup -- backup --env-file .env`。
+- 镜像包生成：`corepack pnpm deployment:images -- save --profile saas`。
+- 单容器 SaaS 编排：`corepack pnpm deployment:rollout -- upgrade --profile saas --env-file .env`；正式蓝绿仍优先使用 `scripts/server-release.sh`。
 - 交付包骨架生成：`corepack pnpm deployment:bundle -- --profile saas --clean --archive`。
 - 发布后 smoke test：`API_BASE_URL=https://<saas-domain> node scripts/post-deploy-smoke.mjs --profile saas`。
 
@@ -100,6 +106,8 @@
 - 卸载/升级不丢失用户数据。
 - 本地启动前检查：`corepack pnpm deployment:preflight -- --profile local --env-file .env`。
 - 本地数据备份：`corepack pnpm deployment:backup -- backup --env-file .env --skip-mysql`。
+- 本地离线镜像包：`corepack pnpm deployment:images -- save --profile local`。
+- 本地安装/升级：`corepack pnpm deployment:rollout -- install --profile local --env-file .env` / `corepack pnpm deployment:rollout -- upgrade --profile local --env-file .env`。
 - 交付包骨架生成：`corepack pnpm deployment:bundle -- --profile local --clean --archive`。
 - 本地启动后运行：`node scripts/check-deployment-profile.mjs --profile local --base-url http://127.0.0.1:8787`。
 - 本地发布后运行：`node scripts/post-deploy-smoke.mjs --profile local --base-url http://127.0.0.1:8787`。

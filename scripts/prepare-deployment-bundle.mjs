@@ -14,10 +14,11 @@ const PROFILE_CONFIG = {
     title: "商图 AI 单机版",
     env: "deploy/profiles/local.env.example",
     composeFiles: ["docker-compose.yml"],
-    extraFiles: ["README.zh-CN.md", "scripts/deployment-preflight.mjs", "scripts/deployment-backup.mjs", "scripts/post-deploy-smoke.mjs"],
+    extraFiles: ["README.zh-CN.md", "scripts/deployment-preflight.mjs", "scripts/deployment-backup.mjs", "scripts/deployment-images.mjs", "scripts/deployment-rollout.mjs", "scripts/post-deploy-smoke.mjs"],
     nextSteps: [
       "复制 .env.example 为 .env，并填写模型密钥、管理员账号和本地端口。",
-      "运行 docker compose --env-file .env up -d --build。",
+      "联网安装运行 node scripts/deployment-rollout.mjs install --profile local --env-file .env。",
+      "离线安装先运行 node scripts/deployment-images.mjs load --archive local-images.tar，再运行 node scripts/deployment-rollout.mjs install --profile local --env-file .env --offline --skip-smoke。",
       "浏览器访问 http://127.0.0.1:8787，完成账号登录和模型/存储检查。"
     ],
     smokeExample: "node scripts/post-deploy-smoke.mjs --profile local --base-url http://127.0.0.1:8787"
@@ -26,10 +27,11 @@ const PROFILE_CONFIG = {
     title: "商图 AI 私有化部署版",
     env: "deploy/profiles/private-cloud.env.example",
     composeFiles: ["docker-compose.private-cloud.yml"],
-    extraFiles: ["README.zh-CN.md", "scripts/deployment-preflight.mjs", "scripts/deployment-backup.mjs", "scripts/post-deploy-smoke.mjs"],
+    extraFiles: ["README.zh-CN.md", "scripts/deployment-preflight.mjs", "scripts/deployment-backup.mjs", "scripts/deployment-images.mjs", "scripts/deployment-rollout.mjs", "scripts/post-deploy-smoke.mjs"],
     nextSteps: [
       "复制 .env.example 为 .env，并填写客户域名、数据库、对象存储、模型和管理员账号。",
-      "运行 docker compose -f docker-compose.private-cloud.yml --env-file .env up -d --build。",
+      "联网安装运行 node scripts/deployment-rollout.mjs install --profile private-cloud --env-file .env。",
+      "离线安装先运行 node scripts/deployment-images.mjs load --archive private-cloud-images.tar，再运行 node scripts/deployment-rollout.mjs install --profile private-cloud --env-file .env --offline --skip-smoke。",
       "确认反向代理、证书和内网对象存储策略后，对外开放服务。"
     ],
     smokeExample: "node scripts/post-deploy-smoke.mjs --profile private-cloud --base-url http://<server-host>:8787"
@@ -38,7 +40,21 @@ const PROFILE_CONFIG = {
     title: "商图 AI SaaS 版",
     env: "deploy/profiles/saas.env.example",
     composeFiles: ["docker-compose.server.yml", "docker-compose.bluegreen.yml", "docker-compose.server-bluegreen.yml"],
-    extraFiles: ["README.zh-CN.md", "scripts/deployment-preflight.mjs", "scripts/deployment-backup.mjs", "scripts/post-deploy-smoke.mjs", "scripts/server-release.sh", "scripts/server-bluegreen-deploy-dev.sh", "scripts/server-bluegreen-promote.sh"],
+    extraFiles: ["README.zh-CN.md", "deploy/nginx/nginx.conf", "scripts/deployment-preflight.mjs", "scripts/deployment-backup.mjs", "scripts/deployment-images.mjs", "scripts/deployment-rollout.mjs", "scripts/post-deploy-smoke.mjs", "scripts/server-release.sh", "scripts/server-bluegreen-deploy-dev.sh", "scripts/server-bluegreen-promote.sh"],
+    generatedFiles: [
+      {
+        path: "deploy/bluegreen/active",
+        content: "blue\n"
+      },
+      {
+        path: "deploy/nginx/active-upstream.conf",
+        content: "upstream active_app {\n  server app-blue:8787;\n}\n"
+      },
+      {
+        path: "deploy/nginx/dev-upstream.conf",
+        content: "upstream dev_app {\n  server app-green:8787;\n}\n"
+      }
+    ],
     nextSteps: [
       "复制 .env.example 为官方环境配置，并补齐生产密钥、对象存储、推送和支付配置。",
       "按现有 blue-green 流程发布到 dev/prod color。",
@@ -210,6 +226,13 @@ async function writeBundleManifest(outputRoot, profile, copiedFiles) {
   return "MANIFEST.json";
 }
 
+async function writeGeneratedFile(outputRoot, profile, file) {
+  const target = outputPath(outputRoot, profile, file.path);
+  await mkdir(path.dirname(target), { recursive: true });
+  await writeFile(target, file.content, "utf8");
+  return file.path;
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
@@ -243,6 +266,10 @@ async function main() {
 
   for (const extraFile of config.extraFiles) {
     copiedFiles.push(await copyIntoBundle(outputRoot, profile, extraFile));
+  }
+
+  for (const generatedFile of config.generatedFiles || []) {
+    copiedFiles.push(await writeGeneratedFile(outputRoot, profile, generatedFile));
   }
 
   const readmePath = outputPath(outputRoot, profile, "README.md");

@@ -17,6 +17,7 @@ services:
       retries: 20
 
   app:
+    image: ${APP_IMAGE:-kuajing-image/app:local}
     build:
       context: .
       dockerfile: Dockerfile
