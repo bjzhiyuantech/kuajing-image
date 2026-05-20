@@ -694,6 +694,7 @@ export function AuthScreen({
 }
 
 export function AccountPage({
+  billingEnabled = true,
   user,
   mobile = false,
   onLogout,
@@ -702,6 +703,7 @@ export function AccountPage({
   onSendPhoneCode,
   onBindPhone
 }: {
+  billingEnabled?: boolean;
   user: AuthUser;
   mobile?: boolean;
   onLogout?: () => void;
@@ -766,6 +768,13 @@ export function AccountPage({
   }, [user.phone]);
 
   async function loadBilling({ preserveNotice = false, signal }: { preserveNotice?: boolean; signal?: AbortSignal } = {}): Promise<void> {
+    if (!billingEnabled) {
+      setBilling(createAccountBillingState(user));
+      setBillingLoading(false);
+      setBillingError("");
+      setBillingAction("");
+      return;
+    }
     if (!user.phone) {
       setBilling(createAccountBillingState(user));
       setBillingLoading(false);
@@ -822,6 +831,12 @@ export function AccountPage({
   }
 
   async function loadInvoiceApplications({ signal }: { signal?: AbortSignal } = {}): Promise<void> {
+    if (!billingEnabled) {
+      setInvoice(createInvoiceApplicationsState());
+      setInvoiceLoading(false);
+      setInvoiceError("");
+      return;
+    }
     setInvoiceLoading(true);
     setInvoiceError("");
     try {
@@ -921,10 +936,20 @@ export function AccountPage({
     if (returnedFromPayment) {
       setBillingAction("已从支付页面返回，正在刷新余额和订单状态。若订单仍显示待支付，请稍后再刷新。");
     }
-    void loadBilling({ preserveNotice: returnedFromPayment, signal: controller.signal });
-    void loadInvoiceApplications({ signal: controller.signal });
+    if (billingEnabled) {
+      void loadBilling({ preserveNotice: returnedFromPayment, signal: controller.signal });
+      void loadInvoiceApplications({ signal: controller.signal });
+    } else {
+      setBilling(createAccountBillingState(user));
+      setInvoice(createInvoiceApplicationsState());
+      setBillingLoading(false);
+      setInvoiceLoading(false);
+      setBillingAction("");
+      setBillingError("");
+      setInvoiceError("");
+    }
     return () => controller.abort();
-  }, [user.id]);
+  }, [billingEnabled, user.id]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1293,7 +1318,7 @@ export function AccountPage({
               <div>
                 <span>剩余额度</span>
                 <strong>{quotaRemaining.toLocaleString("zh-CN")}<small> 张</small></strong>
-                <button type="button" onClick={() => setRechargeAmount(rechargeAmount || "50")}>充值额度</button>
+                {billingEnabled ? <button type="button" onClick={() => setRechargeAmount(rechargeAmount || "50")}>充值额度</button> : null}
               </div>
               <div>
                 <span>当前套餐</span>
@@ -1303,6 +1328,7 @@ export function AccountPage({
                 <div className="mobile-account-meter"><span style={{ width: `${quotaPercent}%` }} /></div>
               </div>
             </div>
+            {billingEnabled ? (
             <div className="mobile-redeem-card">
               <label>
                 <span>兑换码</span>
@@ -1313,13 +1339,14 @@ export function AccountPage({
                 兑换
               </button>
             </div>
+            ) : null}
             {billingError ? <p className="billing-alert billing-alert--warning" role="alert">{billingError}</p> : null}
             {billingAction ? <p className="billing-alert billing-alert--success" role="status">{billingAction}</p> : null}
           </section>
 
           <section className="mobile-account-actions" aria-label="快捷入口">
-            <button type="button"><Wallet className="size-7" aria-hidden="true" /><strong>充值额度</strong><span>快速到账</span></button>
-            <button type="button"><Receipt className="size-7" aria-hidden="true" /><strong>订单记录</strong><span>消费明细</span></button>
+            {billingEnabled ? <button type="button"><Wallet className="size-7" aria-hidden="true" /><strong>充值额度</strong><span>快速到账</span></button> : null}
+            {billingEnabled ? <button type="button"><Receipt className="size-7" aria-hidden="true" /><strong>订单记录</strong><span>消费明细</span></button> : null}
             <button type="button" onClick={() => onNavigate?.("help")}><HelpIconFallback /><strong>帮助中心</strong><span>使用指南</span></button>
             <button type="button" onClick={() => setIsInviteDialogOpen(true)}><Gift className="size-7" aria-hidden="true" /><strong>邀请奖励</strong><span>得免费额度</span></button>
           </section>
@@ -1434,6 +1461,7 @@ export function AccountPage({
           </div>
         </section>
 
+        {billingEnabled ? (
         <section className="billing-panel billing-panel--account" aria-labelledby="billing-title">
           <div className="billing-panel__header">
             <div>
@@ -1527,7 +1555,9 @@ export function AccountPage({
             ))}
           </div>
         </section>
+        ) : null}
 
+        {billingEnabled ? (
         <section className="billing-panel invoice-panel" aria-labelledby="invoice-title">
           <div className="billing-panel__header">
             <div>
@@ -1634,6 +1664,7 @@ export function AccountPage({
             />
           ) : null}
         </section>
+        ) : null}
 
         <section className="quota-panel" aria-labelledby="quota-title">
           <div>
@@ -1647,10 +1678,12 @@ export function AccountPage({
             <span>{quotaUsed.toLocaleString("zh-CN")} 已用</span>
             <span>{quotaRemaining.toLocaleString("zh-CN")} 剩余</span>
           </div>
+          {billingEnabled ? (
           <div className="quota-panel__redeem">
             <Ticket className="size-4" aria-hidden="true" />
             <span>有兑换码可在上方“套餐与余额”中兑换，额度会立即计入这里。</span>
           </div>
+          ) : null}
         </section>
 
         <section className="quota-panel" aria-labelledby="storage-title">
@@ -1667,6 +1700,7 @@ export function AccountPage({
           </div>
         </section>
 
+        {billingEnabled ? (
         <section className="billing-panel" aria-labelledby="account-ledger-title">
           <div className="billing-panel__header">
             <div>
@@ -1697,6 +1731,7 @@ export function AccountPage({
             />
           </div>
         </section>
+        ) : null}
       </section>
       {isInviteDialogOpen ? (
         <InviteCampaignDialog

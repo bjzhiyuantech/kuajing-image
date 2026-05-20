@@ -73,10 +73,13 @@ import {
   OUTPUT_FORMATS,
   SIZE_PRESETS,
   STYLE_PRESETS,
+  type AppConfig,
   resolveNearestValidImageSize,
   validateImageSize,
   type AppReleaseConfig,
   type AppReleaseTargetConfig,
+  type DeploymentCapabilities,
+  type DeploymentProfileResponse,
   type DemoCanvasConfigResponse,
   type DemoCanvasExample,
   type GalleryImageItem,
@@ -177,6 +180,33 @@ const defaultPluginGuideLinks = {
   downloadUrl: "/downloads/kuajing-image-extension-prod-latest.zip",
   installHelpUrl: "/install-help.html"
 };
+const DEFAULT_DEPLOYMENT_PROFILE: DeploymentProfileResponse = {
+  edition: "saas",
+  target: "managed-cloud",
+  name: "商图 AI SaaS 版",
+  capabilities: {
+    web: true,
+    desktop: true,
+    extension: true,
+    miniprogram: true,
+    mobileApp: true,
+    publicGallery: true,
+    categoryKit: true,
+    photoshopPackage: true,
+    seedanceVideo: true,
+    billing: true,
+    appleIap: true,
+    license: false,
+    multiTenant: true,
+    adminConsole: true,
+    cloudSync: true,
+    storageProviders: ["oss", "cos"],
+    modelProviders: ["official", "openai-compatible"],
+    authProviders: ["saas-account"],
+    billingProviders: ["alipay", "apple-iap", "balance"],
+    notificationProviders: ["web", "apns", "getui", "wechat-miniapp"]
+  }
+};
 const initialCanvasPreviewWidths = new Map<string, AssetPreviewWidth>();
 const shapeUtils = [GenerationPlaceholderShapeUtil];
 const tldrawOptions = {
@@ -203,6 +233,9 @@ const APP_RELEASE_API_URL = "/api/app-release";
 const APP_DEEP_LINK_BASE = "shangtuai://web-receive";
 const APP_PROMPT_DISMISSED_KEY = "shangtu.mobileAppPrompt.dismissedAt";
 const APP_PROMPT_DISMISS_MS = 24 * 60 * 60 * 1000;
+type BooleanDeploymentCapabilityKey = {
+  [Key in keyof DeploymentCapabilities]: DeploymentCapabilities[Key] extends boolean ? Key : never;
+}[keyof DeploymentCapabilities];
 
 const canvasAssetStore: TLAssetStore = {
   async upload(_asset, file) {
@@ -360,7 +393,13 @@ const sidebarTabs: Array<{ id: SidebarTab; label: string; icon: typeof Package }
   { id: "creative", label: "自主生图", icon: Brush },
   { id: "video", label: "视频生成", icon: Video }
 ];
-const ecommerceModeCards = [
+const ecommerceModeCards: Array<{
+  id: EcommerceGenerationMode;
+  capability?: BooleanDeploymentCapabilityKey;
+  icon: typeof Package;
+  title: string;
+  desc: string;
+}> = [
   {
     id: "enhance",
     icon: BadgeCheck,
@@ -375,6 +414,7 @@ const ecommerceModeCards = [
   },
   {
     id: "category-kit",
+    capability: "categoryKit",
     icon: Package,
     title: "品类套图",
     desc: "后台先识别商品，再动态规划整套详情页图片。"
@@ -387,6 +427,7 @@ const ecommerceModeCards = [
   },
   {
     id: "single-poster",
+    capability: "categoryKit",
     icon: Maximize2,
     title: "单品完整海报",
     desc: "依据产品图自动提炼卖点，生成一张高比例详情长海报。"
@@ -1092,6 +1133,46 @@ function parseDemoCanvasExamples(body: DemoCanvasConfigResponse): DemoCanvasExam
       sortOrder: typeof example.sortOrder === "number" ? example.sortOrder : index * 10
     }))
     .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.createdAt.localeCompare(b.createdAt));
+}
+
+function parseDeploymentProfile(value: unknown): DeploymentProfileResponse {
+  if (!isRecord(value) || !isRecord(value.capabilities)) {
+    return DEFAULT_DEPLOYMENT_PROFILE;
+  }
+
+  const fallback = DEFAULT_DEPLOYMENT_PROFILE;
+  const rawCapabilities = value.capabilities;
+  const edition =
+    value.edition === "local" || value.edition === "private-cloud" || value.edition === "saas"
+      ? value.edition
+      : fallback.edition;
+  const target =
+    value.target === "desktop" || value.target === "server" || value.target === "managed-cloud"
+      ? value.target
+      : fallback.target;
+  const capabilities = { ...fallback.capabilities };
+  for (const key of Object.keys(fallback.capabilities) as Array<keyof DeploymentCapabilities>) {
+    const nextValue = rawCapabilities[key];
+    if (typeof capabilities[key] === "boolean" && typeof nextValue === "boolean") {
+      (capabilities as Record<string, unknown>)[key] = nextValue;
+    } else if (Array.isArray(capabilities[key]) && Array.isArray(nextValue)) {
+      (capabilities as Record<string, unknown>)[key] = nextValue.filter((item): item is string => typeof item === "string");
+    }
+  }
+
+  return {
+    edition,
+    target,
+    name: stringFromUnknown(value.name) || fallback.name,
+    capabilities
+  };
+}
+
+function deploymentCapabilityEnabled(
+  deployment: DeploymentProfileResponse,
+  key: BooleanDeploymentCapabilityKey
+): boolean {
+  return deployment.capabilities[key] !== false;
 }
 
 function sizePresetLabel(preset: SizePreset): string {
@@ -3352,6 +3433,9 @@ function PluginGuideOverlay({
 function MobileWorkbench({
   activeTab,
   canGenerate,
+  canUseCategoryKit,
+  canUseMobileApp,
+  canUsePublicGallery,
   count,
   ecommerceCount,
   ecommerceDescription,
@@ -3436,6 +3520,9 @@ function MobileWorkbench({
 }: {
   activeTab: MobileCreateTab;
   canGenerate: boolean;
+  canUseCategoryKit: boolean;
+  canUseMobileApp: boolean;
+  canUsePublicGallery: boolean;
   count: GenerationCount;
   ecommerceCount: GenerationCount;
   ecommerceDescription: string;
@@ -3554,6 +3641,7 @@ function MobileWorkbench({
     }
   ];
   const displayName = user.displayName || user.email || "创作者";
+  const visibleEcommerceModeCards = ecommerceModeCards.filter((card) => !card.capability || canUseCategoryKit);
   const homeMenuItems = [
     {
       label: "原图增强",
@@ -3621,7 +3709,7 @@ function MobileWorkbench({
       icon: BookOpen,
       onClick: () => onNavigate("help")
     }
-  ];
+  ].filter((item) => (canUseCategoryKit || (item.label !== "品类套图" && item.label !== "长图海报")) && (canUsePublicGallery || item.label !== "作品图库"));
   const homeStyleChips = [
     {
       label: "清新自然",
@@ -3643,7 +3731,7 @@ function MobileWorkbench({
       active: ecommerceMode === "category-kit",
       onClick: () => onSelectEcommerceMode("category-kit")
     }
-  ];
+  ].filter((chip) => canUseCategoryKit || chip.label !== "户外场景");
   const homeSizeChips = [
     { label: "1:1", presetId: "square-1k" },
     { label: "3:4", presetId: "poster-portrait" },
@@ -3663,8 +3751,8 @@ function MobileWorkbench({
     { label: "4:3", presetId: "poster-landscape", meta: "1365 x 1024" },
     { label: "9:16", presetId: "story-9-16", meta: "1024 x 1820" }
   ];
-  const currentEcommerceModeIndex = Math.max(0, ecommerceModeCards.findIndex((item) => item.id === ecommerceMode));
-  const nextEcommerceMode: EcommerceGenerationMode = ecommerceModeCards[(currentEcommerceModeIndex + 1) % ecommerceModeCards.length]?.id ?? "enhance";
+  const currentEcommerceModeIndex = Math.max(0, visibleEcommerceModeCards.findIndex((item) => item.id === ecommerceMode));
+  const nextEcommerceMode: EcommerceGenerationMode = visibleEcommerceModeCards[(currentEcommerceModeIndex + 1) % visibleEcommerceModeCards.length]?.id ?? "enhance";
 
   return (
     <main className="mobile-workbench app-view" data-active-tab={activeTab} data-testid="mobile-workbench">
@@ -3744,6 +3832,7 @@ function MobileWorkbench({
               </div>
             </section>
 
+            {canUseMobileApp ? (
             <section className="mobile-home-app-card" aria-label="App 下载引导">
               <div>
                 <span>{appPlatformLabel(appPlatform)} APP</span>
@@ -3768,6 +3857,7 @@ function MobileWorkbench({
                 )}
               </div>
             </section>
+            ) : null}
 
             <section className="mobile-home-menu" aria-label="功能菜单">
               {homeMenuItems.map((item) => {
@@ -3849,6 +3939,7 @@ function MobileWorkbench({
               </button>
             </section>
 
+            {canUsePublicGallery ? (
             <section className="mobile-home-recent" aria-label="最近作品">
               <div className="mobile-home-section-head">
                 <h2>最近作品</h2>
@@ -3890,6 +3981,7 @@ function MobileWorkbench({
                     ))}
               </div>
             </section>
+            ) : null}
           </>
         ) : null}
 
@@ -3917,7 +4009,7 @@ function MobileWorkbench({
                 <i aria-hidden="true" />
               </button>
               <div className="mobile-create-mode-strip" aria-label="切换生成方式">
-                {ecommerceModeCards.map((item) => {
+                {visibleEcommerceModeCards.map((item) => {
                   const Icon = item.icon;
                   return (
                     <button key={item.id} data-active={ecommerceMode === item.id} type="button" onClick={() => onSelectEcommerceMode(item.id)}>
@@ -4384,10 +4476,12 @@ function MobileWorkbench({
                   <p className="sidebar-section__eyebrow">结果</p>
                   <h2 className="m-0 text-lg font-black">{selectedRecord ? statusLabels[selectedRecord.status] : "暂无结果"}</h2>
                 </div>
+                {canUsePublicGallery ? (
                 <button className="secondary-action h-9 px-3 text-xs" type="button" onClick={onOpenGallery}>
                   <ImageIcon className="size-4" aria-hidden="true" />
                   图库
                 </button>
+                ) : null}
               </div>
               {resultAssets.length > 0 ? (
                 <div className="mobile-result-grid">
@@ -4467,10 +4561,12 @@ function MobileWorkbench({
           <Sparkles className="size-5" aria-hidden="true" />
           <span>生图</span>
         </button>
+        {canUsePublicGallery ? (
         <button className="mobile-workbench__tab" type="button" onClick={onOpenGallery}>
           <ImageIcon className="size-5" aria-hidden="true" />
           <span>图库</span>
         </button>
+        ) : null}
         <button className="mobile-workbench__tab" type="button" onClick={() => onNavigate("account")}>
           <User className="size-5" aria-hidden="true" />
           <span>我的</span>
@@ -4576,6 +4672,7 @@ function formatNotificationTime(value: string): string {
 }
 
 function TopNavigation({
+  canUsePublicGallery,
   route,
   user,
   generationHistoryCount,
@@ -4591,6 +4688,7 @@ function TopNavigation({
   onPreloadGallery,
   onLogout
 }: {
+  canUsePublicGallery: boolean;
   route: AppRoute;
   user: AuthUser;
   generationHistoryCount: number;
@@ -4636,6 +4734,7 @@ function TopNavigation({
             <Square className="size-4" aria-hidden="true" />
             画布
           </a>
+          {canUsePublicGallery ? (
           <a
             aria-current={route === "gallery" ? "page" : undefined}
             className="top-navigation__link"
@@ -4652,6 +4751,7 @@ function TopNavigation({
             <ImageIcon className="size-4" aria-hidden="true" />
             作品库
           </a>
+          ) : null}
           <a
             aria-current={route === "account" ? "page" : undefined}
             className="top-navigation__link"
@@ -4706,10 +4806,12 @@ function TopNavigation({
             <Sparkles className="size-3.5" aria-hidden="true" />
             额度 {packageRemaining.toLocaleString("zh-CN")}
           </button>
+          {canUsePublicGallery ? (
           <button type="button" onClick={() => onNavigate("gallery")}>
             <ImageIcon className="size-3.5" aria-hidden="true" />
             素材历史
           </button>
+          ) : null}
           <button type="button" onClick={onOpenGenerationHistory}>
             <Workflow className="size-3.5" aria-hidden="true" />
             生成历史 {generationHistoryCount}
@@ -4759,11 +4861,15 @@ function TopNavigation({
 }
 
 function GuestTopNavigation({
+  canUseExtension,
+  canUsePublicGallery,
   route,
   onNavigate,
   onAuthNavigate,
   onOpenPluginGuide
 }: {
+  canUseExtension: boolean;
+  canUsePublicGallery: boolean;
   route: "canvas" | "gallery" | "help";
   onNavigate: (route: AppRoute) => void;
   onAuthNavigate: (mode: AuthMode) => void;
@@ -4801,6 +4907,7 @@ function GuestTopNavigation({
             <Square className="size-4" aria-hidden="true" />
             画布
           </a>
+          {canUsePublicGallery ? (
           <a
             aria-current={route === "gallery" ? "page" : undefined}
             className="top-navigation__link"
@@ -4814,6 +4921,7 @@ function GuestTopNavigation({
             <ImageIcon className="size-4" aria-hidden="true" />
             案例库
           </a>
+          ) : null}
           <a
             aria-current={route === "help" ? "page" : undefined}
             className="top-navigation__link"
@@ -4829,10 +4937,12 @@ function GuestTopNavigation({
           </a>
         </nav>
         <div className="guest-navigation__actions">
+          {canUseExtension ? (
           <button className="secondary-action h-9" type="button" onClick={onOpenPluginGuide}>
             <Package className="size-4" aria-hidden="true" />
             插件
           </button>
+          ) : null}
           <button className="secondary-action h-9" type="button" onClick={() => onAuthNavigate("login")}>
             登录
           </button>
@@ -4851,6 +4961,7 @@ function GuestDemoWorkbench({
   isAiPanelOpen,
   isMobileDrawer,
   panelCloseButtonRef,
+  canUseExtension,
   pluginGuideLinks,
   onClosePanel,
   onGenerationBlocked,
@@ -4863,6 +4974,7 @@ function GuestDemoWorkbench({
   isAiPanelOpen: boolean;
   isMobileDrawer: boolean;
   panelCloseButtonRef: RefObject<HTMLButtonElement>;
+  canUseExtension: boolean;
   pluginGuideLinks: PluginGuideLinks;
   onClosePanel: () => void;
   onGenerationBlocked: () => void;
@@ -5039,6 +5151,7 @@ function GuestDemoWorkbench({
             </div>
             <h2>先看工作流，再登录试用额度</h2>
             <p>访客可以浏览固定案例和画布结构；真正生成、保存和重跑会在登录或注册后消耗试用额度。</p>
+            {canUseExtension ? (
             <div className="sidebar-hero__actions">
               <a className="sidebar-cta" href={pluginGuideLinks.downloadUrl} target="_blank" rel="noreferrer">
                 <Download className="size-4" aria-hidden="true" />
@@ -5049,6 +5162,7 @@ function GuestDemoWorkbench({
                 安装提示
               </button>
             </div>
+            ) : null}
           </section>
 
           <section className="plugin-flow-card" aria-label="访客试用流程">
@@ -5247,11 +5361,13 @@ function GuestImagePreviewDialog({
 }
 
 function GuestQuotaOverlay({
+  canUseExtension,
   links,
   onAuthNavigate,
   onClose,
   onOpenInstallHelp
 }: {
+  canUseExtension: boolean;
   links: PluginGuideLinks;
   onAuthNavigate: (mode: AuthMode) => void;
   onClose: () => void;
@@ -5286,6 +5402,7 @@ function GuestQuotaOverlay({
                 <p>注册后进入正式工作台，生成任务会从账号额度中扣减，作品也会同步到图库。</p>
               </div>
             </li>
+            {canUseExtension ? (
             <li>
               <span className="plugin-guide__step-number">2</span>
               <div>
@@ -5300,6 +5417,7 @@ function GuestQuotaOverlay({
                 </a>
               </div>
             </li>
+            ) : null}
             <li>
               <span className="plugin-guide__step-number">3</span>
               <div>
@@ -5326,12 +5444,14 @@ function GuestQuotaOverlay({
                 <strong>注册试用账号</strong>
                 <span>领取额度并保存作品</span>
               </div>
-              <div className="plugin-guide__flow-line" />
+              {canUseExtension ? <div className="plugin-guide__flow-line" /> : null}
+              {canUseExtension ? (
               <div className="plugin-guide__canvas-card">
                 <Package className="size-5" aria-hidden="true" />
                 <strong>安装浏览器插件</strong>
                 <span>更多额度和商品页入口</span>
               </div>
+              ) : null}
               <div className="plugin-guide__flow-line" />
               <div className="plugin-guide__canvas-card">
                 <Sparkles className="size-5" aria-hidden="true" />
@@ -5346,10 +5466,12 @@ function GuestQuotaOverlay({
           <button className="secondary-action h-10" type="button" onClick={onClose}>
             继续看演示
           </button>
+          {canUseExtension ? (
           <button className="secondary-action h-10" type="button" onClick={onOpenInstallHelp}>
             <Package className="size-4" aria-hidden="true" />
             安装帮助
           </button>
+          ) : null}
           <button className="secondary-action h-10" type="button" onClick={() => onAuthNavigate("login")}>
             登录
           </button>
@@ -5494,6 +5616,9 @@ function AppReceivePage({
 function MobileGuestHome({
   appDownloadUrl,
   appPlatform,
+  canUseCategoryKit,
+  canUseMobileApp,
+  canUsePublicGallery,
   onAuthNavigate,
   onOpenApp,
   onOpenMobileAppPrompt,
@@ -5501,6 +5626,9 @@ function MobileGuestHome({
 }: {
   appDownloadUrl: string;
   appPlatform: MobilePlatform;
+  canUseCategoryKit: boolean;
+  canUseMobileApp: boolean;
+  canUsePublicGallery: boolean;
   onAuthNavigate: (mode: AuthMode) => void;
   onOpenApp: (target?: "home" | "create" | "gallery" | "account") => void;
   onOpenMobileAppPrompt: () => void;
@@ -5511,7 +5639,7 @@ function MobileGuestHome({
     { label: "场景创作", icon: Brush },
     { label: "品类套图", icon: Package },
     { label: "文字翻译", icon: Globe2 }
-  ] as const;
+  ].filter((item) => canUseCategoryKit || item.label !== "品类套图");
 
   return (
     <main className="mobile-workbench app-view" data-active-tab="home" data-testid="mobile-guest-home">
@@ -5552,6 +5680,7 @@ function MobileGuestHome({
           </div>
         </section>
 
+        {canUseMobileApp ? (
         <section className="mobile-home-app-card" aria-label="App 下载引导">
           <div>
             <span>{appPlatformLabel(appPlatform)} APP</span>
@@ -5576,6 +5705,7 @@ function MobileGuestHome({
             )}
           </div>
         </section>
+        ) : null}
 
         <section className="mobile-home-menu" aria-label="功能菜单">
           {guestMenuItems.map((item) => {
@@ -5630,6 +5760,7 @@ function MobileGuestHome({
           </button>
         </section>
 
+        {canUsePublicGallery ? (
         <section className="mobile-home-recent" aria-label="公开作品">
           <div className="mobile-home-section-head">
             <h2>公开作品</h2>
@@ -5654,6 +5785,7 @@ function MobileGuestHome({
             ))}
           </div>
         </section>
+        ) : null}
       </div>
 
       <nav className="mobile-bottom-nav" aria-label="手机底部导航">
@@ -5665,10 +5797,12 @@ function MobileGuestHome({
           <Sparkles className="size-5" aria-hidden="true" />
           <span>生图</span>
         </button>
+        {canUsePublicGallery ? (
         <button className="mobile-workbench__tab" type="button" onClick={onOpenGallery}>
           <ImageIcon className="size-5" aria-hidden="true" />
           <span>图库</span>
         </button>
+        ) : null}
         <button className="mobile-workbench__tab" type="button" onClick={() => onAuthNavigate("login")}>
           <User className="size-5" aria-hidden="true" />
           <span>我的</span>
@@ -5767,6 +5901,7 @@ export function App() {
   const [isMobileAppPromptOpen, setIsMobileAppPromptOpen] = useState(false);
   const [demoCanvasExamples, setDemoCanvasExamples] = useState<DemoCanvasExample[]>(demoComparisonExamples);
   const [selectedDemoExampleId, setSelectedDemoExampleId] = useState(demoComparisonExamples[0]?.id ?? "");
+  const [deploymentProfile, setDeploymentProfile] = useState<DeploymentProfileResponse>(DEFAULT_DEPLOYMENT_PROFILE);
 
   function resetCategoryKitPlanning(): void {
     setCategoryKitPlan(emptyCategoryKitPlan);
@@ -5786,6 +5921,13 @@ export function App() {
     [browserKind, pluginGuideLinks]
   );
   const pluginBrowserLabel = useMemo(() => browserLabel(browserKind), [browserKind]);
+  const canUseExtension = deploymentCapabilityEnabled(deploymentProfile, "extension");
+  const canUseMobileApp = deploymentCapabilityEnabled(deploymentProfile, "mobileApp");
+  const canUsePublicGallery = deploymentCapabilityEnabled(deploymentProfile, "publicGallery");
+  const canUseCategoryKit = deploymentCapabilityEnabled(deploymentProfile, "categoryKit");
+  const canUseSeedanceVideoFeature = deploymentCapabilityEnabled(deploymentProfile, "seedanceVideo");
+  const canUseBilling = deploymentCapabilityEnabled(deploymentProfile, "billing");
+  const canUseAdminConsole = deploymentCapabilityEnabled(deploymentProfile, "adminConsole");
   const dismissedPluginPromptRef = useRef(false);
   const pluginProbeRequestRef = useRef(0);
   const knownNotificationIdsRef = useRef<Set<string>>(new Set());
@@ -5827,11 +5969,14 @@ export function App() {
   }, []);
 
   const openPluginGuide = useCallback((): void => {
+    if (!canUseExtension) {
+      return;
+    }
     dismissedPluginPromptRef.current = false;
     setSidebarTab("plugins");
     setIsAiPanelOpen(true);
     setIsPluginGuideOpen(true);
-  }, []);
+  }, [canUseExtension]);
 
   const openGuestQuotaModal = useCallback((): void => {
     setIsGuestQuotaModalOpen(true);
@@ -5844,9 +5989,12 @@ export function App() {
 
   const openMobileApp = useCallback(
     (target: "home" | "create" | "gallery" | "account" = "home"): void => {
+      if (!canUseMobileApp) {
+        return;
+      }
       openAppOrDownload(mobileAppDownloadUrl, target);
     },
-    [mobileAppDownloadUrl]
+    [canUseMobileApp, mobileAppDownloadUrl]
   );
 
   const navigateFromGuestQuota = useCallback(
@@ -5903,7 +6051,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!isAuthenticated) {
+    if (!isAuthenticated || !canUseExtension) {
       return;
     }
 
@@ -5923,13 +6071,16 @@ export function App() {
       pluginProbeRequestRef.current += 1;
       window.clearTimeout(timerId);
     };
-  }, [currentUser, isAuthenticated, probeAndMaybeShowPluginPrompt, route]);
+  }, [canUseExtension, currentUser, isAuthenticated, probeAndMaybeShowPluginPrompt, route]);
 
   useEffect(() => {
-    if (sidebarTab === "video" && !isAdminUser(currentUser)) {
+    if (sidebarTab === "video" && (!canUseSeedanceVideoFeature || !isAdminUser(currentUser))) {
       setSidebarTab("creative");
     }
-  }, [currentUser, sidebarTab]);
+    if (sidebarTab === "plugins" && !canUseExtension) {
+      setSidebarTab("creative");
+    }
+  }, [canUseExtension, canUseSeedanceVideoFeature, currentUser, sidebarTab]);
 
   const applyNotificationResponse = useCallback((data: AppNotificationListResponse): void => {
     setNotifications(data.notifications ?? []);
@@ -5981,16 +6132,16 @@ export function App() {
       }
 
       if (notification.type === "ecommerce_job_finished") {
-        navigateToRoute("gallery");
+        navigateToRoute(canUsePublicGallery ? "gallery" : "canvas");
         return;
       }
       if (notification.actionUrl?.startsWith("/account")) {
         navigateToRoute("account");
         return;
       }
-      navigateToRoute("gallery");
+      navigateToRoute(canUsePublicGallery ? "gallery" : "canvas");
     },
-    [applyNotificationResponse, navigateToRoute]
+    [applyNotificationResponse, canUsePublicGallery, navigateToRoute]
   );
 
   const markAllNotificationsRead = useCallback((): void => {
@@ -6112,6 +6263,9 @@ export function App() {
 
   useEffect(() => {
     const handleExtensionAuthMessage = (event: MessageEvent): void => {
+      if (!canUseExtension) {
+        return;
+      }
       if (event.origin !== window.location.origin || !isExtensionAuthMessage(event.data)) {
         return;
       }
@@ -6125,9 +6279,40 @@ export function App() {
     return () => {
       window.removeEventListener("message", handleExtensionAuthMessage);
     };
-  }, [restoreStoredSession]);
+  }, [canUseExtension, restoreStoredSession]);
 
   useEffect(() => {
+    const controller = new AbortController();
+
+    async function loadDeploymentProfile(): Promise<void> {
+      try {
+        const response = await fetch("/api/config", {
+          cache: "no-store",
+          signal: controller.signal
+        });
+        if (!response.ok) {
+          return;
+        }
+        const config = (await response.json()) as AppConfig;
+        if (!controller.signal.aborted) {
+          setDeploymentProfile(parseDeploymentProfile(config.deployment));
+        }
+      } catch {
+        // Keep SaaS-compatible defaults if this endpoint is unavailable in older deployments.
+      }
+    }
+
+    void loadDeploymentProfile();
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    if (!canUseExtension) {
+      setPluginGuideLinks(defaultPluginGuideLinks);
+      setIsPluginGuideOpen(false);
+      return;
+    }
+
     const controller = new AbortController();
 
     async function loadExtensionRelease(): Promise<void> {
@@ -6150,9 +6335,15 @@ export function App() {
 
     void loadExtensionRelease();
     return () => controller.abort();
-  }, []);
+  }, [canUseExtension]);
 
   useEffect(() => {
+    if (!canUseMobileApp) {
+      setAppDownloadLinks({ ios: null, android: null });
+      setIsMobileAppPromptOpen(false);
+      return;
+    }
+
     const controller = new AbortController();
 
     async function loadAppRelease(): Promise<void> {
@@ -6178,10 +6369,10 @@ export function App() {
 
     void loadAppRelease();
     return () => controller.abort();
-  }, []);
+  }, [canUseMobileApp]);
 
   useEffect(() => {
-    if (!isMobileDrawer || !shouldShowMobileAppPrompt()) {
+    if (!canUseMobileApp || !isMobileDrawer || !shouldShowMobileAppPrompt()) {
       return;
     }
 
@@ -6192,7 +6383,7 @@ export function App() {
     return () => {
       window.clearTimeout(timerId);
     };
-  }, [isMobileDrawer]);
+  }, [canUseMobileApp, isMobileDrawer]);
 
   useEffect(() => {
     const handleUnauthorized = (): void => {
@@ -6334,6 +6525,13 @@ export function App() {
   const canGenerate = !validationMessage;
   const referenceSelectionWidth = referenceSelection.status === "ready" ? referenceSelection.width : undefined;
   const referenceSelectionHeight = referenceSelection.status === "ready" ? referenceSelection.height : undefined;
+
+  useEffect(() => {
+    if (canUseCategoryKit || (ecommerceMode !== "category-kit" && ecommerceMode !== "single-poster")) {
+      return;
+    }
+    selectEcommerceMode("enhance");
+  }, [canUseCategoryKit, ecommerceMode]);
 
   useEffect(() => {
     if (sizePresetId !== ORIGINAL_SIZE_PRESET_ID) {
@@ -6548,7 +6746,7 @@ export function App() {
   }, [closeAiPanel, isAiPanelOpen, isMobileDrawer]);
 
   useEffect(() => {
-    if (sidebarTab !== "plugins") {
+    if (sidebarTab !== "plugins" || !canUseExtension) {
       return;
     }
 
@@ -6560,7 +6758,7 @@ export function App() {
     return () => {
       window.removeEventListener("paste", handlePaste);
     };
-	  }, [activeEcommerceUploadSlot, sidebarTab, ecommerceImages, ecommerceMode, ecommerceReplacementImage, ecommerceTargetImages]);
+	  }, [activeEcommerceUploadSlot, canUseExtension, sidebarTab, ecommerceImages, ecommerceMode, ecommerceReplacementImage, ecommerceTargetImages]);
 
   useEffect(() => {
     if (!isMobileDrawer || !isAiPanelOpen) {
@@ -6847,6 +7045,10 @@ export function App() {
   }
 
 	  function selectEcommerceMode(nextMode: EcommerceGenerationMode): void {
+	    if (!canUseCategoryKit && (nextMode === "category-kit" || nextMode === "single-poster")) {
+	      setGenerationWarning("当前部署版本未开放品类套图能力。");
+	      nextMode = "enhance";
+	    }
 	    const nextScenes = ecommerceScenesByMode[nextMode];
 	    const firstScene = ECOMMERCE_SCENE_TEMPLATES.find((item) => item.id === nextScenes[0]);
 	    const nextPreset = firstScene ? SIZE_PRESETS.find((item) => item.id === firstScene.defaultSizePresetId) : undefined;
@@ -8356,15 +8558,26 @@ export function App() {
           />
         ) : isMobileDrawer && guestVisibleRoute === "canvas" ? (
           <>
-            <MobileGuestHome
-              appDownloadUrl={mobileAppDownloadUrl}
-              appPlatform={mobilePlatform}
-              onAuthNavigate={navigateToAuth}
-              onOpenApp={openMobileApp}
-              onOpenGallery={() => navigateToRoute("gallery")}
-              onOpenMobileAppPrompt={() => setIsMobileAppPromptOpen(true)}
-            />
-            {isMobileAppPromptOpen ? (
+          <MobileGuestHome
+            appDownloadUrl={mobileAppDownloadUrl}
+            appPlatform={mobilePlatform}
+            canUseCategoryKit={canUseCategoryKit}
+            canUseMobileApp={canUseMobileApp}
+            canUsePublicGallery={canUsePublicGallery}
+            onAuthNavigate={navigateToAuth}
+            onOpenApp={openMobileApp}
+            onOpenGallery={() => {
+              if (canUsePublicGallery) {
+                navigateToRoute("gallery");
+              }
+            }}
+            onOpenMobileAppPrompt={() => {
+              if (canUseMobileApp) {
+                setIsMobileAppPromptOpen(true);
+              }
+            }}
+          />
+          {canUseMobileApp && isMobileAppPromptOpen ? (
               <MobileAppPromptOverlay
                 downloadUrl={mobileAppDownloadUrl}
                 platform={mobilePlatform}
@@ -8378,15 +8591,17 @@ export function App() {
           </>
         ) : (
           <>
-            <GuestTopNavigation
-              route={guestVisibleRoute}
-              onAuthNavigate={navigateToAuth}
-              onNavigate={navigateToRoute}
-              onOpenPluginGuide={openPluginGuide}
-            />
+          <GuestTopNavigation
+            canUseExtension={canUseExtension}
+            canUsePublicGallery={canUsePublicGallery}
+            route={guestVisibleRoute}
+            onAuthNavigate={navigateToAuth}
+            onNavigate={navigateToRoute}
+            onOpenPluginGuide={openPluginGuide}
+          />
             {guestVisibleRoute === "help" ? (
               <HelpCenterPage />
-            ) : guestVisibleRoute === "gallery" ? (
+            ) : guestVisibleRoute === "gallery" && canUsePublicGallery ? (
               <Suspense
                 fallback={
                   <main className="gallery-page app-view" data-testid="gallery-loading-page">
@@ -8412,6 +8627,7 @@ export function App() {
                 isAiPanelOpen={isAiPanelOpen}
                 isMobileDrawer={isMobileDrawer}
                 panelCloseButtonRef={panelCloseButtonRef}
+                canUseExtension={canUseExtension}
                 pluginGuideLinks={pluginGuideDisplayLinks}
                 selectedExampleId={selectedDemoExampleId}
                 onClosePanel={closeAiPanel}
@@ -8423,6 +8639,7 @@ export function App() {
             )}
             {isGuestQuotaModalOpen ? (
               <GuestQuotaOverlay
+                canUseExtension={canUseExtension}
                 links={pluginGuideDisplayLinks}
                 onAuthNavigate={navigateFromGuestQuota}
                 onClose={() => setIsGuestQuotaModalOpen(false)}
@@ -8434,7 +8651,7 @@ export function App() {
                 }}
               />
             ) : null}
-            {isPluginGuideOpen ? (
+            {canUseExtension && isPluginGuideOpen ? (
               <PluginGuideOverlay
                 browserLabel={pluginBrowserLabel}
                 links={pluginGuideDisplayLinks}
@@ -8459,13 +8676,24 @@ export function App() {
 
   const resolvedRoute = route === "admin" && !isAdminUser(currentUser) ? "canvas" : route;
   const requiresPhoneVerification = !currentUser.phone && !isAdminUser(currentUser);
-  const visibleRoute = requiresPhoneVerification && resolvedRoute !== "help" ? "account" : resolvedRoute;
+  const capabilityVisibleRoute =
+    resolvedRoute === "gallery" && !canUsePublicGallery
+      ? "canvas"
+      : resolvedRoute === "admin" && !canUseAdminConsole
+        ? "canvas"
+        : resolvedRoute;
+  const visibleRoute = requiresPhoneVerification && capabilityVisibleRoute !== "help" ? "account" : capabilityVisibleRoute;
   const showMobileWorkbench = isMobileDrawer && visibleRoute === "canvas";
   const showMobileAppShell = isMobileDrawer && (visibleRoute === "canvas" || visibleRoute === "gallery" || visibleRoute === "account");
 	  const packageRemaining = currentUser.packageRemaining ?? Math.max(0, (currentUser.quotaTotal ?? 0) - (currentUser.quotaUsed ?? 0));
-	  const canUseSeedanceVideo = isAdminUser(currentUser);
-	  const activeSidebarTab = canUseSeedanceVideo || sidebarTab !== "video" ? sidebarTab : "creative";
-	  const visibleSidebarTabs = canUseSeedanceVideo ? sidebarTabs : sidebarTabs.filter((tab) => tab.id !== "video");
+	  const canUseSeedanceVideo = canUseSeedanceVideoFeature && isAdminUser(currentUser);
+	  const activeSidebarTab =
+	    sidebarTab === "video" && !canUseSeedanceVideo ? "creative" : sidebarTab === "plugins" && !canUseExtension ? "creative" : sidebarTab;
+	  const visibleSidebarTabs = sidebarTabs.filter((tab) => {
+	    if (tab.id === "plugins") return canUseExtension;
+	    if (tab.id === "video") return canUseSeedanceVideo;
+	    return true;
+	  });
 	  const ecommerceReferenceLimit = ecommerceReferenceUploadLimit(ecommerceMode);
 	  const ecommerceUploadHeading =
 	    ecommerceMode === "one-click-replace" ? "目标模特/场景图" : ecommerceMode === "text-translation" ? "待翻译图片" : "产品参考图";
@@ -8476,6 +8704,7 @@ export function App() {
     <div className="app-root">
       {!showMobileAppShell ? (
         <TopNavigation
+          canUsePublicGallery={canUsePublicGallery}
           ecommerceStats={ecommerceStats}
           generationHistoryCount={generationHistory.length}
           isNotificationCenterOpen={isNotificationCenterOpen}
@@ -8508,6 +8737,9 @@ export function App() {
         <MobileWorkbench
           activeTab={mobileCreateTab}
           canGenerate={canGenerate}
+          canUseCategoryKit={canUseCategoryKit}
+          canUseMobileApp={canUseMobileApp}
+          canUsePublicGallery={canUsePublicGallery}
           count={count}
 	          ecommerceCount={ecommerceCount}
 	          ecommerceDescription={ecommerceDescription}
@@ -8552,9 +8784,17 @@ export function App() {
           onCopyHistoryPrompt={(record) => void copyHistoryPrompt(record)}
 	          onDownloadHistoryRecord={downloadHistoryRecord}
 		          onNavigate={navigateToRoute}
-		          onOpenGallery={() => navigateToRoute("gallery")}
+		          onOpenGallery={() => {
+            if (canUsePublicGallery) {
+              navigateToRoute("gallery");
+            }
+          }}
           onOpenMobileApp={openMobileApp}
-          onOpenMobileAppPrompt={() => setIsMobileAppPromptOpen(true)}
+          onOpenMobileAppPrompt={() => {
+            if (canUseMobileApp) {
+              setIsMobileAppPromptOpen(true);
+            }
+          }}
 		          onOptimizeEcommerceExtraDirection={() => void optimizeEcommerceExtraDirection()}
 	          onOptimizePrompt={() => void optimizePrompt()}
 	          onRerunHistoryRecord={(record) => void rerunHistoryRecord(record)}
@@ -8704,7 +8944,7 @@ export function App() {
         </div>
 
         <div className="ai-panel-body flex-1 space-y-5 overflow-y-auto px-5 py-5">
-          {activeSidebarTab === "plugins" ? (
+          {activeSidebarTab === "plugins" && canUseExtension ? (
             <>
               <section className="sidebar-hero">
                 <div className="sidebar-hero__top">
@@ -8752,7 +8992,7 @@ export function App() {
                   <Megaphone className="size-4 text-amber-700" aria-hidden="true" />
                 </div>
                 <div className="sidebar-grid">
-                  {ecommerceModeCards.map((card) => {
+                  {ecommerceModeCards.filter((card) => !card.capability || canUseCategoryKit).map((card) => {
                     const Icon = card.icon;
                     const active = ecommerceMode === card.id;
                     return (
@@ -9733,7 +9973,7 @@ export function App() {
       </aside>
 
       </main>
-      {visibleRoute === "gallery" ? (
+      {visibleRoute === "gallery" && canUsePublicGallery ? (
         <Suspense
           fallback={
             <main className="gallery-page app-view" data-testid="gallery-loading-page">
@@ -9765,6 +10005,7 @@ export function App() {
       {visibleRoute === "help" ? <HelpCenterPage onBack={() => navigateToRoute("canvas")} /> : null}
       {visibleRoute === "account" ? (
         <AccountPage
+          billingEnabled={canUseBilling}
           mobile={isMobileDrawer}
           user={currentUser}
           onLogout={handleLogout}
@@ -9779,8 +10020,8 @@ export function App() {
           onBindPhone={bindPhone}
         />
       ) : null}
-      {visibleRoute === "admin" && isAdminUser(currentUser) ? <AdminPage /> : null}
-      {isMobileAppPromptOpen ? (
+      {visibleRoute === "admin" && isAdminUser(currentUser) && canUseAdminConsole ? <AdminPage /> : null}
+      {canUseMobileApp && isMobileAppPromptOpen ? (
         <MobileAppPromptOverlay
           downloadUrl={mobileAppDownloadUrl}
           platform={mobilePlatform}
@@ -9791,7 +10032,7 @@ export function App() {
           }}
         />
       ) : null}
-      {isPluginGuideOpen && visibleRoute === "canvas" ? (
+      {canUseExtension && isPluginGuideOpen && visibleRoute === "canvas" ? (
         <PluginGuideOverlay
           browserLabel={pluginBrowserLabel}
           links={pluginGuideDisplayLinks}

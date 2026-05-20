@@ -30,6 +30,8 @@
 - 三种 profile 下 `/api/deployment-profile` 输出不同能力。
 - 不设置 `DEPLOYMENT_PROFILE` 时默认保持 SaaS 行为。
 - capabilities 中不返回任何密钥、域名账号、数据库连接信息。
+- 通用 smoke test：`node scripts/check-deployment-profile.mjs --profile <local|private-cloud|saas> --base-url <API_BASE_URL>`。
+- 交付包骨架：`corepack pnpm deployment:bundle -- --profile <local|private-cloud|saas> --clean`，输出到 `dist/deployment/<profile>/`。
 
 ## 任务流 B：私有化部署版
 
@@ -49,6 +51,8 @@
 - 一台干净服务器可按文档在 30 分钟内启动。
 - `/api/health`、Web 首页、登录、配置模型、配置存储、生图任务可跑通。
 - 离线镜像包可导入并启动。
+- 交付包骨架生成：`corepack pnpm deployment:bundle -- --profile private-cloud --clean`。
+- 安装后运行：`node scripts/check-deployment-profile.mjs --profile private-cloud --base-url http://<server-host>:8787`。
 
 ## 任务流 C：SaaS 版
 
@@ -66,6 +70,8 @@
 - `DEPLOYMENT_PROFILE=saas` 时当前线上能力默认不降级。
 - 蓝绿发布能明确 dev/prod color、健康检查、promote、回滚。
 - 插件和 App release 配置仍可通过后台或脚本更新。
+- 交付包骨架生成：`corepack pnpm deployment:bundle -- --profile saas --clean`。
+- 发布后 smoke test：`API_BASE_URL=https://<saas-domain> node scripts/check-deployment-profile.mjs --profile saas`。
 
 ## 任务流 D：单机版
 
@@ -86,6 +92,8 @@
 - 第一阶段：本地 Docker 包可一键启动，浏览器访问本机服务。
 - 第二阶段：安装包启动后无需命令行，完成配置即可使用。
 - 卸载/升级不丢失用户数据。
+- 交付包骨架生成：`corepack pnpm deployment:bundle -- --profile local --clean`。
+- 本地启动后运行：`node scripts/check-deployment-profile.mjs --profile local --base-url http://127.0.0.1:8787`。
 
 ## 任务流 E：配置与适配器收敛
 

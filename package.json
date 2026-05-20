@@ -13,6 +13,7 @@
     "api:dev": "corepack pnpm --filter @gpt-image-canvas/api dev",
     "web:dev": "corepack pnpm --filter @gpt-image-canvas/web dev",
     "build": "corepack pnpm --filter @gpt-image-canvas/shared build && corepack pnpm --filter @gpt-image-canvas/web build && corepack pnpm --filter @gpt-image-canvas/api build && corepack pnpm --filter @gpt-image-canvas/extension build",
+    "deployment:bundle": "node scripts/prepare-deployment-bundle.mjs",
     "mirror:tldraw-assets": "node scripts/mirror-tldraw-assets.mjs",
     "typecheck": "corepack pnpm --filter @gpt-image-canvas/shared typecheck && corepack pnpm --filter @gpt-image-canvas/web typecheck && corepack pnpm --filter @gpt-image-canvas/api typecheck && corepack pnpm --filter @gpt-image-canvas/extension typecheck",
     "start": "corepack pnpm --filter @gpt-image-canvas/api start"
