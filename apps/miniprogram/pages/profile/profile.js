@@ -14,6 +14,7 @@ Page({
     email: "",
     emailDraft: "",
     displayNameDraft: "",
+    canUseBilling: true,
     savingProfile: false,
     loading: false,
     remainingQuota: 0,
@@ -44,14 +45,21 @@ Page({
     invoiceApplications: []
   },
 
-  onShow() {
+  async onShow() {
+    const capabilities = await api.getCapabilities();
+    const canUseBilling = api.capabilityEnabled(capabilities, "billing");
+    this.setData({ canUseBilling });
     if (!api.getToken()) {
       this.resetInvoiceState();
       this.setData({ user: null });
       return;
     }
     this.loadProfile();
-    this.loadInvoiceApplications();
+    if (canUseBilling) {
+      this.loadInvoiceApplications();
+    } else {
+      this.resetInvoiceState();
+    }
   },
 
   async loadProfile() {
@@ -79,6 +87,10 @@ Page({
   },
 
   async loadInvoiceApplications() {
+    if (!this.data.canUseBilling) {
+      this.resetInvoiceState();
+      return;
+    }
     this.setData({ invoiceSaving: false });
     try {
       const data = await api.getInvoiceApplications();
@@ -164,6 +176,10 @@ Page({
   },
 
   async redeemCode() {
+    if (!this.data.canUseBilling) {
+      wx.showToast({ title: "当前版本未开启充值兑换", icon: "none" });
+      return;
+    }
     if (!api.getToken()) {
       wx.navigateTo({ url: "/pages/login/login" });
       return;
@@ -211,6 +227,10 @@ Page({
   },
 
   async submitInvoiceApplication() {
+    if (!this.data.canUseBilling) {
+      wx.showToast({ title: "当前版本未开启开票申请", icon: "none" });
+      return;
+    }
     if (!api.getToken()) {
       wx.navigateTo({ url: "/pages/login/login" });
       return;

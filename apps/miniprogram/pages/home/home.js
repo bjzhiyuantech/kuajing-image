@@ -73,8 +73,24 @@ const EMPTY_REFERENCE_IMAGE = {
   fileName: "prompt-only-reference.png"
 };
 
+function featureEnabled(item, capabilities) {
+  if (item.key === "category") {
+    return api.capabilityEnabled(capabilities, "categoryKit");
+  }
+  return true;
+}
+
+function workflowEnabled(item, capabilities) {
+  if (item.key === "category") {
+    return api.capabilityEnabled(capabilities, "categoryKit");
+  }
+  return true;
+}
+
 Page({
   data: {
+    canUseCategoryKit: true,
+    canUsePublicGallery: true,
     features: FEATURES,
     memberCopy: "登录后同步任务记录和会员额度",
     memberTitle: "未登录",
@@ -101,7 +117,19 @@ Page({
   },
 
   async loadHomeData() {
-    const publicWorksRequest = this.loadPublicWorks();
+    const capabilities = await api.getCapabilities();
+    const canUsePublicGallery = api.capabilityEnabled(capabilities, "publicGallery");
+    this.setData({
+      canUseCategoryKit: api.capabilityEnabled(capabilities, "categoryKit"),
+      canUsePublicGallery,
+      features: FEATURES.filter((item) => featureEnabled(item, capabilities)),
+      workflows: WORKFLOWS.filter((item) => workflowEnabled(item, capabilities))
+    });
+    const publicWorksRequest = canUsePublicGallery ? this.loadPublicWorks() : Promise.resolve(this.setData({
+      publicWorks: [],
+      publicWorksError: "",
+      publicWorksLoading: false
+    }));
 
     if (!api.getToken()) {
       this.setData({
@@ -140,6 +168,10 @@ Page({
   },
 
   async loadPublicWorks() {
+    if (!this.data.canUsePublicGallery) {
+      this.setData({ publicWorks: [], publicWorksError: "", publicWorksLoading: false });
+      return;
+    }
     this.setData({ publicWorksLoading: true, publicWorksError: "" });
     try {
       const data = await api.getPublicGallery();
@@ -184,6 +216,10 @@ Page({
   },
 
   goPublicGallery() {
+    if (!this.data.canUsePublicGallery) {
+      wx.showToast({ title: "当前版本未开启公开作品", icon: "none" });
+      return;
+    }
     wx.navigateTo({ url: "/pages/public-gallery/public-gallery" });
   },
 
@@ -214,18 +250,32 @@ Page({
   },
 
   openPublicWork(event) {
+    if (!this.data.canUsePublicGallery) {
+      wx.showToast({ title: "当前版本未开启公开作品", icon: "none" });
+      return;
+    }
     wx.navigateTo({
       url: `/pages/public-gallery/public-gallery?work=${encodeURIComponent(event.currentTarget.dataset.id || "")}`
     });
   },
 
   openFeature(event) {
-    wx.setStorageSync("createPreset", event.currentTarget.dataset.key);
+    const key = event.currentTarget.dataset.key;
+    if (key === "category" && !this.data.canUseCategoryKit) {
+      wx.showToast({ title: "当前版本未开启品类套图", icon: "none" });
+      return;
+    }
+    wx.setStorageSync("createPreset", key);
     this.goCreate();
   },
 
   openWorkflow(event) {
-    wx.setStorageSync("createPreset", event.currentTarget.dataset.key);
+    const key = event.currentTarget.dataset.key;
+    if (key === "category" && !this.data.canUseCategoryKit) {
+      wx.showToast({ title: "当前版本未开启品类套图", icon: "none" });
+      return;
+    }
+    wx.setStorageSync("createPreset", key);
     this.goCreate();
   },
 

@@ -5,6 +5,7 @@ import { EXTENSION_RELEASE_SETTINGS_KEY, getSystemSetting, saveSystemSetting } f
 
 interface StoredExtensionReleaseConfig {
   version: 1;
+  local?: StoredExtensionReleaseTargetConfig;
   dev: StoredExtensionReleaseTargetConfig;
   prod: StoredExtensionReleaseTargetConfig;
   updatedAt?: string;
@@ -36,6 +37,7 @@ export async function getExtensionReleaseConfig(): Promise<ExtensionReleaseConfi
   const row = await getSystemSetting(EXTENSION_RELEASE_SETTINGS_KEY);
   const stored = parseStoredConfig(row?.valueJson);
   return {
+    local: resolveTargetConfig("local", stored.local),
     dev: resolveTargetConfig("dev", stored.dev),
     prod: resolveTargetConfig("prod", stored.prod),
     updatedAt: row?.updatedAt
@@ -56,7 +58,7 @@ export async function saveExtensionReleaseConfig(input: SaveExtensionReleaseConf
   return getExtensionReleaseConfig();
 }
 
-function parseStoredConfig(valueJson: string | undefined): Partial<Record<"dev" | "prod", StoredExtensionReleaseTargetConfig>> {
+function parseStoredConfig(valueJson: string | undefined): Partial<Record<"local" | "dev" | "prod", StoredExtensionReleaseTargetConfig>> {
   if (!valueJson) {
     return {};
   }
@@ -64,6 +66,7 @@ function parseStoredConfig(valueJson: string | undefined): Partial<Record<"dev" 
   try {
     const body = JSON.parse(valueJson) as Partial<StoredExtensionReleaseConfig>;
     return {
+      local: normalizeStoredTarget("local", body.local),
       dev: normalizeStoredTarget("dev", body.dev),
       prod: normalizeStoredTarget("prod", body.prod)
     };
@@ -73,7 +76,7 @@ function parseStoredConfig(valueJson: string | undefined): Partial<Record<"dev" 
 }
 
 function normalizeStoredTarget(
-  target: "dev" | "prod",
+  target: "local" | "dev" | "prod",
   input: SaveExtensionReleaseTargetConfig | undefined,
   fallback?: ExtensionReleaseTargetConfig
 ): StoredExtensionReleaseTargetConfig {
@@ -94,13 +97,18 @@ function normalizeStoredTarget(
   };
 }
 
-function resolveTargetConfig(target: "dev" | "prod", stored?: Partial<ExtensionReleaseTargetConfig>): ExtensionReleaseTargetConfig {
-  const runtime = target === "dev" ? extensionReleaseRuntimeConfig : extensionReleaseRuntimeConfig;
-  const fallbackBaseUrl = target === "dev" ? runtime.devApiBaseUrl : runtime.prodApiBaseUrl;
-  const fallbackVersion = target === "dev" ? runtime.devVersion : runtime.prodVersion;
-  const fallbackDownloadUrl = target === "dev" ? runtime.devDownloadUrl : runtime.prodDownloadUrl;
-  const fallbackLatestDownloadUrl = target === "dev" ? runtime.devLatestDownloadUrl : runtime.prodLatestDownloadUrl;
-  const fallbackInstallHelpUrl = target === "dev" ? runtime.devInstallHelpUrl : runtime.prodInstallHelpUrl;
+function resolveTargetConfig(target: "local" | "dev" | "prod", stored?: Partial<ExtensionReleaseTargetConfig>): ExtensionReleaseTargetConfig {
+  const runtime = extensionReleaseRuntimeConfig;
+  const fallbackBaseUrl =
+    target === "local" ? runtime.localApiBaseUrl : target === "dev" ? runtime.devApiBaseUrl : runtime.prodApiBaseUrl;
+  const fallbackVersion =
+    target === "local" ? runtime.localVersion : target === "dev" ? runtime.devVersion : runtime.prodVersion;
+  const fallbackDownloadUrl =
+    target === "local" ? runtime.localDownloadUrl : target === "dev" ? runtime.devDownloadUrl : runtime.prodDownloadUrl;
+  const fallbackLatestDownloadUrl =
+    target === "local" ? runtime.localLatestDownloadUrl : target === "dev" ? runtime.devLatestDownloadUrl : runtime.prodLatestDownloadUrl;
+  const fallbackInstallHelpUrl =
+    target === "local" ? runtime.localInstallHelpUrl : target === "dev" ? runtime.devInstallHelpUrl : runtime.prodInstallHelpUrl;
   const apiBaseUrl = stored?.apiBaseUrl?.trim() || fallbackBaseUrl;
   const defaultFileName = `kuajing-image-extension-${target}-latest.zip`;
   const downloadUrl = normalizeUrlAgainstBase(stored?.downloadUrl || fallbackDownloadUrl || `/downloads/${defaultFileName}`, apiBaseUrl);

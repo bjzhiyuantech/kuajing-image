@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-Local professional AI canvas built with tldraw, Hono, SQLite, and GPT Image 2. Version `v0.1.1` supports Alibaba Cloud OSS / Tencent Cloud COS backup, PackyCode / `gpt-image` response compatibility, and workflow polish for generated assets.
+Local professional AI canvas built with tldraw, Hono, MySQL, and GPT Image 2. Version `v0.1.1` supports Alibaba Cloud OSS / Tencent Cloud COS backup, PackyCode / `gpt-image` response compatibility, and workflow polish for generated assets.
 
 ## Preview
 
@@ -108,7 +108,7 @@ pnpm build
 
 ## Docker
 
-Docker Compose builds the shared contracts, web app, and API into one image. The Hono API serves both `/api` and the built web bundle from a single localhost port, while SQLite data and generated assets persist in host `./data`.
+Docker Compose builds the shared contracts, web app, and API into one image. The Hono API serves both `/api` and the built web bundle from a single localhost port, while MySQL stores business data and generated assets persist under host `./data`.
 
 Windows PowerShell:
 
@@ -127,8 +127,6 @@ docker compose up --build
 ```
 
 Open the app at `http://localhost:8787` by default. Set `PORT` in `.env` before starting Docker Compose to use a different localhost port.
-
-Docker Compose also sets `SQLITE_JOURNAL_MODE=DELETE` and `SQLITE_LOCKING_MODE=EXCLUSIVE` by default. This avoids SQLite `SQLITE_IOERR_SHMOPEN` failures on bind-mounted `./data` directories in Docker Desktop while preserving projects and generated assets on the host.
 
 To use a MySQL server already running on the Docker host, set these values in `.env`:
 
@@ -187,17 +185,17 @@ Cloud upload failures do not fail image generation. The asset falls back to a lo
 
 Runtime state is stored under `DATA_DIR`, which defaults to `./data` locally and `/app/data` in Docker. The directory contains:
 
-- `gpt-image-canvas.sqlite` for the default project, generation history, asset metadata, cloud upload metadata, and optional cloud storage settings.
-- `assets/` for generated image files.
+- MySQL stores projects, generation history, asset metadata, users, billing, and system settings.
+- `assets/` stores generated image files and local previews when cloud storage is not enabled.
 
-The Docker Compose workflow bind-mounts host `./data` to `/app/data`, so projects and generated assets survive container rebuilds. Do not commit `.env`, `data/`, generated images, SQLite files, or build output.
+The Docker Compose workflow bind-mounts host `./data` to `/app/data`, so projects and generated assets survive container rebuilds. Do not commit `.env`, `data/`, generated images, database dumps, or build output.
 
 ## Security / Privacy Notes
 
 - Secrets are read only from `.env` or runtime environment variables. Never commit `.env`, expanded Docker Compose config output, shell history containing keys, or logs that include secret values.
 - OSS AccessKey Secret / COS SecretKey values saved from the UI are stored locally and are masked by the settings API. Treat runtime data as sensitive when cloud storage is configured.
-- Prompts, project state, generated assets, and SQLite data are local runtime data under `DATA_DIR`. Treat `data/` as private unless you intentionally export specific assets.
-- Before publishing a branch, check `git status --short` and confirm only source, docs, and intended metadata are staged. `.env`, `.ralph/`, `.codex-temp/`, `data/`, generated images, SQLite databases, and build output should stay untracked.
+- Prompts, project state, generated assets, and database records are runtime data. Generated files live under `DATA_DIR`. Treat `data/` as private unless you intentionally export specific assets.
+- Before publishing a branch, check `git status --short` and confirm only source, docs, and intended metadata are staged. `.env`, `.ralph/`, `.codex-temp/`, `data/`, generated images, and build output should stay untracked.
 - If a real API key was ever committed, rotate that key first. Git ignore rules prevent future leaks, but they do not remove secrets from existing Git history.
 
 ## Troubleshooting
@@ -209,8 +207,6 @@ The Docker Compose workflow bind-mounts host `./data` to `/app/data`, so project
 - Port already in use: set `PORT` in `.env` for the API/Docker runtime. If Web port `5173` is occupied, stop the process using it, or run `pnpm web:dev -- --port 5174` explicitly and open the printed URL.
   - Docker build cannot pull the Node base image: use a cached mirror image with `NODE_IMAGE=public.ecr.aws/docker/library/node:22-bookworm-slim docker compose up --build` on macOS/Linux or `$env:NODE_IMAGE = 'public.ecr.aws/docker/library/node:22-bookworm-slim'` followed by `docker compose up --build` in Windows PowerShell, or restore Docker Hub access and rerun `docker compose up --build`.
 - Docker config output includes `.env` values by default. Use `docker compose config --quiet --no-env-resolution` for validation when real credentials are present, and do not share expanded config output.
-- SQLite `SQLITE_IOERR_SHMOPEN` in Docker: keep the Compose defaults `SQLITE_JOURNAL_MODE=DELETE` and `SQLITE_LOCKING_MODE=EXCLUSIVE`, rebuild, and make sure no local API process is using the same `data/` database at the same time.
-- SQLite `SQLITE_CORRUPT`: stop all app processes, back up `data/`, and restore from backup or remove the SQLite files to let the app create a clean database. Generated image files under `data/assets/` can be kept.
 - `/api/project` returns 400 while autosaving: check Docker logs for `Project save rejected`. Large canvases are supported up to 100 MB snapshots; imported data URL images can still make snapshots very large.
 - Stale or unwanted local state: stop the app and remove files under `data/`. This deletes local project state, history, and generated assets.
 

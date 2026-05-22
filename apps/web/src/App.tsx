@@ -73,10 +73,13 @@ import {
   OUTPUT_FORMATS,
   SIZE_PRESETS,
   STYLE_PRESETS,
+  type AppConfig,
   resolveNearestValidImageSize,
   validateImageSize,
   type AppReleaseConfig,
   type AppReleaseTargetConfig,
+  type DeploymentCapabilities,
+  type DeploymentProfileResponse,
   type DemoCanvasConfigResponse,
   type DemoCanvasExample,
   type GalleryImageItem,
@@ -178,6 +181,96 @@ const defaultPluginGuideLinks = {
   downloadUrl: "/downloads/kuajing-image-extension-prod-latest.zip",
   installHelpUrl: "/install-help.html"
 };
+const DEFAULT_DEPLOYMENT_PROFILE: DeploymentProfileResponse = {
+  edition: "saas",
+  target: "managed-cloud",
+  name: "商图 AI SaaS 版",
+  capabilities: {
+    web: true,
+    desktop: true,
+    extension: true,
+    miniprogram: true,
+    mobileApp: true,
+    publicGallery: true,
+    categoryKit: true,
+    photoshopPackage: true,
+    seedanceVideo: true,
+    billing: true,
+    appleIap: true,
+    license: false,
+    multiTenant: true,
+    adminConsole: true,
+    cloudSync: true,
+    storageProviders: ["oss", "cos"],
+    modelProviders: ["official", "openai-compatible"],
+    authProviders: ["saas-account"],
+    billingProviders: ["alipay", "apple-iap", "balance"],
+    notificationProviders: ["web", "apns", "getui", "wechat-miniapp"]
+  }
+};
+const LOCAL_DEPLOYMENT_PROFILE: DeploymentProfileResponse = {
+  edition: "local",
+  target: "desktop",
+  name: "商图 AI 单机版",
+  capabilities: {
+    web: true,
+    desktop: true,
+    extension: true,
+    miniprogram: false,
+    mobileApp: false,
+    publicGallery: false,
+    categoryKit: true,
+    photoshopPackage: false,
+    seedanceVideo: false,
+    billing: false,
+    appleIap: false,
+    license: false,
+    multiTenant: false,
+    adminConsole: false,
+    cloudSync: false,
+    storageProviders: ["local"],
+    modelProviders: ["official", "openai-compatible"],
+    authProviders: [],
+    billingProviders: ["none"],
+    notificationProviders: []
+  }
+};
+const LOCAL_DESKTOP_USER: AuthUser = {
+  id: "local-desktop-user",
+  email: "",
+  phone: "local",
+  phoneVerifiedAt: new Date(0).toISOString(),
+  displayName: "本地工作台",
+  role: "user",
+  planName: "单机版",
+  quotaTotal: 0,
+  quotaUsed: 0,
+  balanceCents: 0,
+  packageRemaining: 0,
+  storageQuotaBytes: 0,
+  storageUsedBytes: 0
+};
+
+function isLocalRuntimeHost(): boolean {
+  const hostname = window.location.hostname.toLowerCase();
+  return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1";
+}
+
+function initialDeploymentProfile(): DeploymentProfileResponse {
+  return isLocalRuntimeHost() ? LOCAL_DEPLOYMENT_PROFILE : DEFAULT_DEPLOYMENT_PROFILE;
+}
+
+function initialAuthStatus(): AuthStatus {
+  if (isLocalRuntimeHost()) {
+    return "authenticated";
+  }
+  return consumeAuthTokenFromUrl() || getStoredAuthToken() ? "checking" : "anonymous";
+}
+
+function initialAuthUser(): AuthUser | null {
+  return isLocalRuntimeHost() ? LOCAL_DESKTOP_USER : null;
+}
+
 const initialCanvasPreviewWidths = new Map<string, AssetPreviewWidth>();
 const shapeUtils = [GenerationPlaceholderShapeUtil];
 const tldrawOptions = {
@@ -204,6 +297,9 @@ const APP_RELEASE_API_URL = "/api/app-release";
 const APP_DEEP_LINK_BASE = "shangtuai://web-receive";
 const APP_PROMPT_DISMISSED_KEY = "shangtu.mobileAppPrompt.dismissedAt";
 const APP_PROMPT_DISMISS_MS = 24 * 60 * 60 * 1000;
+type BooleanDeploymentCapabilityKey = {
+  [Key in keyof DeploymentCapabilities]: DeploymentCapabilities[Key] extends boolean ? Key : never;
+}[keyof DeploymentCapabilities];
 
 const canvasAssetStore: TLAssetStore = {
   async upload(_asset, file) {
@@ -361,7 +457,13 @@ const sidebarTabs: Array<{ id: SidebarTab; label: string; icon: typeof Package }
   { id: "creative", label: "自主生图", icon: Brush },
   { id: "video", label: "视频生成", icon: Video }
 ];
-const ecommerceModeCards = [
+const ecommerceModeCards: Array<{
+  id: EcommerceGenerationMode;
+  capability?: BooleanDeploymentCapabilityKey;
+  icon: typeof Package;
+  title: string;
+  desc: string;
+}> = [
   {
     id: "enhance",
     icon: BadgeCheck,
@@ -376,6 +478,7 @@ const ecommerceModeCards = [
   },
   {
     id: "category-kit",
+    capability: "categoryKit",
     icon: Package,
     title: "品类套图",
     desc: "后台先识别商品，再动态规划整套详情页图片。"
@@ -388,6 +491,7 @@ const ecommerceModeCards = [
   },
   {
     id: "single-poster",
+    capability: "categoryKit",
     icon: Maximize2,
     title: "单品完整海报",
     desc: "依据产品图自动提炼卖点，生成一张高比例详情长海报。"
@@ -806,6 +910,7 @@ interface ExtensionReleaseTarget {
 }
 
 interface ExtensionReleaseResponse {
+  local?: ExtensionReleaseTarget;
   prod?: ExtensionReleaseTarget;
 }
 
@@ -1095,6 +1200,49 @@ function parseDemoCanvasExamples(body: DemoCanvasConfigResponse): DemoCanvasExam
     .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.createdAt.localeCompare(b.createdAt));
 }
 
+function parseDeploymentProfile(value: unknown): DeploymentProfileResponse {
+  if (!isRecord(value) || !isRecord(value.capabilities)) {
+    return DEFAULT_DEPLOYMENT_PROFILE;
+  }
+
+  const fallback = DEFAULT_DEPLOYMENT_PROFILE;
+  const rawCapabilities = value.capabilities;
+  const edition =
+    value.edition === "local" || value.edition === "private-cloud" || value.edition === "saas"
+      ? value.edition
+      : fallback.edition;
+  const target =
+    value.target === "desktop" || value.target === "server" || value.target === "managed-cloud"
+      ? value.target
+      : fallback.target;
+  if (edition === "local" || target === "desktop") {
+    return LOCAL_DEPLOYMENT_PROFILE;
+  }
+  const capabilities = { ...fallback.capabilities };
+  for (const key of Object.keys(fallback.capabilities) as Array<keyof DeploymentCapabilities>) {
+    const nextValue = rawCapabilities[key];
+    if (typeof capabilities[key] === "boolean" && typeof nextValue === "boolean") {
+      (capabilities as Record<string, unknown>)[key] = nextValue;
+    } else if (Array.isArray(capabilities[key]) && Array.isArray(nextValue)) {
+      (capabilities as Record<string, unknown>)[key] = nextValue.filter((item): item is string => typeof item === "string");
+    }
+  }
+
+  return {
+    edition,
+    target,
+    name: stringFromUnknown(value.name) || fallback.name,
+    capabilities
+  };
+}
+
+function deploymentCapabilityEnabled(
+  deployment: DeploymentProfileResponse,
+  key: BooleanDeploymentCapabilityKey
+): boolean {
+  return deployment.capabilities[key] !== false;
+}
+
 function sizePresetLabel(preset: SizePreset): string {
   return sizePresetLabels[preset.id] ?? preset.label;
 }
@@ -1357,11 +1505,11 @@ function sizePresetIdForSize(widthValue: number, heightValue: number): string {
 }
 
 function firstDownloadableAsset(record: GenerationRecord): GeneratedAsset | undefined {
-  return record.outputs.find((output) => output.status === "succeeded" && output.asset)?.asset;
+  return record.outputs.find((output) => output?.status === "succeeded" && output.asset)?.asset;
 }
 
 function successfulOutputCount(record: GenerationRecord): number {
-  return record.outputs.filter((output) => output.status === "succeeded" && output.asset).length;
+  return record.outputs.filter((output) => output?.status === "succeeded" && output.asset).length;
 }
 
 function recordOutputUnitLabel(record: GenerationRecord): string {
@@ -1369,7 +1517,11 @@ function recordOutputUnitLabel(record: GenerationRecord): string {
 }
 
 function cloudFailureCount(record: GenerationRecord): number {
-  return record.outputs.filter((output) => output.asset?.cloud?.status === "failed").length;
+  return record.outputs.filter((output) => output?.asset?.cloud?.status === "failed").length;
+}
+
+function outputSlotCount(record: GenerationRecord): number {
+  return Math.max(record.count, record.outputs.length);
 }
 
 function GeneratedAssetPreview({
@@ -1399,7 +1551,7 @@ function GeneratedAssetPreview({
 }
 
 function firstCloudFailureMessage(record: GenerationRecord): string | undefined {
-  return record.outputs.find((output) => output.asset?.cloud?.status === "failed")?.asset?.cloud?.lastError;
+  return record.outputs.find((output) => output?.asset?.cloud?.status === "failed")?.asset?.cloud?.lastError;
 }
 
 function generationModeToRecordMode(mode: GenerationMode): GenerationRecord["mode"] {
@@ -1440,7 +1592,16 @@ function createEcommerceCombinedRecord(input: {
   count: number;
 }): GenerationRecord {
   const records = input.job.records;
-  const outputs = records.flatMap((record) => record.outputs);
+  const indexedOutputs: Array<GenerationRecord["outputs"][number] | undefined> = [];
+  let fallbackIndex = 0;
+  for (const record of records) {
+    const startIndex = ecommerceRecordStartIndex(record, fallbackIndex);
+    record.outputs.forEach((output, outputIndex) => {
+      indexedOutputs[startIndex + outputIndex] = output;
+    });
+    fallbackIndex += ecommerceOutputCount(record);
+  }
+  indexedOutputs.length = Math.max(input.count, indexedOutputs.length);
   const failedRecords = records.filter((record) => record.status === "failed").length;
   const status: GenerationStatus =
     input.job.status === "failed"
@@ -1464,8 +1625,93 @@ function createEcommerceCombinedRecord(input: {
     status,
     error: status === "failed" ? input.job.message : undefined,
     createdAt: input.job.createdAt,
-    outputs
+    outputs: indexedOutputs as GenerationRecord["outputs"]
   };
+}
+
+function ecommerceRecordStartIndex(record: GenerationRecord, fallbackIndex: number): number {
+  return Number.isInteger(record.ecommerceBatchIndex) && record.ecommerceBatchIndex !== undefined
+    ? record.ecommerceBatchIndex
+    : fallbackIndex;
+}
+
+function ecommerceOutputCount(record: GenerationRecord): number {
+  return Math.max(1, record.outputs.length || record.count || 1);
+}
+
+function createEcommerceProgressRecord(input: {
+  job: EcommerceBatchGenerateResponse;
+  records: GenerationRecord[];
+  prompt: string;
+  size: ImageSize;
+  presetId: StylePresetId;
+  outputFormat: OutputFormat;
+}): GenerationRecord {
+  const indexedOutputs: Array<GenerationRecord["outputs"][number] | undefined> = [];
+  let fallbackIndex = 0;
+
+  for (const record of input.records) {
+    const startIndex = ecommerceRecordStartIndex(record, fallbackIndex);
+    record.outputs.forEach((output, outputIndex) => {
+      indexedOutputs[startIndex + outputIndex] = output;
+    });
+    fallbackIndex += ecommerceOutputCount(record);
+  }
+
+  return {
+    id: input.job.jobId,
+    mode: "edit",
+    prompt: input.prompt,
+    effectivePrompt: input.prompt,
+    presetId: input.presetId,
+    size: input.size,
+    quality: "auto",
+    outputFormat: input.outputFormat,
+    count: indexedOutputs.length,
+    status: input.job.status === "failed" ? "failed" : input.job.status === "partial" ? "partial" : "running",
+    error: input.job.status === "failed" ? input.job.message : undefined,
+    createdAt: input.job.createdAt,
+    outputs: indexedOutputs as GenerationRecord["outputs"]
+  };
+}
+
+function createTemporaryEcommerceRecord(input: {
+  jobId: string;
+  prompt: string;
+  size: ImageSize;
+  presetId: StylePresetId;
+  outputFormat: OutputFormat;
+  count: number;
+  createdAt?: string;
+  message?: string;
+}): GenerationRecord {
+  return {
+    id: input.jobId,
+    mode: "edit",
+    prompt: input.prompt,
+    effectivePrompt: input.prompt,
+    presetId: input.presetId,
+    size: input.size,
+    quality: "auto",
+    outputFormat: input.outputFormat,
+    count: input.count,
+    status: "running",
+    error: input.message,
+    createdAt: input.createdAt ?? new Date().toISOString(),
+    outputs: []
+  };
+}
+
+function mergeGenerationRecordsForJob(
+  history: GenerationRecord[],
+  temporaryRecordId: string,
+  records: GenerationRecord[]
+): GenerationRecord[] {
+  const recordIds = new Set(records.map((record) => record.id));
+  return [
+    ...records,
+    ...history.filter((record) => record.id !== temporaryRecordId && !recordIds.has(record.id))
+  ].slice(0, 20);
 }
 
 function promptExcerpt(promptValue: string): string {
@@ -1901,7 +2147,13 @@ function insertGalleryImageOnCanvas(editor: Editor, item: GalleryImageItem): TLS
   return insertGeneratedAssetOnCanvas(editor, item.asset, item.prompt);
 }
 
-function replaceGenerationPlaceholders(editor: Editor, placeholderSet: ActiveGenerationPlaceholders, record: GenerationRecord): number {
+function replaceGenerationPlaceholders(
+  editor: Editor,
+  placeholderSet: ActiveGenerationPlaceholders,
+  record: GenerationRecord,
+  options: { markMissingOutputsFailed?: boolean; skipMissingPlaceholders?: boolean } = {}
+): number {
+  const markMissingOutputsFailed = options.markMissingOutputsFailed ?? true;
   const assets: TLAsset[] = [];
   const queuedAssetIds = new Set<TLAssetId>();
   const mediaShapes: GeneratedMediaShape[] = [];
@@ -1910,9 +2162,17 @@ function replaceGenerationPlaceholders(editor: Editor, placeholderSet: ActiveGen
 
   placeholderSet.placements.forEach((placement, index) => {
     const output = record.outputs[index];
+    const existingPlaceholder = editor.getShape(placement.id);
+    const hasLivePlaceholder = isGenerationPlaceholderShape(existingPlaceholder);
+    if (!hasLivePlaceholder && options.skipMissingPlaceholders) {
+      return;
+    }
+    if (!output && !markMissingOutputsFailed) {
+      return;
+    }
     if (output?.status === "succeeded" && output.asset) {
       if (!isCanvasInsertableAsset(output.asset)) {
-        if (isGenerationPlaceholderShape(editor.getShape(placement.id))) {
+        if (hasLivePlaceholder) {
           failedUpdates.push({
             id: placement.id,
             type: GENERATION_PLACEHOLDER_TYPE,
@@ -1932,13 +2192,13 @@ function replaceGenerationPlaceholders(editor: Editor, placeholderSet: ActiveGen
         assets.push(createMediaAsset(output.asset));
       }
       mediaShapes.push(createMediaShape(output.asset, resolvedPlacement, record.prompt));
-      if (isGenerationPlaceholderShape(editor.getShape(placement.id))) {
+      if (hasLivePlaceholder) {
         replacedPlaceholderIds.push(placement.id);
       }
       return;
     }
 
-    if (isGenerationPlaceholderShape(editor.getShape(placement.id))) {
+    if (hasLivePlaceholder) {
       failedUpdates.push({
         id: placement.id,
         type: GENERATION_PLACEHOLDER_TYPE,
@@ -1973,11 +2233,15 @@ function replaceGenerationPlaceholders(editor: Editor, placeholderSet: ActiveGen
 }
 
 function generatedAssetsForRecord(record: GenerationRecord): GeneratedAsset[] {
-  return record.outputs.flatMap((output) => (output.status === "succeeded" && output.asset ? [output.asset] : []));
+  return record.outputs.flatMap((output) => (output?.status === "succeeded" && output.asset ? [output.asset] : []));
 }
 
 async function preloadGenerationRecordPreviews(record: GenerationRecord, signal: AbortSignal): Promise<void> {
-  await Promise.all(generatedAssetsForRecord(record).map((asset) => preloadGeneratedAssetPreview(asset, signal)));
+  await preloadGeneratedAssetPreviews(generatedAssetsForRecord(record), signal);
+}
+
+async function preloadGeneratedAssetPreviews(assets: GeneratedAsset[], signal: AbortSignal): Promise<void> {
+  await Promise.allSettled(assets.map((asset) => preloadGeneratedAssetPreview(asset, signal)));
 }
 
 async function preloadGeneratedAssetPreview(asset: GeneratedAsset, signal: AbortSignal): Promise<void> {
@@ -2490,7 +2754,7 @@ function previewWidthForAssetContext(asset: Extract<TLAsset, { type: "image" }>,
 
 function findCanvasImageShape(editor: Editor, record: GenerationRecord): TLShapeId | undefined {
   const assetIds = new Set(
-    record.outputs.flatMap((output) => (output.status === "succeeded" && output.asset ? [output.asset.id] : []))
+    record.outputs.flatMap((output) => (output?.status === "succeeded" && output.asset ? [output.asset.id] : []))
   );
   if (assetIds.size === 0) {
     return undefined;
@@ -3353,6 +3617,9 @@ function PluginGuideOverlay({
 function MobileWorkbench({
   activeTab,
   canGenerate,
+  canUseCategoryKit,
+  canUseMobileApp,
+  canUsePublicGallery,
   count,
   ecommerceCount,
   ecommerceDescription,
@@ -3437,6 +3704,9 @@ function MobileWorkbench({
 }: {
   activeTab: MobileCreateTab;
   canGenerate: boolean;
+  canUseCategoryKit: boolean;
+  canUseMobileApp: boolean;
+  canUsePublicGallery: boolean;
   count: GenerationCount;
   ecommerceCount: GenerationCount;
   ecommerceDescription: string;
@@ -3519,7 +3789,9 @@ function MobileWorkbench({
   onSubmitGeneration: () => void;
   isPromptOptimizing: boolean;
 }) {
-  const selectedRecord = generationHistory.find((record) => record.id === selectedRecordId) ?? generationHistory[0] ?? null;
+  const selectedRecord = selectedRecordId
+    ? generationHistory.find((record) => record.id === selectedRecordId) ?? null
+    : generationHistory[0] ?? null;
   const resultAssets = selectedRecord ? generatedAssetsForRecord(selectedRecord) : [];
   const packageRemaining = user.packageRemaining ?? Math.max(0, (user.quotaTotal ?? 0) - (user.quotaUsed ?? 0));
   const activeScenes = ecommerceMode === "category-kit" ? [] : ECOMMERCE_SCENE_TEMPLATES.filter((item) => item.mode === ecommerceMode);
@@ -3555,6 +3827,7 @@ function MobileWorkbench({
     }
   ];
   const displayName = user.displayName || user.email || "创作者";
+  const visibleEcommerceModeCards = ecommerceModeCards.filter((card) => !card.capability || canUseCategoryKit);
   const homeMenuItems = [
     {
       label: "原图增强",
@@ -3622,7 +3895,7 @@ function MobileWorkbench({
       icon: BookOpen,
       onClick: () => onNavigate("help")
     }
-  ];
+  ].filter((item) => (canUseCategoryKit || (item.label !== "品类套图" && item.label !== "长图海报")) && (canUsePublicGallery || item.label !== "作品图库"));
   const homeStyleChips = [
     {
       label: "清新自然",
@@ -3644,7 +3917,7 @@ function MobileWorkbench({
       active: ecommerceMode === "category-kit",
       onClick: () => onSelectEcommerceMode("category-kit")
     }
-  ];
+  ].filter((chip) => canUseCategoryKit || chip.label !== "户外场景");
   const homeSizeChips = [
     { label: "1:1", presetId: "square-1k" },
     { label: "3:4", presetId: "poster-portrait" },
@@ -3664,8 +3937,8 @@ function MobileWorkbench({
     { label: "4:3", presetId: "poster-landscape", meta: "1365 x 1024" },
     { label: "9:16", presetId: "story-9-16", meta: "1024 x 1820" }
   ];
-  const currentEcommerceModeIndex = Math.max(0, ecommerceModeCards.findIndex((item) => item.id === ecommerceMode));
-  const nextEcommerceMode: EcommerceGenerationMode = ecommerceModeCards[(currentEcommerceModeIndex + 1) % ecommerceModeCards.length]?.id ?? "enhance";
+  const currentEcommerceModeIndex = Math.max(0, visibleEcommerceModeCards.findIndex((item) => item.id === ecommerceMode));
+  const nextEcommerceMode: EcommerceGenerationMode = visibleEcommerceModeCards[(currentEcommerceModeIndex + 1) % visibleEcommerceModeCards.length]?.id ?? "enhance";
 
   return (
     <main className="mobile-workbench app-view" data-active-tab={activeTab} data-testid="mobile-workbench">
@@ -3745,6 +4018,7 @@ function MobileWorkbench({
               </div>
             </section>
 
+            {canUseMobileApp ? (
             <section className="mobile-home-app-card" aria-label="App 下载引导">
               <div>
                 <span>{appPlatformLabel(appPlatform)} APP</span>
@@ -3769,6 +4043,7 @@ function MobileWorkbench({
                 )}
               </div>
             </section>
+            ) : null}
 
             <section className="mobile-home-menu" aria-label="功能菜单">
               {homeMenuItems.map((item) => {
@@ -3850,6 +4125,7 @@ function MobileWorkbench({
               </button>
             </section>
 
+            {canUsePublicGallery ? (
             <section className="mobile-home-recent" aria-label="最近作品">
               <div className="mobile-home-section-head">
                 <h2>最近作品</h2>
@@ -3891,6 +4167,7 @@ function MobileWorkbench({
                     ))}
               </div>
             </section>
+            ) : null}
           </>
         ) : null}
 
@@ -3918,7 +4195,7 @@ function MobileWorkbench({
                 <i aria-hidden="true" />
               </button>
               <div className="mobile-create-mode-strip" aria-label="切换生成方式">
-                {ecommerceModeCards.map((item) => {
+                {visibleEcommerceModeCards.map((item) => {
                   const Icon = item.icon;
                   return (
                     <button key={item.id} data-active={ecommerceMode === item.id} type="button" onClick={() => onSelectEcommerceMode(item.id)}>
@@ -4385,10 +4662,12 @@ function MobileWorkbench({
                   <p className="sidebar-section__eyebrow">结果</p>
                   <h2 className="m-0 text-lg font-black">{selectedRecord ? statusLabels[selectedRecord.status] : "暂无结果"}</h2>
                 </div>
+                {canUsePublicGallery ? (
                 <button className="secondary-action h-9 px-3 text-xs" type="button" onClick={onOpenGallery}>
                   <ImageIcon className="size-4" aria-hidden="true" />
                   图库
                 </button>
+                ) : null}
               </div>
               {resultAssets.length > 0 ? (
                 <div className="mobile-result-grid">
@@ -4445,7 +4724,7 @@ function MobileWorkbench({
                         {asset ? <GeneratedAssetPreview alt={record.prompt} asset={asset} /> : <div className="grid place-items-center bg-neutral-100"><Loader2 className={record.status === "running" ? "size-5 animate-spin" : "size-5"} aria-hidden="true" /></div>}
                         <span className="grid content-center gap-1">
                           <strong className="truncate text-sm">{promptExcerpt(record.prompt)}</strong>
-                          <small className="text-xs font-semibold text-neutral-500">{statusLabels[record.status]} · {successfulOutputCount(record)} / {record.outputs.length || record.count} {recordOutputUnitLabel(record)} · {formatCreatedTime(record.createdAt)}</small>
+                          <small className="text-xs font-semibold text-neutral-500">{statusLabels[record.status]} · {successfulOutputCount(record)} / {outputSlotCount(record)} {recordOutputUnitLabel(record)} · {formatCreatedTime(record.createdAt)}</small>
                         </span>
                       </button>
                     );
@@ -4468,10 +4747,12 @@ function MobileWorkbench({
           <Sparkles className="size-5" aria-hidden="true" />
           <span>生图</span>
         </button>
+        {canUsePublicGallery ? (
         <button className="mobile-workbench__tab" type="button" onClick={onOpenGallery}>
           <ImageIcon className="size-5" aria-hidden="true" />
           <span>图库</span>
         </button>
+        ) : null}
         <button className="mobile-workbench__tab" type="button" onClick={() => onNavigate("account")}>
           <User className="size-5" aria-hidden="true" />
           <span>我的</span>
@@ -4577,6 +4858,8 @@ function formatNotificationTime(value: string): string {
 }
 
 function TopNavigation({
+  canUsePublicGallery,
+  isLocalEdition,
   route,
   user,
   generationHistoryCount,
@@ -4592,6 +4875,8 @@ function TopNavigation({
   onPreloadGallery,
   onLogout
 }: {
+  canUsePublicGallery: boolean;
+  isLocalEdition: boolean;
   route: AppRoute;
   user: AuthUser;
   generationHistoryCount: number;
@@ -4637,6 +4922,7 @@ function TopNavigation({
             <Square className="size-4" aria-hidden="true" />
             画布
           </a>
+          {canUsePublicGallery ? (
           <a
             aria-current={route === "gallery" ? "page" : undefined}
             className="top-navigation__link"
@@ -4653,6 +4939,8 @@ function TopNavigation({
             <ImageIcon className="size-4" aria-hidden="true" />
             作品库
           </a>
+          ) : null}
+          {!isLocalEdition ? (
           <a
             aria-current={route === "account" ? "page" : undefined}
             className="top-navigation__link"
@@ -4667,6 +4955,8 @@ function TopNavigation({
             <User className="size-4" aria-hidden="true" />
             账户
           </a>
+          ) : null}
+          {!isLocalEdition ? (
           <a
             aria-current={route === "help" ? "page" : undefined}
             className="top-navigation__link"
@@ -4681,7 +4971,8 @@ function TopNavigation({
             <BookOpen className="size-4" aria-hidden="true" />
             帮助
           </a>
-          {isAdminUser(user) ? (
+          ) : null}
+          {!isLocalEdition && isAdminUser(user) ? (
             <a
               aria-current={route === "admin" ? "page" : undefined}
               className="top-navigation__link"
@@ -4699,6 +4990,8 @@ function TopNavigation({
           ) : null}
         </nav>
         <div className="top-navigation__ops" aria-label="运营入口">
+          {!isLocalEdition ? (
+          <>
           <button type="button" onClick={() => onNavigate("account")}>
             <User className="size-3.5" aria-hidden="true" />
             账户
@@ -4707,10 +5000,14 @@ function TopNavigation({
             <Sparkles className="size-3.5" aria-hidden="true" />
             额度 {packageRemaining.toLocaleString("zh-CN")}
           </button>
+          </>
+          ) : null}
+          {canUsePublicGallery ? (
           <button type="button" onClick={() => onNavigate("gallery")}>
             <ImageIcon className="size-3.5" aria-hidden="true" />
             素材历史
           </button>
+          ) : null}
           <button type="button" onClick={onOpenGenerationHistory}>
             <Workflow className="size-3.5" aria-hidden="true" />
             生成历史 {generationHistoryCount}
@@ -4718,6 +5015,7 @@ function TopNavigation({
           <span>任务 {ecommerceStats.totalJobs}</span>
           <span>图 {ecommerceStats.generatedImages}</span>
         </div>
+        {!isLocalEdition ? (
         <div className="top-navigation__account">
           <NotificationCenter
             isOpen={isNotificationCenterOpen}
@@ -4754,17 +5052,22 @@ function TopNavigation({
             <LogOut className="size-4" aria-hidden="true" />
           </button>
         </div>
+        ) : null}
       </div>
     </header>
   );
 }
 
 function GuestTopNavigation({
+  canUseExtension,
+  canUsePublicGallery,
   route,
   onNavigate,
   onAuthNavigate,
   onOpenPluginGuide
 }: {
+  canUseExtension: boolean;
+  canUsePublicGallery: boolean;
   route: "canvas" | "gallery" | "help";
   onNavigate: (route: AppRoute) => void;
   onAuthNavigate: (mode: AuthMode) => void;
@@ -4802,6 +5105,7 @@ function GuestTopNavigation({
             <Square className="size-4" aria-hidden="true" />
             画布
           </a>
+          {canUsePublicGallery ? (
           <a
             aria-current={route === "gallery" ? "page" : undefined}
             className="top-navigation__link"
@@ -4815,6 +5119,7 @@ function GuestTopNavigation({
             <ImageIcon className="size-4" aria-hidden="true" />
             案例库
           </a>
+          ) : null}
           <a
             aria-current={route === "help" ? "page" : undefined}
             className="top-navigation__link"
@@ -4830,10 +5135,12 @@ function GuestTopNavigation({
           </a>
         </nav>
         <div className="guest-navigation__actions">
+          {canUseExtension ? (
           <button className="secondary-action h-9" type="button" onClick={onOpenPluginGuide}>
             <Package className="size-4" aria-hidden="true" />
             插件
           </button>
+          ) : null}
           <button className="secondary-action h-9" type="button" onClick={() => onAuthNavigate("login")}>
             登录
           </button>
@@ -4852,6 +5159,7 @@ function GuestDemoWorkbench({
   isAiPanelOpen,
   isMobileDrawer,
   panelCloseButtonRef,
+  canUseExtension,
   pluginGuideLinks,
   onClosePanel,
   onGenerationBlocked,
@@ -4864,6 +5172,7 @@ function GuestDemoWorkbench({
   isAiPanelOpen: boolean;
   isMobileDrawer: boolean;
   panelCloseButtonRef: RefObject<HTMLButtonElement>;
+  canUseExtension: boolean;
   pluginGuideLinks: PluginGuideLinks;
   onClosePanel: () => void;
   onGenerationBlocked: () => void;
@@ -5040,6 +5349,7 @@ function GuestDemoWorkbench({
             </div>
             <h2>先看工作流，再登录试用额度</h2>
             <p>访客可以浏览固定案例和画布结构；真正生成、保存和重跑会在登录或注册后消耗试用额度。</p>
+            {canUseExtension ? (
             <div className="sidebar-hero__actions">
               <a className="sidebar-cta" href={pluginGuideLinks.downloadUrl} target="_blank" rel="noreferrer">
                 <Download className="size-4" aria-hidden="true" />
@@ -5050,6 +5360,7 @@ function GuestDemoWorkbench({
                 安装提示
               </button>
             </div>
+            ) : null}
           </section>
 
           <section className="plugin-flow-card" aria-label="访客试用流程">
@@ -5248,11 +5559,13 @@ function GuestImagePreviewDialog({
 }
 
 function GuestQuotaOverlay({
+  canUseExtension,
   links,
   onAuthNavigate,
   onClose,
   onOpenInstallHelp
 }: {
+  canUseExtension: boolean;
   links: PluginGuideLinks;
   onAuthNavigate: (mode: AuthMode) => void;
   onClose: () => void;
@@ -5287,6 +5600,7 @@ function GuestQuotaOverlay({
                 <p>注册后进入正式工作台，生成任务会从账号额度中扣减，作品也会同步到图库。</p>
               </div>
             </li>
+            {canUseExtension ? (
             <li>
               <span className="plugin-guide__step-number">2</span>
               <div>
@@ -5301,6 +5615,7 @@ function GuestQuotaOverlay({
                 </a>
               </div>
             </li>
+            ) : null}
             <li>
               <span className="plugin-guide__step-number">3</span>
               <div>
@@ -5327,12 +5642,14 @@ function GuestQuotaOverlay({
                 <strong>注册试用账号</strong>
                 <span>领取额度并保存作品</span>
               </div>
-              <div className="plugin-guide__flow-line" />
+              {canUseExtension ? <div className="plugin-guide__flow-line" /> : null}
+              {canUseExtension ? (
               <div className="plugin-guide__canvas-card">
                 <Package className="size-5" aria-hidden="true" />
                 <strong>安装浏览器插件</strong>
                 <span>更多额度和商品页入口</span>
               </div>
+              ) : null}
               <div className="plugin-guide__flow-line" />
               <div className="plugin-guide__canvas-card">
                 <Sparkles className="size-5" aria-hidden="true" />
@@ -5347,10 +5664,12 @@ function GuestQuotaOverlay({
           <button className="secondary-action h-10" type="button" onClick={onClose}>
             继续看演示
           </button>
+          {canUseExtension ? (
           <button className="secondary-action h-10" type="button" onClick={onOpenInstallHelp}>
             <Package className="size-4" aria-hidden="true" />
             安装帮助
           </button>
+          ) : null}
           <button className="secondary-action h-10" type="button" onClick={() => onAuthNavigate("login")}>
             登录
           </button>
@@ -5495,6 +5814,9 @@ function AppReceivePage({
 function MobileGuestHome({
   appDownloadUrl,
   appPlatform,
+  canUseCategoryKit,
+  canUseMobileApp,
+  canUsePublicGallery,
   onAuthNavigate,
   onOpenApp,
   onOpenMobileAppPrompt,
@@ -5502,6 +5824,9 @@ function MobileGuestHome({
 }: {
   appDownloadUrl: string;
   appPlatform: MobilePlatform;
+  canUseCategoryKit: boolean;
+  canUseMobileApp: boolean;
+  canUsePublicGallery: boolean;
   onAuthNavigate: (mode: AuthMode) => void;
   onOpenApp: (target?: "home" | "create" | "gallery" | "account") => void;
   onOpenMobileAppPrompt: () => void;
@@ -5512,7 +5837,7 @@ function MobileGuestHome({
     { label: "场景创作", icon: Brush },
     { label: "品类套图", icon: Package },
     { label: "文字翻译", icon: Globe2 }
-  ] as const;
+  ].filter((item) => canUseCategoryKit || item.label !== "品类套图");
 
   return (
     <main className="mobile-workbench app-view" data-active-tab="home" data-testid="mobile-guest-home">
@@ -5553,6 +5878,7 @@ function MobileGuestHome({
           </div>
         </section>
 
+        {canUseMobileApp ? (
         <section className="mobile-home-app-card" aria-label="App 下载引导">
           <div>
             <span>{appPlatformLabel(appPlatform)} APP</span>
@@ -5577,6 +5903,7 @@ function MobileGuestHome({
             )}
           </div>
         </section>
+        ) : null}
 
         <section className="mobile-home-menu" aria-label="功能菜单">
           {guestMenuItems.map((item) => {
@@ -5631,6 +5958,7 @@ function MobileGuestHome({
           </button>
         </section>
 
+        {canUsePublicGallery ? (
         <section className="mobile-home-recent" aria-label="公开作品">
           <div className="mobile-home-section-head">
             <h2>公开作品</h2>
@@ -5655,6 +5983,7 @@ function MobileGuestHome({
             ))}
           </div>
         </section>
+        ) : null}
       </div>
 
       <nav className="mobile-bottom-nav" aria-label="手机底部导航">
@@ -5666,10 +5995,12 @@ function MobileGuestHome({
           <Sparkles className="size-5" aria-hidden="true" />
           <span>生图</span>
         </button>
+        {canUsePublicGallery ? (
         <button className="mobile-workbench__tab" type="button" onClick={onOpenGallery}>
           <ImageIcon className="size-5" aria-hidden="true" />
           <span>图库</span>
         </button>
+        ) : null}
         <button className="mobile-workbench__tab" type="button" onClick={() => onAuthNavigate("login")}>
           <User className="size-5" aria-hidden="true" />
           <span>我的</span>
@@ -5698,9 +6029,9 @@ function PanelStatusIcon({ tone }: { tone: PanelStatusTone }) {
 export function App() {
   const [route, setRoute] = useState<AppRoute>(() => routeFromLocation());
   const [publicPath, setPublicPath] = useState(() => window.location.pathname);
-  const [authStatus, setAuthStatus] = useState<AuthStatus>(() => (consumeAuthTokenFromUrl() || getStoredAuthToken() ? "checking" : "anonymous"));
+  const [authStatus, setAuthStatus] = useState<AuthStatus>(() => initialAuthStatus());
   const [authMode, setAuthMode] = useState<AuthMode>("login");
-  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => initialAuthUser());
   const [generationMode, setGenerationMode] = useState<GenerationMode>("text");
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("plugins");
   const [ecommerceMode, setEcommerceMode] = useState<EcommerceGenerationMode>("enhance");
@@ -5768,6 +6099,7 @@ export function App() {
   const [isMobileAppPromptOpen, setIsMobileAppPromptOpen] = useState(false);
   const [demoCanvasExamples, setDemoCanvasExamples] = useState<DemoCanvasExample[]>(demoComparisonExamples);
   const [selectedDemoExampleId, setSelectedDemoExampleId] = useState(demoComparisonExamples[0]?.id ?? "");
+  const [deploymentProfile, setDeploymentProfile] = useState<DeploymentProfileResponse>(() => initialDeploymentProfile());
 
   function resetCategoryKitPlanning(): void {
     setCategoryKitPlan(emptyCategoryKitPlan);
@@ -5787,6 +6119,15 @@ export function App() {
     [browserKind, pluginGuideLinks]
   );
   const pluginBrowserLabel = useMemo(() => browserLabel(browserKind), [browserKind]);
+  const isLocalHost = isLocalRuntimeHost();
+  const isLocalEdition = deploymentProfile.edition === "local" || deploymentProfile.target === "desktop" || isLocalHost;
+  const canUseExtension = deploymentCapabilityEnabled(deploymentProfile, "extension");
+  const canUseMobileApp = deploymentCapabilityEnabled(deploymentProfile, "mobileApp");
+  const canUsePublicGallery = isLocalEdition || deploymentCapabilityEnabled(deploymentProfile, "publicGallery");
+  const canUseCategoryKit = deploymentCapabilityEnabled(deploymentProfile, "categoryKit");
+  const canUseSeedanceVideoFeature = deploymentCapabilityEnabled(deploymentProfile, "seedanceVideo");
+  const canUseBilling = !isLocalEdition && deploymentCapabilityEnabled(deploymentProfile, "billing");
+  const canUseAdminConsole = !isLocalEdition && deploymentCapabilityEnabled(deploymentProfile, "adminConsole");
   const dismissedPluginPromptRef = useRef(false);
   const pluginProbeRequestRef = useRef(0);
   const knownNotificationIdsRef = useRef<Set<string>>(new Set());
@@ -5811,13 +6152,17 @@ export function App() {
     setPublicPath(nextPath);
   }, []);
   const navigateToAuth = useCallback((mode: AuthMode): void => {
+    if (isLocalRuntimeHost()) {
+      navigateToRoute("canvas");
+      return;
+    }
     const nextPath = mode === "register" ? "/register" : "/login";
     if (window.location.pathname !== nextPath) {
       window.history.pushState(null, "", nextPath);
     }
     setAuthMode(mode);
     setPublicPath(nextPath);
-  }, []);
+  }, [navigateToRoute]);
   const isGenerating = activeGenerationCount > 0;
   const isAuthenticated = authStatus === "authenticated" && currentUser !== null;
   const ecommerceImage = ecommerceImages[0] ?? null;
@@ -5828,11 +6173,14 @@ export function App() {
   }, []);
 
   const openPluginGuide = useCallback((): void => {
+    if (!canUseExtension) {
+      return;
+    }
     dismissedPluginPromptRef.current = false;
     setSidebarTab("plugins");
     setIsAiPanelOpen(true);
     setIsPluginGuideOpen(true);
-  }, []);
+  }, [canUseExtension]);
 
   const openGuestQuotaModal = useCallback((): void => {
     setIsGuestQuotaModalOpen(true);
@@ -5845,9 +6193,12 @@ export function App() {
 
   const openMobileApp = useCallback(
     (target: "home" | "create" | "gallery" | "account" = "home"): void => {
+      if (!canUseMobileApp) {
+        return;
+      }
       openAppOrDownload(mobileAppDownloadUrl, target);
     },
-    [mobileAppDownloadUrl]
+    [canUseMobileApp, mobileAppDownloadUrl]
   );
 
   const navigateFromGuestQuota = useCallback(
@@ -5904,12 +6255,12 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!isAuthenticated) {
+    if (!isAuthenticated || !canUseExtension) {
       return;
     }
 
     const resolvedRoute = route === "admin" && !isAdminUser(currentUser) ? "canvas" : route;
-    const requiresPhoneVerification = !!currentUser && !currentUser.phone && !isAdminUser(currentUser);
+    const requiresPhoneVerification = !isLocalEdition && !!currentUser && !currentUser.phone && !isAdminUser(currentUser);
     const visibleRoute = requiresPhoneVerification && resolvedRoute !== "help" ? "account" : resolvedRoute;
     if (visibleRoute !== "canvas") {
       return;
@@ -5924,13 +6275,16 @@ export function App() {
       pluginProbeRequestRef.current += 1;
       window.clearTimeout(timerId);
     };
-  }, [currentUser, isAuthenticated, probeAndMaybeShowPluginPrompt, route]);
+  }, [canUseExtension, currentUser, isAuthenticated, isLocalEdition, probeAndMaybeShowPluginPrompt, route]);
 
   useEffect(() => {
-    if (sidebarTab === "video" && !isAdminUser(currentUser)) {
+    if (sidebarTab === "video" && (!canUseSeedanceVideoFeature || !isAdminUser(currentUser))) {
       setSidebarTab("creative");
     }
-  }, [currentUser, sidebarTab]);
+    if (sidebarTab === "plugins" && !canUseExtension) {
+      setSidebarTab("creative");
+    }
+  }, [canUseExtension, canUseSeedanceVideoFeature, currentUser, sidebarTab]);
 
   const applyNotificationResponse = useCallback((data: AppNotificationListResponse): void => {
     setNotifications(data.notifications ?? []);
@@ -5954,7 +6308,7 @@ export function App() {
 
   const refreshNotifications = useCallback(
     async (signal?: AbortSignal): Promise<void> => {
-      if (!isAuthenticated) {
+      if (isLocalEdition || !isAuthenticated) {
         setNotifications([]);
         setNotificationUnreadCount(0);
         setToastNotification(null);
@@ -5968,7 +6322,7 @@ export function App() {
         applyNotificationResponse(data);
       }
     },
-    [applyNotificationResponse, isAuthenticated]
+    [applyNotificationResponse, isAuthenticated, isLocalEdition]
   );
 
   const handleNotificationAction = useCallback(
@@ -5982,16 +6336,16 @@ export function App() {
       }
 
       if (notification.type === "ecommerce_job_finished") {
-        navigateToRoute("gallery");
+        navigateToRoute(canUsePublicGallery ? "gallery" : "canvas");
         return;
       }
-      if (notification.actionUrl?.startsWith("/account")) {
+      if (!isLocalEdition && notification.actionUrl?.startsWith("/account")) {
         navigateToRoute("account");
         return;
       }
-      navigateToRoute("gallery");
+      navigateToRoute(canUsePublicGallery ? "gallery" : "canvas");
     },
-    [applyNotificationResponse, navigateToRoute]
+    [applyNotificationResponse, canUsePublicGallery, isLocalEdition, navigateToRoute]
   );
 
   const markAllNotificationsRead = useCallback((): void => {
@@ -6001,7 +6355,7 @@ export function App() {
   }, [applyNotificationResponse]);
 
   useEffect(() => {
-    if (!isAuthenticated) {
+    if (isLocalEdition || !isAuthenticated) {
       setNotifications([]);
       setNotificationUnreadCount(0);
       setToastNotification(null);
@@ -6020,7 +6374,7 @@ export function App() {
       controller.abort();
       window.clearInterval(timerId);
     };
-  }, [isAuthenticated, refreshNotifications]);
+  }, [isAuthenticated, isLocalEdition, refreshNotifications]);
 
   useEffect(() => {
     if (!toastNotification) {
@@ -6047,6 +6401,14 @@ export function App() {
   }, [navigateToRoute, route]);
 
   const handleLogout = useCallback((): void => {
+    if (isLocalEdition) {
+      setCurrentUser(LOCAL_DESKTOP_USER);
+      setAuthStatus("authenticated");
+      if (route !== "canvas") {
+        navigateToRoute("canvas");
+      }
+      return;
+    }
     clearStoredAuthToken();
     setCurrentUser(null);
     setAuthStatus("anonymous");
@@ -6059,9 +6421,15 @@ export function App() {
     if (route !== "canvas") {
       navigateToRoute("canvas");
     }
-  }, [navigateToRoute, route]);
+  }, [isLocalEdition, navigateToRoute, route]);
 
   const restoreStoredSession = useCallback(async (): Promise<void> => {
+    if (deploymentProfile.edition === "local") {
+      clearStoredAuthToken();
+      setCurrentUser(LOCAL_DESKTOP_USER);
+      setAuthStatus("authenticated");
+      return;
+    }
     if (!getStoredAuthToken()) {
       setAuthStatus("anonymous");
       return;
@@ -6076,12 +6444,18 @@ export function App() {
       setCurrentUser(null);
       setAuthStatus("anonymous");
     }
-  }, []);
+  }, [deploymentProfile.edition]);
 
   useEffect(() => {
     let isMounted = true;
 
     async function restoreSession(): Promise<void> {
+      if (deploymentProfile.edition === "local") {
+        clearStoredAuthToken();
+        setCurrentUser(LOCAL_DESKTOP_USER);
+        setAuthStatus("authenticated");
+        return;
+      }
       if (!getStoredAuthToken()) {
         setAuthStatus("anonymous");
         return;
@@ -6109,10 +6483,13 @@ export function App() {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [deploymentProfile.edition]);
 
   useEffect(() => {
     const handleExtensionAuthMessage = (event: MessageEvent): void => {
+      if (!canUseExtension) {
+        return;
+      }
       if (event.origin !== window.location.origin || !isExtensionAuthMessage(event.data)) {
         return;
       }
@@ -6126,9 +6503,47 @@ export function App() {
     return () => {
       window.removeEventListener("message", handleExtensionAuthMessage);
     };
-  }, [restoreStoredSession]);
+  }, [canUseExtension, restoreStoredSession]);
 
   useEffect(() => {
+    const controller = new AbortController();
+
+    async function loadDeploymentProfile(): Promise<void> {
+      try {
+        const response = await fetch("/api/config", {
+          cache: "no-store",
+          signal: controller.signal
+        });
+        if (!response.ok) {
+          return;
+        }
+        const config = (await response.json()) as AppConfig;
+        if (!controller.signal.aborted) {
+          const nextProfile = parseDeploymentProfile(config.deployment);
+          setDeploymentProfile(nextProfile);
+          if (nextProfile.edition === "local") {
+            clearStoredAuthToken();
+            setCurrentUser(LOCAL_DESKTOP_USER);
+            setAuthStatus("authenticated");
+            setAuthMode("login");
+          }
+        }
+      } catch {
+        // Keep SaaS-compatible defaults if this endpoint is unavailable in older deployments.
+      }
+    }
+
+    void loadDeploymentProfile();
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    if (!canUseExtension) {
+      setPluginGuideLinks(defaultPluginGuideLinks);
+      setIsPluginGuideOpen(false);
+      return;
+    }
+
     const controller = new AbortController();
 
     async function loadExtensionRelease(): Promise<void> {
@@ -6142,7 +6557,7 @@ export function App() {
         }
         const manifest = (await response.json()) as ExtensionReleaseResponse;
         if (!controller.signal.aborted) {
-          setPluginGuideLinks(resolveExtensionReleaseLink(manifest.prod));
+          setPluginGuideLinks(resolveExtensionReleaseLink(isLocalEdition ? manifest.local ?? manifest.prod : manifest.prod));
         }
       } catch {
         // Keep the baked-in links if release settings are unavailable.
@@ -6151,9 +6566,15 @@ export function App() {
 
     void loadExtensionRelease();
     return () => controller.abort();
-  }, []);
+  }, [canUseExtension, isLocalEdition]);
 
   useEffect(() => {
+    if (!canUseMobileApp) {
+      setAppDownloadLinks({ ios: null, android: null });
+      setIsMobileAppPromptOpen(false);
+      return;
+    }
+
     const controller = new AbortController();
 
     async function loadAppRelease(): Promise<void> {
@@ -6179,10 +6600,10 @@ export function App() {
 
     void loadAppRelease();
     return () => controller.abort();
-  }, []);
+  }, [canUseMobileApp]);
 
   useEffect(() => {
-    if (!isMobileDrawer || !shouldShowMobileAppPrompt()) {
+    if (!canUseMobileApp || !isMobileDrawer || !shouldShowMobileAppPrompt()) {
       return;
     }
 
@@ -6193,10 +6614,16 @@ export function App() {
     return () => {
       window.clearTimeout(timerId);
     };
-  }, [isMobileDrawer]);
+  }, [canUseMobileApp, isMobileDrawer]);
 
   useEffect(() => {
     const handleUnauthorized = (): void => {
+      if (isLocalEdition) {
+        clearStoredAuthToken();
+        setCurrentUser(LOCAL_DESKTOP_USER);
+        setAuthStatus("authenticated");
+        return;
+      }
       setCurrentUser(null);
       setAuthStatus("anonymous");
       setAuthMode("login");
@@ -6212,9 +6639,13 @@ export function App() {
     return () => {
       window.removeEventListener("auth:unauthorized", handleUnauthorized);
     };
-  }, [navigateToRoute, route]);
+  }, [isLocalEdition, navigateToRoute, route]);
 
   useEffect(() => {
+    if (isLocalEdition && (window.location.pathname === "/login" || window.location.pathname === "/register" || route === "account" || route === "admin" || route === "help")) {
+      navigateToRoute("canvas");
+      return;
+    }
     if (isAuthenticated && (window.location.pathname === "/login" || window.location.pathname === "/register")) {
       navigateToRoute("canvas");
       return;
@@ -6222,9 +6653,12 @@ export function App() {
     if (isAuthenticated && route === "admin" && !isAdminUser(currentUser)) {
       navigateToRoute("canvas");
     }
-  }, [currentUser, isAuthenticated, navigateToRoute, route]);
+  }, [currentUser, isAuthenticated, isLocalEdition, navigateToRoute, route]);
 
   const refreshCurrentUser = useCallback(async (): Promise<void> => {
+    if (isLocalEdition) {
+      return;
+    }
     if (!getStoredAuthToken()) {
       return;
     }
@@ -6234,7 +6668,7 @@ export function App() {
     } catch {
       // Auth expiration is handled globally by authFetch.
     }
-  }, []);
+  }, [isLocalEdition]);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -6256,7 +6690,7 @@ export function App() {
   }, [isAuthenticated, refreshCurrentUser]);
 
   useEffect(() => {
-    if (!isAuthenticated || !currentUser || currentUser.phone || isAdminUser(currentUser)) {
+    if (isLocalEdition || !isAuthenticated || !currentUser || currentUser.phone || isAdminUser(currentUser)) {
       return;
     }
 
@@ -6266,7 +6700,7 @@ export function App() {
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [currentUser, isAuthenticated, refreshCurrentUser]);
+  }, [currentUser, isAuthenticated, isLocalEdition, refreshCurrentUser]);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -6335,6 +6769,13 @@ export function App() {
   const canGenerate = !validationMessage;
   const referenceSelectionWidth = referenceSelection.status === "ready" ? referenceSelection.width : undefined;
   const referenceSelectionHeight = referenceSelection.status === "ready" ? referenceSelection.height : undefined;
+
+  useEffect(() => {
+    if (canUseCategoryKit || (ecommerceMode !== "category-kit" && ecommerceMode !== "single-poster")) {
+      return;
+    }
+    selectEcommerceMode("enhance");
+  }, [canUseCategoryKit, ecommerceMode]);
 
   useEffect(() => {
     if (sizePresetId !== ORIGINAL_SIZE_PRESET_ID) {
@@ -6549,7 +6990,7 @@ export function App() {
   }, [closeAiPanel, isAiPanelOpen, isMobileDrawer]);
 
   useEffect(() => {
-    if (sidebarTab !== "plugins") {
+    if (sidebarTab !== "plugins" || !canUseExtension) {
       return;
     }
 
@@ -6561,7 +7002,7 @@ export function App() {
     return () => {
       window.removeEventListener("paste", handlePaste);
     };
-	  }, [activeEcommerceUploadSlot, sidebarTab, ecommerceImages, ecommerceMode, ecommerceReplacementImage, ecommerceTargetImages]);
+	  }, [activeEcommerceUploadSlot, canUseExtension, sidebarTab, ecommerceImages, ecommerceMode, ecommerceReplacementImage, ecommerceTargetImages]);
 
   useEffect(() => {
     if (!isMobileDrawer || !isAiPanelOpen) {
@@ -6848,6 +7289,10 @@ export function App() {
   }
 
 	  function selectEcommerceMode(nextMode: EcommerceGenerationMode): void {
+	    if (!canUseCategoryKit && (nextMode === "category-kit" || nextMode === "single-poster")) {
+	      setGenerationWarning("当前部署版本未开放品类套图能力。");
+	      nextMode = "enhance";
+	    }
 	    const nextScenes = ecommerceScenesByMode[nextMode];
 	    const firstScene = ECOMMERCE_SCENE_TEMPLATES.find((item) => item.id === nextScenes[0]);
 	    const nextPreset = firstScene ? SIZE_PRESETS.find((item) => item.id === firstScene.defaultSizePresetId) : undefined;
@@ -7193,7 +7638,11 @@ export function App() {
     );
   }
 
-  async function pollEcommerceJob(jobId: string, signal: AbortSignal): Promise<EcommerceBatchGenerateResponse> {
+  async function pollEcommerceJob(
+    jobId: string,
+    signal: AbortSignal,
+    onProgress?: (job: EcommerceBatchGenerateResponse) => Promise<void> | void
+  ): Promise<EcommerceBatchGenerateResponse> {
     for (;;) {
       if (signal.aborted) {
         throw new DOMException("Ecommerce generation was aborted.", "AbortError");
@@ -7203,11 +7652,12 @@ export function App() {
         throw new Error(await readErrorMessage(response));
       }
       const body = (await response.json()) as EcommerceBatchGenerateResponse;
+      await onProgress?.(body);
       if (body.status === "succeeded" || body.status === "partial" || body.status === "failed") {
         return body;
       }
       setGenerationMessage(body.message || `电商任务生成中：${body.completedScenes}/${body.totalScenes}`);
-      await new Promise((resolve) => window.setTimeout(resolve, 1400));
+      await new Promise((resolve) => window.setTimeout(resolve, 900));
     }
   }
 
@@ -7431,6 +7881,10 @@ export function App() {
     if (isEcommerceGenerating || isCategoryKitPlanning) {
       return;
     }
+    if ((ecommerceMode === "category-kit" || ecommerceMode === "single-poster") && !canUseCategoryKit) {
+      setGenerationError("当前部署版本未开启品类套图能力。");
+      return;
+    }
 	    const title = ecommerceTitle.trim();
 	    const selectedSize = SIZE_PRESETS.find((item) => item.id === ecommerceSizePresetId) ?? SIZE_PRESETS[0];
 	    const outputCountPerScene = ecommerceMode === "single-poster" || ecommerceMode === "category-kit" || ecommerceMode === "one-click-replace" || ecommerceMode === "text-translation" ? 1 : ecommerceCount;
@@ -7495,13 +7949,29 @@ export function App() {
     }
 
     const generateEndpoint = ecommerceMode === "category-kit" ? "/api/ecommerce/images/category-kit-generate" : "/api/ecommerce/images/batch-generate";
+    const ecommercePrompt = `${ecommerceModeLabels[ecommerceMode]}：${title || (isMobileDrawer ? "移动端快捷生成" : "画布生成")}`;
 
     if (isMobileDrawer) {
       const controller = new AbortController();
       setIsEcommerceGenerating(true);
       setActiveGenerationCount((value) => value + 1);
       setMobileCreateTab("history");
-      setMobileSelectedRecordId(null);
+      const pendingRecordId = `local-ecommerce-${generationRequestRef.current + 1}`;
+      generationRequestRef.current += 1;
+      const pendingRecord = createTemporaryEcommerceRecord({
+        jobId: pendingRecordId,
+        prompt: ecommercePrompt,
+        size: {
+          width: selectedSize.width,
+          height: selectedSize.height
+        },
+        presetId: ecommercePresetId,
+        outputFormat: "png",
+        count: totalOutputs,
+        message: "电商批量任务提交中。"
+      });
+      setMobileSelectedRecordId(pendingRecord.id);
+      setGenerationHistory((history) => [pendingRecord, ...history.filter((record) => record.id !== pendingRecord.id)].slice(0, 20));
 
       try {
         const response = await authFetch(generateEndpoint, {
@@ -7517,25 +7987,59 @@ export function App() {
         }
         const createdJob = (await response.json()) as EcommerceBatchGenerateResponse;
         setGenerationMessage(createdJob.message || "电商批量任务已创建。");
-        const completedJob = await pollEcommerceJob(createdJob.jobId, controller.signal);
-        await Promise.all(
-          completedJob.records.flatMap((record) =>
-            record.outputs.flatMap((output) => (output.asset ? [preloadGeneratedAssetPreview(output.asset, controller.signal)] : []))
-          )
-        );
-        const succeededCount = completedJob.records.reduce((total, record) => total + successfulOutputCount(record), 0);
+        const placeholderCount = ecommerceMode === "category-kit" ? Math.max(1, createdJob.totalScenes || totalOutputs) : totalOutputs;
+        const jobRecord = createTemporaryEcommerceRecord({
+          jobId: createdJob.jobId,
+          prompt: ecommercePrompt,
+          size: {
+            width: selectedSize.width,
+            height: selectedSize.height
+          },
+          presetId: ecommercePresetId,
+          outputFormat: "png",
+          count: placeholderCount,
+          createdAt: createdJob.createdAt,
+          message: createdJob.message
+        });
+        setMobileSelectedRecordId(createdJob.jobId);
         setGenerationHistory((history) => [
-          ...completedJob.records,
-          ...history.filter((record) => !completedJob.records.some((item) => item.id === record.id))
+          jobRecord,
+          ...history.filter((record) => record.id !== pendingRecord.id && record.id !== createdJob.jobId)
         ].slice(0, 20));
-        setMobileSelectedRecordId(completedJob.records[0]?.id ?? null);
+        const completedJob = await pollEcommerceJob(createdJob.jobId, controller.signal, (job) => {
+          const progressRecord = createEcommerceCombinedRecord({
+            job,
+            prompt: ecommercePrompt,
+            size: {
+              width: selectedSize.width,
+              height: selectedSize.height
+            },
+            presetId: ecommercePresetId,
+            outputFormat: "png",
+            count: ecommerceMode === "category-kit" ? Math.max(1, job.totalScenes || placeholderCount) : placeholderCount
+          });
+          setGenerationHistory((history) => [progressRecord, ...history.filter((record) => record.id !== progressRecord.id)].slice(0, 20));
+          setMobileSelectedRecordId((selectedId) =>
+            selectedId === pendingRecord.id || selectedId === createdJob.jobId || selectedId === null ? createdJob.jobId : selectedId
+          );
+          void preloadGenerationRecordPreviews(progressRecord, controller.signal);
+        });
+        const succeededCount = completedJob.records.reduce((total, record) => total + successfulOutputCount(record), 0);
+        setGenerationHistory((history) => mergeGenerationRecordsForJob(history, createdJob.jobId, completedJob.records));
+        setMobileSelectedRecordId((selectedId) => (selectedId === createdJob.jobId ? completedJob.records[0]?.id ?? createdJob.jobId : selectedId));
         if (succeededCount > 0) {
           setGenerationMessage(`已生成 ${succeededCount} 张电商图，结果已保存到作品图库。`);
         } else {
           setGenerationError(completedJob.message || "电商生成未返回可用图片。");
         }
       } catch (error) {
-        setGenerationError(error instanceof Error ? error.message : "电商生成失败，请重试。");
+        const message = error instanceof Error ? error.message : "电商生成失败，请重试。";
+        setGenerationHistory((history) =>
+          history.map((record) =>
+            record.id === pendingRecord.id ? { ...record, status: "failed", error: message } : record
+          )
+        );
+        setGenerationError(message);
       } finally {
         setIsEcommerceGenerating(false);
         setActiveGenerationCount((value) => Math.max(0, value - 1));
@@ -7572,11 +8076,54 @@ export function App() {
       const placeholderCount = ecommerceMode === "category-kit" ? Math.max(1, createdJob.totalScenes || totalOutputs) : totalOutputs;
       placeholderSet = createEcommerceBatchPlaceholders(editor, placeholderCount, selectedSize, requestId);
       setGenerationMessage(createdJob.message || "电商批量任务已创建。");
-      const completedJob = await pollEcommerceJob(createdJob.jobId, controller.signal);
+      const totalProgressUnits = Math.max(1, placeholderCount);
+      let syncedOutputCount = 0;
+      const insertedRecordIds = new Set<string>();
+      const syncEcommerceCanvasProgress = async (job: EcommerceBatchGenerateResponse): Promise<void> => {
+        if (!placeholderSet || controller.signal.aborted) {
+          return;
+        }
+
+        const freshRecords = job.records.filter((record) => record.outputs.length > 0 && !insertedRecordIds.has(record.id));
+        if (freshRecords.length === 0) {
+          return;
+        }
+
+        const progressRecord = createEcommerceProgressRecord({
+          job,
+          records: freshRecords,
+          prompt: ecommercePrompt,
+          size: {
+            width: selectedSize.width,
+            height: selectedSize.height
+          },
+          presetId: ecommercePresetId,
+          outputFormat: "png"
+        });
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        const changedCount = replaceGenerationPlaceholders(editor, placeholderSet, progressRecord, {
+          markMissingOutputsFailed: false,
+          skipMissingPlaceholders: true
+        });
+        void preloadGeneratedAssetPreviews(generatedAssetsForRecord(progressRecord), controller.signal);
+        if (changedCount > 0 || freshRecords.some((record) => record.status === "failed")) {
+          freshRecords.forEach((record) => insertedRecordIds.add(record.id));
+          syncedOutputCount += freshRecords.reduce((total, record) => total + ecommerceOutputCount(record), 0);
+          setGenerationMessage(
+            job.status === "running"
+              ? `已更新 ${Math.min(syncedOutputCount, totalProgressUnits)}/${totalProgressUnits} 张电商图到画布，剩余图片继续生成中。`
+              : job.message
+          );
+        }
+      };
+      const completedJob = await pollEcommerceJob(createdJob.jobId, controller.signal, syncEcommerceCanvasProgress);
       const finalOutputCount = ecommerceMode === "category-kit" ? Math.max(1, completedJob.totalScenes || completedJob.records.length) : placeholderCount;
       const combinedRecord = createEcommerceCombinedRecord({
         job: completedJob,
-        prompt: `${ecommerceModeLabels[ecommerceMode]}：${title || "移动端快捷生成"}`,
+        prompt: ecommercePrompt,
         size: {
           width: selectedSize.width,
           height: selectedSize.height
@@ -7591,19 +8138,24 @@ export function App() {
 	      if (ecommerceMode === "category-kit" && finalOutputCount < placeholderSet.placements.length) {
 	        placeholderSet = trimGenerationPlaceholders(editor, placeholderSet, finalOutputCount);
 	      }
-	      await Promise.all(combinedRecord.outputs.flatMap((output) => (output.asset ? [preloadGeneratedAssetPreview(output.asset, controller.signal)] : [])));
-      const insertedCount = replaceGenerationPlaceholders(editor, placeholderSet, combinedRecord);
-      const failedCount = Math.max(0, finalOutputCount - insertedCount);
+      const finalInsertedCount = replaceGenerationPlaceholders(editor, placeholderSet, combinedRecord, {
+        skipMissingPlaceholders: true
+      });
+	      void preloadGeneratedAssetPreviews(generatedAssetsForRecord(combinedRecord), controller.signal);
+      const succeededCount = successfulOutputCount(combinedRecord);
+      const failedCount = Math.max(0, finalOutputCount - succeededCount);
       setGenerationHistory((history) => [
         ...completedJob.records,
         ...history.filter((record) => !completedJob.records.some((item) => item.id === record.id))
       ].slice(0, 20));
-      if (insertedCount > 0) {
+      if (succeededCount > 0) {
         setGenerationMessage(
           failedCount > 0
-            ? `已生成并插入 ${insertedCount} 张电商图，${failedCount} 张失败。`
-            : `已生成并插入 ${insertedCount} 张电商图。`
+            ? `已生成并插入 ${succeededCount} 张电商图，${failedCount} 张失败。`
+            : `已生成并插入 ${succeededCount} 张电商图。`
         );
+      } else if (finalInsertedCount > 0) {
+        setGenerationMessage(`已生成并插入 ${finalInsertedCount} 张电商图。`);
       } else {
         setGenerationError(completedJob.message || "电商生成未返回可插入图片。");
       }
@@ -7697,13 +8249,13 @@ export function App() {
         throw new Error("生成服务返回了无法识别的结果。");
       }
 
-      await preloadGenerationRecordPreviews(body.record, controller.signal);
       const succeededCount = successfulOutputCount(body.record);
-      const failedCount = body.record.outputs.filter((output) => output.status === "failed").length;
+      const failedCount = body.record.outputs.filter((output) => output?.status === "failed").length;
       setGenerationHistory((history) =>
         [body.record, ...history.filter((record) => record.id !== temporaryRecord.id && record.id !== body.record.id)].slice(0, 20)
       );
       setMobileSelectedRecordId(body.record.id);
+      void preloadGenerationRecordPreviews(body.record, controller.signal);
 
       if (succeededCount > 0) {
         setGenerationMessage(
@@ -7824,7 +8376,6 @@ export function App() {
         return;
       }
 
-      await preloadGenerationRecordPreviews(body.record, controller.signal);
       if (controller.signal.aborted || !activeGenerationsRef.current.has(requestId)) {
         return;
       }
@@ -7833,8 +8384,9 @@ export function App() {
         [body.record, ...history.filter((record) => record.id !== temporaryRecord.id && record.id !== body.record.id)].slice(0, 20)
       );
       const insertedCount = replaceGenerationPlaceholders(editor, placeholderSet, body.record);
+      void preloadGenerationRecordPreviews(body.record, controller.signal);
       const failedCount =
-        body.record.outputs.filter((output) => output.status === "failed").length +
+        body.record.outputs.filter((output) => output?.status === "failed").length +
         Math.max(0, placeholderSet.placements.length - body.record.outputs.length);
       const cloudFailedCount = cloudFailureCount(body.record);
       if (insertedCount > 0) {
@@ -8234,7 +8786,7 @@ export function App() {
   function removeGalleryOutputFromHistory(outputId: string): void {
     setGenerationHistory((history) =>
       history.flatMap((record) => {
-        const nextOutputs = record.outputs.filter((output) => output.id !== outputId);
+        const nextOutputs = record.outputs.filter((output) => output?.id !== outputId);
         if (nextOutputs.length === record.outputs.length) {
           return [record];
         }
@@ -8365,15 +8917,26 @@ export function App() {
           />
         ) : isMobileDrawer && guestVisibleRoute === "canvas" ? (
           <>
-            <MobileGuestHome
-              appDownloadUrl={mobileAppDownloadUrl}
-              appPlatform={mobilePlatform}
-              onAuthNavigate={navigateToAuth}
-              onOpenApp={openMobileApp}
-              onOpenGallery={() => navigateToRoute("gallery")}
-              onOpenMobileAppPrompt={() => setIsMobileAppPromptOpen(true)}
-            />
-            {isMobileAppPromptOpen ? (
+          <MobileGuestHome
+            appDownloadUrl={mobileAppDownloadUrl}
+            appPlatform={mobilePlatform}
+            canUseCategoryKit={canUseCategoryKit}
+            canUseMobileApp={canUseMobileApp}
+            canUsePublicGallery={canUsePublicGallery}
+            onAuthNavigate={navigateToAuth}
+            onOpenApp={openMobileApp}
+            onOpenGallery={() => {
+              if (canUsePublicGallery) {
+                navigateToRoute("gallery");
+              }
+            }}
+            onOpenMobileAppPrompt={() => {
+              if (canUseMobileApp) {
+                setIsMobileAppPromptOpen(true);
+              }
+            }}
+          />
+          {canUseMobileApp && isMobileAppPromptOpen ? (
               <MobileAppPromptOverlay
                 downloadUrl={mobileAppDownloadUrl}
                 platform={mobilePlatform}
@@ -8387,15 +8950,17 @@ export function App() {
           </>
         ) : (
           <>
-            <GuestTopNavigation
-              route={guestVisibleRoute}
-              onAuthNavigate={navigateToAuth}
-              onNavigate={navigateToRoute}
-              onOpenPluginGuide={openPluginGuide}
-            />
+          <GuestTopNavigation
+            canUseExtension={canUseExtension}
+            canUsePublicGallery={canUsePublicGallery}
+            route={guestVisibleRoute}
+            onAuthNavigate={navigateToAuth}
+            onNavigate={navigateToRoute}
+            onOpenPluginGuide={openPluginGuide}
+          />
             {guestVisibleRoute === "help" ? (
               <HelpCenterPage />
-            ) : guestVisibleRoute === "gallery" ? (
+            ) : guestVisibleRoute === "gallery" && canUsePublicGallery ? (
               <Suspense
                 fallback={
                   <main className="gallery-page app-view" data-testid="gallery-loading-page">
@@ -8421,6 +8986,7 @@ export function App() {
                 isAiPanelOpen={isAiPanelOpen}
                 isMobileDrawer={isMobileDrawer}
                 panelCloseButtonRef={panelCloseButtonRef}
+                canUseExtension={canUseExtension}
                 pluginGuideLinks={pluginGuideDisplayLinks}
                 selectedExampleId={selectedDemoExampleId}
                 onClosePanel={closeAiPanel}
@@ -8432,6 +8998,7 @@ export function App() {
             )}
             {isGuestQuotaModalOpen ? (
               <GuestQuotaOverlay
+                canUseExtension={canUseExtension}
                 links={pluginGuideDisplayLinks}
                 onAuthNavigate={navigateFromGuestQuota}
                 onClose={() => setIsGuestQuotaModalOpen(false)}
@@ -8443,7 +9010,7 @@ export function App() {
                 }}
               />
             ) : null}
-            {isPluginGuideOpen ? (
+            {canUseExtension && isPluginGuideOpen ? (
               <PluginGuideOverlay
                 browserLabel={pluginBrowserLabel}
                 links={pluginGuideDisplayLinks}
@@ -8467,14 +9034,27 @@ export function App() {
   }
 
   const resolvedRoute = route === "admin" && !isAdminUser(currentUser) ? "canvas" : route;
-  const requiresPhoneVerification = !currentUser.phone && !isAdminUser(currentUser);
-  const visibleRoute = requiresPhoneVerification && resolvedRoute !== "help" ? "account" : resolvedRoute;
+  const requiresPhoneVerification = !isLocalEdition && !currentUser.phone && !isAdminUser(currentUser);
+  const capabilityVisibleRoute =
+    resolvedRoute === "gallery" && !canUsePublicGallery
+      ? "canvas"
+      : isLocalEdition && (resolvedRoute === "account" || resolvedRoute === "admin" || resolvedRoute === "help")
+        ? "canvas"
+      : resolvedRoute === "admin" && !canUseAdminConsole
+        ? "canvas"
+        : resolvedRoute;
+  const visibleRoute = requiresPhoneVerification && capabilityVisibleRoute !== "help" ? "account" : capabilityVisibleRoute;
   const showMobileWorkbench = isMobileDrawer && visibleRoute === "canvas";
   const showMobileAppShell = isMobileDrawer && (visibleRoute === "canvas" || visibleRoute === "gallery" || visibleRoute === "account");
 	  const packageRemaining = currentUser.packageRemaining ?? Math.max(0, (currentUser.quotaTotal ?? 0) - (currentUser.quotaUsed ?? 0));
-	  const canUseSeedanceVideo = isAdminUser(currentUser);
-	  const activeSidebarTab = canUseSeedanceVideo || sidebarTab !== "video" ? sidebarTab : "creative";
-	  const visibleSidebarTabs = canUseSeedanceVideo ? sidebarTabs : sidebarTabs.filter((tab) => tab.id !== "video");
+	  const canUseSeedanceVideo = canUseSeedanceVideoFeature && isAdminUser(currentUser);
+	  const activeSidebarTab =
+	    sidebarTab === "video" && !canUseSeedanceVideo ? "creative" : sidebarTab === "plugins" && !canUseExtension ? "creative" : sidebarTab;
+	  const visibleSidebarTabs = sidebarTabs.filter((tab) => {
+	    if (tab.id === "plugins") return canUseExtension;
+	    if (tab.id === "video") return canUseSeedanceVideo;
+	    return true;
+	  });
 	  const ecommerceReferenceLimit = ecommerceReferenceUploadLimit(ecommerceMode);
 	  const ecommerceUploadHeading =
 	    ecommerceMode === "one-click-replace" ? "目标模特/场景图" : ecommerceMode === "text-translation" ? "待翻译图片" : "产品参考图";
@@ -8485,9 +9065,11 @@ export function App() {
     <div className="app-root">
       {!showMobileAppShell ? (
         <TopNavigation
+          canUsePublicGallery={canUsePublicGallery}
           ecommerceStats={ecommerceStats}
           generationHistoryCount={generationHistory.length}
           isNotificationCenterOpen={isNotificationCenterOpen}
+          isLocalEdition={isLocalEdition}
           notifications={notifications}
           notificationUnreadCount={notificationUnreadCount}
           route={visibleRoute}
@@ -8517,6 +9099,9 @@ export function App() {
         <MobileWorkbench
           activeTab={mobileCreateTab}
           canGenerate={canGenerate}
+          canUseCategoryKit={canUseCategoryKit}
+          canUseMobileApp={canUseMobileApp}
+          canUsePublicGallery={canUsePublicGallery}
           count={count}
 	          ecommerceCount={ecommerceCount}
 	          ecommerceDescription={ecommerceDescription}
@@ -8561,9 +9146,17 @@ export function App() {
           onCopyHistoryPrompt={(record) => void copyHistoryPrompt(record)}
 	          onDownloadHistoryRecord={downloadHistoryRecord}
 		          onNavigate={navigateToRoute}
-		          onOpenGallery={() => navigateToRoute("gallery")}
+		          onOpenGallery={() => {
+            if (canUsePublicGallery) {
+              navigateToRoute("gallery");
+            }
+          }}
           onOpenMobileApp={openMobileApp}
-          onOpenMobileAppPrompt={() => setIsMobileAppPromptOpen(true)}
+          onOpenMobileAppPrompt={() => {
+            if (canUseMobileApp) {
+              setIsMobileAppPromptOpen(true);
+            }
+          }}
 		          onOptimizeEcommerceExtraDirection={() => void optimizeEcommerceExtraDirection()}
 	          onOptimizePrompt={() => void optimizePrompt()}
 	          onRerunHistoryRecord={(record) => void rerunHistoryRecord(record)}
@@ -8713,7 +9306,7 @@ export function App() {
         </div>
 
         <div className="ai-panel-body flex-1 space-y-5 overflow-y-auto px-5 py-5">
-          {activeSidebarTab === "plugins" ? (
+          {activeSidebarTab === "plugins" && canUseExtension ? (
             <>
               <section className="sidebar-hero">
                 <div className="sidebar-hero__top">
@@ -8761,7 +9354,7 @@ export function App() {
                   <Megaphone className="size-4 text-amber-700" aria-hidden="true" />
                 </div>
                 <div className="sidebar-grid">
-                  {ecommerceModeCards.map((card) => {
+                  {ecommerceModeCards.filter((card) => !card.capability || canUseCategoryKit).map((card) => {
                     const Icon = card.icon;
                     const active = ecommerceMode === card.id;
                     return (
@@ -9591,7 +10184,7 @@ export function App() {
                 {visibleHistory.map((record) => {
                   const downloadableAsset = firstDownloadableAsset(record);
                   const excerpt = promptExcerpt(record.prompt);
-                  const totalOutputs = record.outputs.length || record.count;
+                  const totalOutputs = outputSlotCount(record);
                   const activeTask = Array.from(activeGenerationsRef.current.values()).find((task) => task.temporaryRecordId === record.id);
                   const isRecordRunning = record.status === "running" && Boolean(activeTask);
                   const cloudFailedCount = cloudFailureCount(record);
@@ -9742,7 +10335,7 @@ export function App() {
       </aside>
 
       </main>
-      {visibleRoute === "gallery" ? (
+      {visibleRoute === "gallery" && canUsePublicGallery ? (
         <Suspense
           fallback={
             <main className="gallery-page app-view" data-testid="gallery-loading-page">
@@ -9771,10 +10364,13 @@ export function App() {
           />
         </Suspense>
       ) : null}
-      {visibleRoute === "help" ? <HelpCenterPage onBack={() => navigateToRoute("canvas")} /> : null}
-      {visibleRoute === "account" ? (
+      {!isLocalEdition && visibleRoute === "help" ? <HelpCenterPage onBack={() => navigateToRoute("canvas")} /> : null}
+      {!isLocalEdition && visibleRoute === "account" ? (
         <AccountPage
+          billingEnabled={canUseBilling}
           mobile={isMobileDrawer}
+          phoneVerificationEnabled={!isLocalEdition}
+          showAdminEntry={canUseAdminConsole && isAdminUser(currentUser)}
           user={currentUser}
           onLogout={handleLogout}
           onNavigate={(nextRoute) => {
@@ -9788,8 +10384,8 @@ export function App() {
           onBindPhone={bindPhone}
         />
       ) : null}
-      {visibleRoute === "admin" && isAdminUser(currentUser) ? <AdminPage /> : null}
-      {isMobileAppPromptOpen ? (
+      {!isLocalEdition && visibleRoute === "admin" && isAdminUser(currentUser) && canUseAdminConsole ? <AdminPage /> : null}
+      {canUseMobileApp && isMobileAppPromptOpen ? (
         <MobileAppPromptOverlay
           downloadUrl={mobileAppDownloadUrl}
           platform={mobilePlatform}
@@ -9800,7 +10396,7 @@ export function App() {
           }}
         />
       ) : null}
-      {isPluginGuideOpen && visibleRoute === "canvas" ? (
+      {canUseExtension && isPluginGuideOpen && visibleRoute === "canvas" ? (
         <PluginGuideOverlay
           browserLabel={pluginBrowserLabel}
           links={pluginGuideDisplayLinks}

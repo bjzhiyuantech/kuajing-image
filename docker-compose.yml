@@ -17,6 +17,7 @@ services:
       retries: 20
 
   app:
+    image: ${APP_IMAGE:-kuajing-image/app:local}
     build:
       context: .
       dockerfile: Dockerfile
@@ -31,6 +32,8 @@ services:
       - path: .env.apns
         required: false
     environment:
+      DEPLOYMENT_PROFILE: ${DEPLOYMENT_PROFILE:-local}
+      DEPLOYMENT_TARGET: ${DEPLOYMENT_TARGET:-desktop}
       HOST: 0.0.0.0
       PORT: ${PORT:-8787}
       DATA_DIR: /app/data

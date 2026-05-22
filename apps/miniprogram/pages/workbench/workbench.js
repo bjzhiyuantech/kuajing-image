@@ -75,6 +75,23 @@ const CATEGORY_KITS = [
   }
 ];
 
+function modeRequiresCategoryKit(mode) {
+  return mode === "category-kit" || mode === "single-poster";
+}
+
+function modeEnabled(mode, capabilities) {
+  if (modeRequiresCategoryKit(mode)) {
+    return api.capabilityEnabled(capabilities, "categoryKit");
+  }
+  return true;
+}
+
+function availableModes(capabilities, activeMode) {
+  return MODES
+    .filter((item) => modeEnabled(item.id, capabilities))
+    .map((item) => ({ ...item, active: item.id === activeMode }));
+}
+
 function initialScenes(mode) {
   const defaults = MODE_SCENES[mode] || MODE_SCENES.enhance;
   return SCENES.map((item) => ({ ...item, active: defaults.includes(item.id), visible: defaults.includes(item.id) }));
@@ -107,6 +124,7 @@ Page({
     mode: "enhance",
     modeDesc: (MODES.find((item) => item.id === "enhance") || MODES[0]).desc,
     modes: MODES.map((item) => ({ ...item, active: item.id === "enhance" })),
+    canUseCategoryKit: true,
     platformIndex: DEFAULT_PLATFORM_INDEX >= 0 ? DEFAULT_PLATFORM_INDEX : 0,
     platformLabels: PLATFORMS.map((item) => item.label),
     removeWatermarkAndLogo: true,
@@ -123,13 +141,32 @@ Page({
     usageScene: ""
   },
 
-  onLoad() {
+  async onLoad() {
+    await this.loadCapabilities();
     const selectedCategoryId = wx.getStorageSync(CATEGORY_KEY) || CATEGORY_KITS[0].id;
     this.applyCategory(selectedCategoryId, false);
     this.setData({ hasTemplate: Boolean(wx.getStorageSync(TEMPLATE_KEY)) });
   },
 
-  onShow() {
+  async loadCapabilities() {
+    const capabilities = await api.getCapabilities();
+    const canUseCategoryKit = api.capabilityEnabled(capabilities, "categoryKit");
+    const mode = canUseCategoryKit || !modeRequiresCategoryKit(this.data.mode) ? this.data.mode : "enhance";
+    const modeMeta = MODES.find((item) => item.id === mode) || MODES[0];
+    const scenes = mode === "category-kit" ? categoryScenes(this.data.selectedCategoryId) : initialScenes(mode);
+    this.setData({
+      canUseCategoryKit,
+      mode,
+      modeDesc: modeMeta.desc,
+      modes: availableModes(capabilities, mode),
+      scenes,
+      activeSceneCount: scenes.filter((item) => item.active && item.visible).length
+    });
+    return capabilities;
+  },
+
+  async onShow() {
+    await this.loadCapabilities();
     const preset = wx.getStorageSync("createPreset");
     if (preset) {
       wx.removeStorageSync("createPreset");
@@ -143,7 +180,11 @@ Page({
   },
 
   applyPreset(preset) {
-    this.changeMode(PRESET_TO_MODE[preset] || "enhance");
+    let mode = PRESET_TO_MODE[preset] || "enhance";
+    if (modeRequiresCategoryKit(mode) && !this.data.canUseCategoryKit) {
+      mode = "enhance";
+    }
+    this.changeMode(mode);
   },
 
   applyPrompt(prompt) {
@@ -160,24 +201,29 @@ Page({
   },
 
   changeMode(mode) {
-    const modeMeta = MODES.find((item) => item.id === mode) || MODES[0];
-    const languageIndex = mode === "text-translation" ? Math.max(1, this.data.languageIndex) : this.data.languageIndex;
-    const scenes = mode === "category-kit" ? categoryScenes(this.data.selectedCategoryId) : initialScenes(mode);
+    let nextMode = mode;
+    if (modeRequiresCategoryKit(nextMode) && !this.data.canUseCategoryKit) {
+      wx.showToast({ title: "当前版本未开启品类套图", icon: "none" });
+      nextMode = "enhance";
+    }
+    const modeMeta = MODES.find((item) => item.id === nextMode) || MODES[0];
+    const languageIndex = nextMode === "text-translation" ? Math.max(1, this.data.languageIndex) : this.data.languageIndex;
+    const scenes = nextMode === "category-kit" ? categoryScenes(this.data.selectedCategoryId) : initialScenes(nextMode);
     const patch = {
       activeSceneCount: scenes.filter((item) => item.active && item.visible).length,
       languageIndex,
-      mode,
+      mode: nextMode,
       modeDesc: modeMeta.desc,
-      modes: MODES.map((item) => ({ ...item, active: item.id === mode })),
+      modes: availableModes({ categoryKit: this.data.canUseCategoryKit }, nextMode),
       scenes,
-      imageLimit: mode === "one-click-replace" ? 9 : mode === "custom" ? 4 : 3,
-      images: mode === "one-click-replace" ? this.data.images.slice(0, 9) : mode === "custom" ? this.data.images.slice(0, 4) : this.data.images.slice(0, 3)
+      imageLimit: nextMode === "one-click-replace" ? 9 : nextMode === "custom" ? 4 : 3,
+      images: nextMode === "one-click-replace" ? this.data.images.slice(0, 9) : nextMode === "custom" ? this.data.images.slice(0, 4) : this.data.images.slice(0, 3)
     };
-    if (mode === "single-poster" || mode === "category-kit" || mode === "one-click-replace") {
+    if (nextMode === "single-poster" || nextMode === "category-kit" || nextMode === "one-click-replace") {
       const longPosterSizeIndex = SIZE_OPTIONS.findIndex((item) => item.id === "ecommerce-long-poster");
       patch.countIndex = 0;
       patch.countPerScene = 1;
-      if (mode === "single-poster" && longPosterSizeIndex >= 0) {
+      if (nextMode === "single-poster" && longPosterSizeIndex >= 0) {
         patch.sizeIndex = longPosterSizeIndex;
       }
     }
@@ -185,10 +231,17 @@ Page({
   },
 
   selectCategory(event) {
+    if (!this.data.canUseCategoryKit) {
+      wx.showToast({ title: "当前版本未开启品类套图", icon: "none" });
+      return;
+    }
     this.applyCategory(event.currentTarget.dataset.id, true);
   },
 
   applyCategory(categoryId, shouldPersist) {
+    if (!this.data.canUseCategoryKit) {
+      return;
+    }
     const selected = CATEGORY_KITS.find((item) => item.id === categoryId) || CATEGORY_KITS[0];
     const scenes = categoryScenes(selected.id);
     if (shouldPersist) {
@@ -300,6 +353,10 @@ Page({
   },
 
   requestCategory() {
+    if (!this.data.canUseCategoryKit) {
+      wx.showToast({ title: "当前版本未开启品类套图", icon: "none" });
+      return;
+    }
     wx.showToast({ title: "品类申请表单稍后上线", icon: "none" });
   },
 
@@ -322,6 +379,10 @@ Page({
     }
 
     const title = this.data.title.trim();
+    if (modeRequiresCategoryKit(this.data.mode) && !this.data.canUseCategoryKit) {
+      wx.showToast({ title: "当前版本未开启品类套图", icon: "none" });
+      return;
+    }
     const sceneTemplateIds = this.data.scenes.filter((item) => item.active && item.visible).map((item) => item.id);
     const isCustomMode = this.data.mode === "custom";
     const titleOptionalMode = isCustomMode || this.data.mode === "single-poster" || this.data.mode === "category-kit" || this.data.mode === "one-click-replace";

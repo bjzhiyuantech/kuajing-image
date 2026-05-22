@@ -23,6 +23,7 @@ apps/web/dist/
 apps/api/dist/
 apps/extension/dist-dev/
 apps/extension/dist-prod/
+apps/extension/dist-local/
 packages/shared/dist/
 downloads/*.zip
 downloads/*.json

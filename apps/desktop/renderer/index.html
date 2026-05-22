@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>商图 AI 单机版</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="topbar">
+        <div>
+          <p class="eyebrow">Desktop Standalone</p>
+          <h1>商图 AI 单机版</h1>
+        </div>
+        <div class="top-actions">
+          <button id="open-service" class="primary">进入本地工作台</button>
+          <button id="open-extension-dir">本地插件</button>
+          <button id="open-config">高级配置</button>
+          <button id="open-dir">运行目录</button>
+        </div>
+      </section>
+
+      <section class="status-grid">
+        <article class="status-panel">
+          <div class="status-title">
+            <span id="docker-dot" class="dot pending"></span>
+            <span>Docker</span>
+          </div>
+          <p id="docker-status" class="status-value">检查中</p>
+          <p id="docker-detail" class="muted">等待状态刷新</p>
+        </article>
+        <article class="status-panel">
+          <div class="status-title">
+            <span id="standalone-dot" class="dot pending"></span>
+            <span>单机资源</span>
+          </div>
+          <p id="standalone-status" class="status-value">检查中</p>
+          <p id="service-dir" class="muted path">-</p>
+        </article>
+        <article class="status-panel">
+          <div class="status-title">
+            <span id="busy-dot" class="dot pending"></span>
+            <span>任务状态</span>
+          </div>
+          <p id="busy-status" class="status-value">空闲</p>
+          <p id="service-url" class="muted">http://127.0.0.1:8787</p>
+        </article>
+      </section>
+
+      <section class="workspace">
+        <aside class="side-panel">
+          <nav class="tabs" aria-label="桌面单机版导航">
+            <button data-tab="config" class="tab active">配置</button>
+            <button data-tab="runtime" class="tab">运行</button>
+            <button data-tab="logs" class="tab">日志</button>
+          </nav>
+          <div class="actions-panel">
+            <button data-action="install" class="primary">初始化安装</button>
+            <button data-action="start">启动服务</button>
+            <button data-action="status">查看状态</button>
+            <button data-action="logs">查看日志</button>
+            <button data-action="smoke">运行自检</button>
+            <button data-action="stop" class="danger">停止服务</button>
+          </div>
+        </aside>
+
+        <section class="content-panel">
+          <section id="panel-config" class="tab-panel active">
+            <div class="panel-header">
+              <div>
+                <h2>界面配置</h2>
+                <p class="muted">单机版只需要配置生图模型、Agent 基础模型和本机端口；高级参数会自动生成。</p>
+              </div>
+              <div class="panel-actions">
+                <button id="reload-config" class="ghost">重载</button>
+                <button id="save-config" class="primary">保存配置</button>
+              </div>
+            </div>
+            <form id="config-form" class="config-form">
+              <fieldset>
+                <legend>生图模型</legend>
+                <label class="field full">
+                  <span>OpenAI API Key</span>
+                  <input name="OPENAI_API_KEY" type="password" autocomplete="off" placeholder="sk-..." />
+                </label>
+                <label class="field">
+                  <span>OpenAI Base URL</span>
+                  <input name="OPENAI_BASE_URL" type="url" placeholder="留空使用官方 OpenAI" />
+                </label>
+                <label class="field">
+                  <span>图像模型</span>
+                  <input name="OPENAI_IMAGE_MODEL" type="text" placeholder="gpt-image-2" />
+                </label>
+              </fieldset>
+
+              <fieldset>
+                <legend>Agent 基础模型</legend>
+                <p class="field full muted no-margin">用于提示词优化、图像识别、品类套图规划，需要填写支持图像理解的多模态模型。</p>
+                <label class="field full">
+                  <span>Agent API Key</span>
+                  <input name="AGENT_API_KEY" type="password" autocomplete="off" placeholder="留空则复用上方 OpenAI API Key" />
+                </label>
+                <label class="field">
+                  <span>Agent Base URL</span>
+                  <input name="AGENT_BASE_URL" type="url" placeholder="留空则复用上方 OpenAI Base URL" />
+                </label>
+                <label class="field">
+                  <span>接口模式</span>
+                  <select name="AGENT_MODEL_PROVIDER">
+                    <option value="openai-responses">OpenAI Responses</option>
+                    <option value="openai-compatible-chat">OpenAI Compatible Chat</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Agent 模型</span>
+                  <input name="AGENT_MODEL" type="text" placeholder="gpt-5.5" />
+                </label>
+              </fieldset>
+
+              <fieldset>
+                <legend>本机服务</legend>
+                <label class="field">
+                  <span>访问端口</span>
+                  <input name="PORT" type="number" min="1" max="65535" />
+                </label>
+              </fieldset>
+
+              <fieldset>
+                <legend>本地浏览器插件</legend>
+                <p class="field full muted no-margin">插件默认连接本机服务，可在 Chrome 或 Edge 的扩展管理页加载已解压目录。</p>
+                <button id="open-extension-folder" type="button">打开已解压插件目录</button>
+                <button id="open-extension-zip-file" type="button">定位插件压缩包</button>
+              </fieldset>
+            </form>
+          </section>
+
+          <section id="panel-runtime" class="tab-panel">
+            <div class="panel-header">
+              <div>
+                <h2>运行控制</h2>
+                <p class="muted">首次使用先保存配置，再初始化安装并启动服务。</p>
+              </div>
+              <button id="open-docker" class="ghost">获取 Docker</button>
+            </div>
+            <div class="runtime-grid">
+              <button data-action="install" class="primary">初始化安装</button>
+              <button data-action="start">启动服务</button>
+              <button data-action="status">查看状态</button>
+              <button data-action="smoke">运行自检</button>
+              <button data-action="logs">查看日志</button>
+              <button data-action="stop" class="danger">停止服务</button>
+            </div>
+          </section>
+
+          <section id="panel-logs" class="tab-panel log-panel">
+            <div class="log-header">
+              <h2>运行日志</h2>
+              <button id="clear-log" class="ghost">清空</button>
+            </div>
+            <pre id="log-output">桌面控制台已就绪。</pre>
+          </section>
+        </section>
+      </section>
+    </main>
+    <script src="./renderer.js"></script>
+  </body>
+</html>

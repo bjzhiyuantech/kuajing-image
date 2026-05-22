@@ -11,6 +11,7 @@ interface ExtensionReleaseTarget {
 }
 
 interface ExtensionReleaseResponse {
+  local?: ExtensionReleaseTarget;
   prod: ExtensionReleaseTarget;
 }
 
@@ -49,7 +50,7 @@ export function InstallHelpApp() {
         }
         const manifest = (await response.json()) as ExtensionReleaseResponse;
         if (!cancelled) {
-          setZipDownloadUrl(releaseDownloadUrl(manifest.prod));
+          setZipDownloadUrl(releaseDownloadUrl(manifest.local ?? manifest.prod));
         }
       } catch {
         if (!cancelled) {
@@ -90,7 +91,7 @@ export function InstallHelpApp() {
         <div className="install-download-header">
           <div>
             <h2>插件压缩包下载</h2>
-            <p>始终指向当前生产版最新安装包。</p>
+            <p>单机版会优先指向本地插件安装包。</p>
           </div>
           <a className="install-download-button" href={zipDownloadUrl || "#"} target="_blank" rel="noreferrer">
             <Download size={16} />

@@ -45,6 +45,8 @@ import {
   type BillingOrder,
   type BillingTransaction,
   type BillingPlan,
+  type DeploymentCapabilities,
+  type DeploymentProfileResponse,
   type EcommerceBatchGenerateResponse,
   type EcommerceCategoryKitPlanItem,
   type EcommerceGenerationMode,
@@ -81,6 +83,7 @@ const TEXT_TRANSLATION_IMAGE_READ_TIMEOUT_MS = 60_000;
 const TEXT_TRANSLATION_SUBMIT_TIMEOUT_MS = 90_000;
 const PHONE_VERIFICATION_REQUIRED_CODE = "phone_verification_required";
 const PHONE_VERIFICATION_REQUIRED_MESSAGE = "为了更好提供服务，请完善手机号。";
+const BATCH_JOB_POLLING_INTERVAL_MS = 1000;
 const IMAGE_HOVER_PREVIEW_SIZE = 280;
 const IMAGE_HOVER_PREVIEW_GAP = 14;
 const MOCK_BILLING_PLANS: BillingPlan[] = [
@@ -90,6 +93,7 @@ const MOCK_BILLING_PLANS: BillingPlan[] = [
     description: "适合少量商品图优化。",
     imageQuota: 120,
     storageQuotaBytes: 2 * 1024 * 1024 * 1024,
+    validDays: 30,
     priceCents: 9900,
     currency: "CNY",
     enabled: true,
@@ -104,6 +108,7 @@ const MOCK_BILLING_PLANS: BillingPlan[] = [
     description: "适合稳定上新和多店铺运营。",
     imageQuota: 600,
     storageQuotaBytes: 10 * 1024 * 1024 * 1024,
+    validDays: 30,
     priceCents: 39900,
     currency: "CNY",
     enabled: true,
@@ -279,6 +284,8 @@ interface ExtensionVersionState {
   error: string;
   loading: boolean;
 }
+
+type ExtensionDeploymentProfile = Pick<DeploymentProfileResponse, "edition" | "target" | "name" | "capabilities">;
 
 interface ResultImageItem {
   key: string;
@@ -938,6 +945,33 @@ function firstString(source: Record<string, unknown>, keys: string[]): string | 
   return undefined;
 }
 
+function normalizeDeploymentProfile(payload: unknown): ExtensionDeploymentProfile | null {
+  const root = asRecord(payload);
+  const capabilities = asRecord(root.capabilities);
+  const normalizedCapabilities: Partial<DeploymentCapabilities> = {};
+  for (const [key, value] of Object.entries(capabilities)) {
+    if (typeof value === "boolean" || Array.isArray(value)) {
+      (normalizedCapabilities as Record<string, unknown>)[key] = value;
+    }
+  }
+  if (Object.keys(normalizedCapabilities).length === 0) {
+    return null;
+  }
+  const edition = firstString(root, ["edition"]);
+  const target = firstString(root, ["target"]);
+  return {
+    edition: edition === "local" || edition === "private-cloud" || edition === "saas" ? edition : "saas",
+    target: target === "desktop" || target === "server" || target === "managed-cloud" ? target : "managed-cloud",
+    name: firstString(root, ["name"]) || "商图 AI",
+    capabilities: normalizedCapabilities as DeploymentCapabilities
+  };
+}
+
+function deploymentCapabilityEnabled(profile: ExtensionDeploymentProfile | null, capability: keyof DeploymentCapabilities): boolean {
+  const value = profile?.capabilities?.[capability];
+  return typeof value === "boolean" ? value : true;
+}
+
 function stringListFromUnknown(value: unknown): string[] {
   if (Array.isArray(value)) {
     return value.map(stringFromUnknown).filter(Boolean);
@@ -1118,6 +1152,7 @@ function normalizePlan(value: unknown, index = 0): BillingPlan | null {
     description: firstString(source, ["description", "desc", "subtitle"]),
     imageQuota: firstNumber(source, ["imageQuota", "quotaTotal", "quota", "generationQuota"]) ?? 0,
     storageQuotaBytes: firstNumber(source, ["storageQuotaBytes", "storageQuota", "storageBytes"]) ?? 0,
+    validDays: firstNumber(source, ["validDays", "valid_days", "durationDays"]) ?? 30,
     priceCents: firstNumber(source, ["priceCents", "amountCents", "price"]) ?? 0,
     currency: firstString(source, ["currency"]) ?? "CNY",
     enabled: source.enabled === undefined ? true : Boolean(source.enabled),
@@ -1413,8 +1448,20 @@ function compareVersions(left: string, right: string): number {
   return 0;
 }
 
-function extensionTarget(): "dev" | "prod" {
-  return chrome.runtime.getManifest().name.toLowerCase().includes("dev") ? "dev" : "prod";
+function extensionTarget(): "local" | "dev" | "prod" {
+  const manifestName = chrome.runtime.getManifest().name.toLowerCase();
+  if (manifestName.includes("dev")) {
+    return "dev";
+  }
+  if (manifestName.includes("本地") || manifestName.includes("local") || DEFAULT_API_BASE_URL.includes("127.0.0.1") || DEFAULT_API_BASE_URL.includes("localhost")) {
+    return "local";
+  }
+  return "prod";
+}
+
+function extensionTargetLabel(): string {
+  const target = extensionTarget();
+  return target === "local" ? "Local" : target === "dev" ? "Dev" : "Prod";
 }
 
 function extensionReleaseConfigUrl(baseUrl: string): string {
@@ -1450,6 +1497,7 @@ function planBenefits(plan: BillingPlan): string[] {
 
 function billingTransactionLabel(type: string): string {
   if (type === "generation") return "生图扣费";
+  if (type === "generation_refund") return "失败返还";
   if (type === "admin_adjustment") return "后台调整";
   if (type === "recharge") return "充值";
   if (type === "plan_purchase") return "套餐购买";
@@ -1761,6 +1809,15 @@ export function SidePanelApp() {
     loading: false
   });
   const [extensionUpdateDialogOpen, setExtensionUpdateDialogOpen] = useState(false);
+  const [deploymentProfile, setDeploymentProfile] = useState<ExtensionDeploymentProfile | null>(null);
+  const isLocalEdition = deploymentProfile?.edition === "local" || extensionTarget() === "local";
+  const canUseCategoryKit = deploymentCapabilityEnabled(deploymentProfile, "categoryKit");
+  const canUseBilling = !isLocalEdition && deploymentCapabilityEnabled(deploymentProfile, "billing");
+  const canUseExtension = deploymentCapabilityEnabled(deploymentProfile, "extension");
+  const availableGenerationModes = useMemo(
+    () => generationModes.filter((mode) => canUseCategoryKit || (mode.id !== "category-kit" && mode.id !== "single-poster")),
+    [canUseCategoryKit]
+  );
 
   const availableScenes = useMemo(
     () =>
@@ -1839,7 +1896,7 @@ export function SidePanelApp() {
     );
   }, [accountQuota.remaining, auth.user, billingState.data.currentPlan, billingState.data.currentPlanExpiresAt]);
   const currentPlanLabel = auth.token ? billingState.data.currentPlan?.name || auth.user?.planName || auth.user?.planId || "套餐" : "套餐";
-  const requiresPhoneVerification = Boolean(auth.token && auth.user && !auth.user.phone);
+  const requiresPhoneVerification = !isLocalEdition && Boolean(auth.token && auth.user && !auth.user.phone);
 
   useEffect(() => {
     if (requiresPhoneVerification) {
@@ -1848,6 +1905,7 @@ export function SidePanelApp() {
   }, [requiresPhoneVerification]);
 
   useEffect(() => {
+    void loadDeploymentProfile();
     void chrome.storage.local.get([AUTH_STORAGE_KEY, ACTIVE_BATCH_JOB_STORAGE_KEY, TASK_NOTIFICATION_STORAGE_KEY]).then((result) => {
       const storedAuth = result[AUTH_STORAGE_KEY] as Partial<ExtensionAuthState> | undefined;
       const activeJob = result[ACTIVE_BATCH_JOB_STORAGE_KEY] as StoredBatchJob | undefined;
@@ -1875,12 +1933,52 @@ export function SidePanelApp() {
   }, []);
 
   useEffect(() => {
+    if (!canUseExtension) {
+      return;
+    }
     void checkExtensionUpdate("silent");
     const timer = window.setInterval(() => {
       void checkExtensionUpdate("silent");
     }, UPDATE_CHECK_INTERVAL_MS);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [canUseExtension]);
+
+  useEffect(() => {
+    if (canUseCategoryKit || (form.generationMode !== "category-kit" && form.generationMode !== "single-poster")) {
+      return;
+    }
+    setForm((current) => ({
+      ...current,
+      generationMode: "enhance",
+      sceneTemplateIds: defaultSceneIdsByMode.enhance,
+      sizeMode: current.sizeMode,
+      stylePresetId: "product",
+      textLanguage: "none",
+      countPerScene: current.countPerScene,
+      removeWatermarkAndLogo: current.removeWatermarkAndLogo
+    }));
+    setCategoryKitPrepare(emptyCategoryKitPrepare);
+    resetCategoryKitPlan();
+    setTask((current) => ({
+      ...current,
+      message: "当前部署未开放品类套图和单品完整海报，已切换为原图增强。"
+    }));
+  }, [canUseCategoryKit, form.generationMode]);
+
+  useEffect(() => {
+    if (canUseBilling || (activeTool !== "billing" && activeTool !== "referral")) {
+      return;
+    }
+    setActiveTool("account");
+  }, [activeTool, canUseBilling]);
+
+  useEffect(() => {
+    if (canUseExtension) {
+      return;
+    }
+    setExtensionUpdateDialogOpen(false);
+    setExtensionVersionState((current) => ({ ...current, update: null, loading: false, error: "" }));
+  }, [canUseExtension]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -1911,7 +2009,7 @@ export function SidePanelApp() {
       setBatchGenerationLocked(false);
       return;
     }
-    if (!auth.token) {
+    if (!isLocalEdition && !auth.token) {
       setPendingAuthAction("job");
       setActiveTool("account");
       setToolPanelOpen(true);
@@ -1929,13 +2027,13 @@ export function SidePanelApp() {
           }));
         }
       });
-    }, 3000);
+    }, BATCH_JOB_POLLING_INTERVAL_MS);
 
     return () => {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [auth.token, task.id, task.status, textTranslationViewOpen]);
+  }, [auth.token, isLocalEdition, task.id, task.status, textTranslationViewOpen]);
 
   useEffect(() => {
     if (!toolPanelOpen) {
@@ -1960,6 +2058,21 @@ export function SidePanelApp() {
 
   function apiBaseUrl(): string {
     return DEFAULT_API_BASE_URL;
+  }
+
+  async function loadDeploymentProfile(): Promise<void> {
+    try {
+      const response = await fetch(`${apiBaseUrl()}/api/deployment-profile`, { cache: "no-store" });
+      if (!response.ok) {
+        return;
+      }
+      const profile = normalizeDeploymentProfile(await response.json());
+      if (profile) {
+        setDeploymentProfile(profile);
+      }
+    } catch {
+      // Older deployments may not expose deployment-profile yet; keep SaaS-compatible defaults.
+    }
   }
 
   function apiHeaders(json = false, token = auth.token): HeadersInit {
@@ -2239,7 +2352,7 @@ export function SidePanelApp() {
   }
 
   function requireAuth(action: PendingAuthAction): boolean {
-    if (auth.token.trim()) {
+    if (isLocalEdition || auth.token.trim()) {
       return true;
     }
     setPendingAuthAction(action);
@@ -2378,6 +2491,10 @@ export function SidePanelApp() {
   }
 
   async function checkExtensionUpdate(mode: "silent" | "manual" = "manual"): Promise<void> {
+    if (!canUseExtension) {
+      setExtensionVersionState((current) => ({ ...current, update: null, error: "", loading: false }));
+      return;
+    }
     setExtensionVersionState((current) => ({
       ...current,
       error: mode === "manual" ? "" : current.error,
@@ -2408,6 +2525,9 @@ export function SidePanelApp() {
   }
 
   async function upgradeExtension(): Promise<void> {
+    if (!canUseExtension) {
+      return;
+    }
     const update = extensionVersionState.update;
     if (!update) {
       await checkExtensionUpdate("manual");
@@ -2593,7 +2713,7 @@ export function SidePanelApp() {
   }
 
   async function pollBatchJob(jobId: string, token = auth.token): Promise<void> {
-    if (!token.trim() && !requireAuth("job")) {
+    if (!isLocalEdition && !token.trim() && !requireAuth("job")) {
       return;
     }
     const body = await fetchBatchJob(jobId, token);
@@ -2608,7 +2728,7 @@ export function SidePanelApp() {
   }
 
   async function refreshHistory(authAlreadyChecked = false, token = auth.token): Promise<void> {
-    if (!token.trim() && !authAlreadyChecked && !requireAuth("history")) {
+    if (!isLocalEdition && !token.trim() && !authAlreadyChecked && !requireAuth("history")) {
       return;
     }
     setHistoryState((current) => ({ ...current, error: "", loading: true }));
@@ -2645,7 +2765,7 @@ export function SidePanelApp() {
   }
 
   async function refreshStats(authAlreadyChecked = false, token = auth.token): Promise<void> {
-    if (!token.trim() && !authAlreadyChecked && !requireAuth("stats")) {
+    if (!isLocalEdition && !token.trim() && !authAlreadyChecked && !requireAuth("stats")) {
       return;
     }
     setStatsState((current) => ({ ...current, error: "", loading: true }));
@@ -2665,6 +2785,10 @@ export function SidePanelApp() {
   }
 
   async function refreshBilling(authAlreadyChecked = false, token = auth.token): Promise<void> {
+    if (!canUseBilling) {
+      setBillingState((current) => ({ ...current, error: "", loading: false }));
+      return;
+    }
     if (!token.trim() && !authAlreadyChecked && !requireAuth("billing")) {
       return;
     }
@@ -2710,6 +2834,10 @@ export function SidePanelApp() {
   }
 
   async function refreshInvoiceApplications(authAlreadyChecked = false, token = auth.token): Promise<void> {
+    if (!canUseBilling) {
+      setInvoiceState({ data: createInvoiceApplicationsOverview(), error: "", loading: false });
+      return;
+    }
     if (!token.trim() && !authAlreadyChecked && !requireAuth("billing")) {
       return;
     }
@@ -2740,6 +2868,10 @@ export function SidePanelApp() {
   }
 
   async function refreshReferral(authAlreadyChecked = false, token = auth.token): Promise<void> {
+    if (!canUseBilling) {
+      setReferralState((current) => ({ ...current, error: "", loading: false }));
+      return;
+    }
     if (!token.trim() && !authAlreadyChecked && !requireAuth("billing")) {
       return;
     }
@@ -2765,6 +2897,10 @@ export function SidePanelApp() {
   }
 
   async function copyInviteLink(): Promise<void> {
+    if (!canUseBilling) {
+      setReferralAction("当前部署未开放邀请返现能力。");
+      return;
+    }
     const invite = referralState.data;
     const link = invite?.inviteUrl || (invite?.inviteCode ? `${apiBaseUrl().replace(/\/$/u, "")}/register?inviteCode=${encodeURIComponent(invite.inviteCode)}` : "");
     if (!link) {
@@ -2776,6 +2912,9 @@ export function SidePanelApp() {
   }
 
   function openInviteDialog(): void {
+    if (!canUseBilling) {
+      return;
+    }
     setInviteDialogOpen(true);
     setActiveTool("referral");
     setToolPanelOpen(true);
@@ -2804,6 +2943,10 @@ export function SidePanelApp() {
   }
 
   async function submitRecharge(): Promise<void> {
+    if (!canUseBilling) {
+      setBillingAction("当前部署未开放充值能力。");
+      return;
+    }
     if (!auth.token.trim() && !requireAuth("billing")) {
       return;
     }
@@ -2838,6 +2981,10 @@ export function SidePanelApp() {
   }
 
   async function purchasePlan(plan: BillingPlan, paymentMethod: "balance" | "alipay"): Promise<void> {
+    if (!canUseBilling) {
+      setBillingAction("当前部署未开放套餐购买能力。");
+      return;
+    }
     if (!auth.token.trim() && !requireAuth("billing")) {
       return;
     }
@@ -2874,6 +3021,10 @@ export function SidePanelApp() {
   }
 
   async function submitInvoiceApplication(): Promise<void> {
+    if (!canUseBilling) {
+      setInvoiceAction("当前部署未开放开票能力。");
+      return;
+    }
     if (!auth.token.trim() && !requireAuth("billing")) {
       return;
     }
@@ -2934,7 +3085,13 @@ export function SidePanelApp() {
   }
 
   function openTool(tab: ToolTab): void {
-    if ((tab === "billing" || tab === "history" || tab === "stats" || tab === "referral") && !auth.token.trim()) {
+    if (!canUseBilling && (tab === "billing" || tab === "referral")) {
+      setActiveTool("account");
+      setToolPanelOpen(true);
+      setAuthNotice("当前部署未开放支付、充值和邀请返现能力。");
+      return;
+    }
+    if (!isLocalEdition && (tab === "billing" || tab === "history" || tab === "stats" || tab === "referral") && !auth.token.trim()) {
       setPendingAuthAction(tab);
       setAuthMode("login");
       setAuthError("请先登录账号，再查看个人数据。");
@@ -2947,6 +3104,10 @@ export function SidePanelApp() {
   }
 
   function openReferralCampaign(): void {
+    if (!canUseBilling) {
+      openTool("account");
+      return;
+    }
     setActiveTool("referral");
     setToolPanelOpen(true);
     void openReferralCampaignPage();
@@ -3253,7 +3414,7 @@ export function SidePanelApp() {
             </ul>
           ) : null}
           <div className="update-dialog-meta">
-            <span>{extensionTarget() === "dev" ? "Dev" : "Prod"} 通道</span>
+            <span>{extensionTargetLabel()} 通道</span>
             <span>{formatBytes(update.sizeBytes)}</span>
           </div>
           <div className="edit-modal-actions">
@@ -3323,7 +3484,7 @@ export function SidePanelApp() {
     if (!editDialog) {
       return;
     }
-    if (!auth.token.trim() && !requireAuth("generate")) {
+    if (!isLocalEdition && !auth.token.trim() && !requireAuth("generate")) {
       return;
     }
 
@@ -4326,6 +4487,13 @@ export function SidePanelApp() {
   }
 
   function updateGenerationMode(generationMode: EcommerceGenerationMode): void {
+    if (!canUseCategoryKit && (generationMode === "category-kit" || generationMode === "single-poster")) {
+      setTask((current) => ({
+        ...current,
+        message: "当前部署未开放品类套图和单品完整海报。"
+      }));
+      return;
+    }
     setForm((current) => ({
       ...current,
       generationMode,
@@ -4392,7 +4560,11 @@ export function SidePanelApp() {
     if (batchGenerationLocked) {
       return;
     }
-    if (!token.trim() && !authAlreadyChecked && !requireAuth("generate")) {
+    if (!canUseCategoryKit && (form.generationMode === "category-kit" || form.generationMode === "single-poster")) {
+      setTask({ id: "feature-disabled", status: "failed", message: "当前部署未开放品类套图和单品完整海报。", records: [] });
+      return;
+    }
+    if (!isLocalEdition && !token.trim() && !authAlreadyChecked && !requireAuth("generate")) {
       return;
     }
     const title = form.product.title.trim();
@@ -4617,7 +4789,7 @@ export function SidePanelApp() {
     if (batchGenerationLocked) {
       return;
     }
-    if (!token.trim() && !authAlreadyChecked && !requireAuth("text-translation")) {
+    if (!isLocalEdition && !token.trim() && !authAlreadyChecked && !requireAuth("text-translation")) {
       return;
     }
     if (selectedTranslationImageUrls.length === 0) {
@@ -5078,16 +5250,16 @@ export function SidePanelApp() {
           <h1>商图AI助手</h1>
         </div>
         <div className="topbar-actions">
-          {extensionVersionState.update ? (
+          {canUseExtension && extensionVersionState.update ? (
             <button className="update-badge" title={`发现新版本 ${extensionVersionState.update.version}`} type="button" onClick={() => openTool("about")}>
               <Download size={14} />
               <span>升级</span>
             </button>
           ) : null}
-          <button className="plan-badge" title="查看套餐" type="button" onClick={() => openTool("billing")}>
+          {canUseBilling ? <button className="plan-badge" title="查看套餐" type="button" onClick={() => openTool("billing")}>
             <Package size={14} />
             <span>{currentPlanLabel}</span>
-          </button>
+          </button> : null}
           <button className="icon-button" title="账户" type="button" onClick={() => openTool("account")}>
             <UserCircle2 size={18} />
           </button>
@@ -5097,7 +5269,7 @@ export function SidePanelApp() {
       <section className="panel" id="generation-mode-panel">
         <h2>生成方式</h2>
         <div className="mode-grid">
-          {generationModes.map((mode) => (
+          {availableGenerationModes.map((mode) => (
             <button
               className={form.generationMode === mode.id ? "mode-button active" : "mode-button"}
               key={mode.id}
@@ -5701,10 +5873,10 @@ export function SidePanelApp() {
             <UserCircle2 size={20} />
             <span>账户</span>
           </button>
-          <button className={activeTool === "billing" && toolPanelOpen ? "tool-tab active" : "tool-tab"} type="button" onClick={() => openTool("billing")}>
+          {canUseBilling ? <button className={activeTool === "billing" && toolPanelOpen ? "tool-tab active" : "tool-tab"} type="button" onClick={() => openTool("billing")}>
             <Package size={20} />
             <span>套餐</span>
-          </button>
+          </button> : null}
           <button className={activeTool === "history" && toolPanelOpen ? "tool-tab active" : "tool-tab"} type="button" onClick={() => openTool("history")}>
             <Clock3 size={20} />
             <span>任务</span>
@@ -5713,10 +5885,10 @@ export function SidePanelApp() {
             <BarChart3 size={20} />
             <span>统计</span>
           </button>
-          <button className={activeTool === "referral" && toolPanelOpen ? "tool-tab active" : "tool-tab"} type="button" onClick={() => openReferralCampaign()}>
+          {canUseBilling ? <button className={activeTool === "referral" && toolPanelOpen ? "tool-tab active" : "tool-tab"} type="button" onClick={() => openReferralCampaign()}>
             <Gift size={20} />
             <span>邀请</span>
-          </button>
+          </button> : null}
           <button className={activeTool === "about" && toolPanelOpen ? "tool-tab active" : "tool-tab"} type="button" onClick={() => openTool("about")}>
             <Download size={20} />
             <span>关于</span>
@@ -5777,14 +5949,14 @@ export function SidePanelApp() {
                         <RefreshCw size={13} />
                         刷新账户
                       </button>
-                      <button className="mini-button" type="button" onClick={() => openTool("billing")}>
+                      {canUseBilling ? <button className="mini-button" type="button" onClick={() => openTool("billing")}>
                         <CreditCard size={13} />
                         购买/充值
-                      </button>
-                      <button className="mini-button" type="button" onClick={() => openTool("referral")}>
+                      </button> : null}
+                      {canUseBilling ? <button className="mini-button" type="button" onClick={() => openTool("referral")}>
                         <Gift size={13} />
                         邀请活动
-                      </button>
+                      </button> : null}
                     </div>
                   </div>
                 ) : (
@@ -5793,7 +5965,7 @@ export function SidePanelApp() {
               </div>
             ) : null}
 
-            {activeTool === "billing" ? (
+            {activeTool === "billing" && canUseBilling ? (
               <div>
                 <div className="tool-actions">
                   <span>充值、购买套餐与订单</span>
@@ -6122,7 +6294,7 @@ export function SidePanelApp() {
               </div>
             ) : null}
 
-            {activeTool === "referral" ? (
+            {activeTool === "referral" && canUseBilling ? (
               <div>
                 <div className="tool-actions">
                   <span>邀请好友注册与充值返现</span>
@@ -6200,7 +6372,7 @@ export function SidePanelApp() {
                 <div className="about-contact-grid">
                   <div>
                     <span>官网</span>
-            <strong>ai.neimou.com</strong>
+            <strong>{extensionTarget() === "local" ? "127.0.0.1:8787" : "ai.neimou.com"}</strong>
                   </div>
                   <div>
                     <span>客服微信</span>
@@ -6214,14 +6386,14 @@ export function SidePanelApp() {
                   </div>
                   <img alt="客服微信二维码" src="/images/customer-service-qr.png" />
                 </div>
-                <div className="tool-actions">
+                {canUseExtension ? <div className="tool-actions">
                   <span>自动检测插件更新</span>
                   <button className="mini-button" disabled={extensionVersionState.loading} type="button" onClick={() => void checkExtensionUpdate("manual")}>
                     {extensionVersionState.loading ? <Loader2 className="spin" size={13} /> : <RefreshCw size={13} />}
                     检查
                   </button>
-                </div>
-                <div className={extensionVersionState.update ? "version-card update-available" : "version-card"}>
+                </div> : null}
+                {canUseExtension ? <div className={extensionVersionState.update ? "version-card update-available" : "version-card"}>
                   <div className="version-card-top">
                     <div>
                       <span>当前版本</span>
@@ -6229,7 +6401,7 @@ export function SidePanelApp() {
                     </div>
                     <div>
                       <span>发布通道</span>
-                      <strong>{extensionTarget() === "dev" ? "Dev" : "Prod"}</strong>
+                      <strong>{extensionTargetLabel()}</strong>
                     </div>
                   </div>
                   {extensionVersionState.update ? (
@@ -6253,10 +6425,10 @@ export function SidePanelApp() {
                   ) : (
                     <p className="tool-empty">当前已是最新版本。</p>
                   )}
-                </div>
-                {extensionVersionState.checkedAt ? <p className="settings-note">上次检查：{formatDateTime(extensionVersionState.checkedAt)}</p> : null}
-                {extensionVersionState.error ? <p className="tool-error">{extensionVersionState.error}</p> : null}
-                <p className="settings-note">浏览器不允许手动安装的扩展静默替换自身，升级按钮会下载新版压缩包并打开安装帮助。</p>
+                </div> : <p className="tool-empty">当前部署未开放浏览器插件发布与升级能力。</p>}
+                {canUseExtension && extensionVersionState.checkedAt ? <p className="settings-note">上次检查：{formatDateTime(extensionVersionState.checkedAt)}</p> : null}
+                {canUseExtension && extensionVersionState.error ? <p className="tool-error">{extensionVersionState.error}</p> : null}
+                {canUseExtension ? <p className="settings-note">浏览器不允许手动安装的扩展静默替换自身，升级按钮会下载新版压缩包并打开安装帮助。</p> : null}
               </div>
             ) : null}
 

@@ -2648,6 +2648,35 @@ body {
   margin-bottom: 0.8rem;
 }
 
+.admin-table-card__title--split {
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.admin-table-card__title-main {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.admin-table-card__note {
+  margin: -0.35rem 0 0.85rem;
+  color: var(--muted-ink);
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+.admin-plans-save-all {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  padding: 0 0.9rem;
+  white-space: nowrap;
+}
+
 .admin-table-wrap {
   overflow-x: auto;
 }
@@ -3008,7 +3037,13 @@ body {
 }
 
 .admin-edit-table {
-  min-width: 980px;
+  min-width: 1060px;
+}
+
+.admin-plan-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
 }
 
 .admin-plan-actions {

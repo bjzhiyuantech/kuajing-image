@@ -24,8 +24,11 @@ const defaultSubscriptionPlans = [
     description: "免费体验套餐",
     imageQuota: 2,
     storageQuotaBytes: 1 * GIB,
+    validDays: 30,
     priceCents: 0,
     currency: "CNY",
+    appleProductId: null,
+    appleIapEnabled: 0,
     enabled: 1,
     sortOrder: 10,
     benefitsJson: JSON.stringify(["基础生图额度", "1GB 存图空间"])
@@ -36,8 +39,11 @@ const defaultSubscriptionPlans = [
     description: "适合轻量使用的入门套餐",
     imageQuota: 300,
     storageQuotaBytes: 10 * GIB,
+    validDays: 30,
     priceCents: 9900,
     currency: "CNY",
+    appleProductId: "shangtuai_starter",
+    appleIapEnabled: 1,
     enabled: 1,
     sortOrder: 20,
     benefitsJson: JSON.stringify(["更多生图额度", "10GB 存图空间"])
@@ -48,8 +54,11 @@ const defaultSubscriptionPlans = [
     description: "适合稳定出图和团队协作的专业套餐",
     imageQuota: 1500,
     storageQuotaBytes: 50 * GIB,
+    validDays: 30,
     priceCents: 29900,
     currency: "CNY",
+    appleProductId: null,
+    appleIapEnabled: 0,
     enabled: 1,
     sortOrder: 30,
     benefitsJson: JSON.stringify(["高频生图额度", "50GB 存图空间"])
@@ -60,8 +69,11 @@ const defaultSubscriptionPlans = [
     description: "适合业务规模化使用的企业套餐",
     imageQuota: 10000,
     storageQuotaBytes: 200 * GIB,
+    validDays: 30,
     priceCents: 99900,
     currency: "CNY",
+    appleProductId: null,
+    appleIapEnabled: 0,
     enabled: 1,
     sortOrder: 40,
     benefitsJson: JSON.stringify(["大规模生图额度", "200GB 存图空间"])
@@ -107,8 +119,11 @@ async function createSchema(): Promise<void> {
       description TEXT,
       image_quota BIGINT NOT NULL DEFAULT 0,
       storage_quota_bytes BIGINT NOT NULL DEFAULT 0,
+      valid_days INT NOT NULL DEFAULT 30,
       price_cents BIGINT NOT NULL DEFAULT 0,
       currency VARCHAR(16) NOT NULL DEFAULT 'CNY',
+      apple_product_id VARCHAR(255),
+      apple_iap_enabled INT NOT NULL DEFAULT 0,
       enabled INT NOT NULL DEFAULT 1,
       sort_order INT NOT NULL DEFAULT 0,
       benefits_json LONGTEXT,
@@ -1050,6 +1065,18 @@ async function seedDefaultSystemSettings(): Promise<void> {
       }
     ],
     [
+      "payment.appleIap",
+      {
+        enabled: false,
+        bundleId: "com.neimou.shangtuai",
+        issuerId: "",
+        keyId: "",
+        privateKey: "",
+        productPrefix: "shangtuai_",
+        productIdsJson: "{\"starter\":\"shangtuai_starter\"}"
+      }
+    ],
+    [
       "auth.wechat.miniapp",
       {
         enabled: wechatMiniAppRuntimeConfig.enabled,
@@ -1267,13 +1294,33 @@ async function migrateSubscriptionPlansTable(): Promise<void> {
   await addColumnIfMissing("subscription_plans", "description", "TEXT");
   await addColumnIfMissing("subscription_plans", "image_quota", "BIGINT NOT NULL DEFAULT 0");
   await addColumnIfMissing("subscription_plans", "storage_quota_bytes", "BIGINT NOT NULL DEFAULT 0");
+  const addedValidDaysColumn = await addColumnIfMissing("subscription_plans", "valid_days", "INT NOT NULL DEFAULT 30");
   await addColumnIfMissing("subscription_plans", "price_cents", "BIGINT NOT NULL DEFAULT 0");
   await addColumnIfMissing("subscription_plans", "currency", "VARCHAR(16) NOT NULL DEFAULT 'CNY'");
+  const addedAppleProductIdColumn = await addColumnIfMissing("subscription_plans", "apple_product_id", "VARCHAR(255)");
+  const addedAppleIapEnabledColumn = await addColumnIfMissing("subscription_plans", "apple_iap_enabled", "INT NOT NULL DEFAULT 0");
   await addColumnIfMissing("subscription_plans", "enabled", "INT NOT NULL DEFAULT 1");
   await addColumnIfMissing("subscription_plans", "sort_order", "INT NOT NULL DEFAULT 0");
   await addColumnIfMissing("subscription_plans", "benefits_json", "LONGTEXT");
   await addColumnIfMissing("subscription_plans", "created_at", "VARCHAR(32) NOT NULL DEFAULT ''");
   await addColumnIfMissing("subscription_plans", "updated_at", "VARCHAR(32) NOT NULL DEFAULT ''");
+  if (addedAppleProductIdColumn || addedAppleIapEnabledColumn) {
+    await pool.query(
+      `
+        UPDATE subscription_plans
+        SET apple_product_id = 'shangtuai_starter',
+            apple_iap_enabled = 1,
+            updated_at = ?
+        WHERE id = 'starter'
+          AND (apple_product_id IS NULL OR apple_product_id = '')
+          AND apple_iap_enabled = 0
+      `,
+      [new Date().toISOString()]
+    );
+  }
+  if (addedValidDaysColumn) {
+    await backfillSubscriptionPlanValidDays();
+  }
   await addIndexIfMissing(
     "subscription_plans",
     "subscription_plans_enabled_sort_idx",
@@ -1287,9 +1334,9 @@ async function seedDefaultSubscriptionPlans(): Promise<void> {
     await pool.query(
       `
         INSERT INTO subscription_plans (
-          id, name, description, image_quota, storage_quota_bytes, price_cents, currency, enabled, sort_order, benefits_json, created_at, updated_at
+          id, name, description, image_quota, storage_quota_bytes, valid_days, price_cents, currency, apple_product_id, apple_iap_enabled, enabled, sort_order, benefits_json, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON DUPLICATE KEY UPDATE
           id = id
       `,
@@ -1299,8 +1346,11 @@ async function seedDefaultSubscriptionPlans(): Promise<void> {
         plan.description,
         plan.imageQuota,
         plan.storageQuotaBytes,
+        plan.validDays,
         plan.priceCents,
         plan.currency,
+        plan.appleProductId,
+        plan.appleIapEnabled,
         plan.enabled,
         plan.sortOrder,
         plan.benefitsJson,
@@ -1309,6 +1359,24 @@ async function seedDefaultSubscriptionPlans(): Promise<void> {
       ]
     );
   }
+}
+
+async function backfillSubscriptionPlanValidDays(): Promise<void> {
+  const now = new Date().toISOString();
+  await pool.query(
+    `
+      UPDATE subscription_plans
+      SET valid_days = CASE
+        WHEN LOWER(CONCAT_WS(' ', id, name, COALESCE(apple_product_id, ''))) REGEXP 'weekly|week|包周|周' THEN 7
+        WHEN LOWER(CONCAT_WS(' ', id, name, COALESCE(apple_product_id, ''))) REGEXP 'quarter|season|包季|季度|季' THEN 90
+        WHEN LOWER(CONCAT_WS(' ', id, name, COALESCE(apple_product_id, ''))) REGEXP 'annual|year|包年|年度|年' THEN 365
+        ELSE 30
+      END,
+      updated_at = ?
+      WHERE valid_days IS NULL OR valid_days = 30
+    `,
+    [now]
+  );
 }
 
 async function migrateCategoryKitStrategiesTable(): Promise<void> {
@@ -1404,12 +1472,13 @@ async function getDefaultSubscriptionPlan(): Promise<{ imageQuota: number; stora
   };
 }
 
-async function addColumnIfMissing(tableName: string, columnName: string, definition: string): Promise<void> {
+async function addColumnIfMissing(tableName: string, columnName: string, definition: string): Promise<boolean> {
   if (await columnExists(tableName, columnName)) {
-    return;
+    return false;
   }
 
   await pool.query(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+  return true;
 }
 
 async function addIndexIfMissing(tableName: string, indexName: string, definition: string): Promise<void> {

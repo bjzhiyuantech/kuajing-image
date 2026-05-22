@@ -13,8 +13,13 @@ Page({
     saving: false
   },
 
-  onLoad(options) {
+  async onLoad(options) {
     this.setData({ initialWorkId: options && options.work ? decodeURIComponent(options.work) : "" });
+    const capabilities = await api.getCapabilities();
+    if (!api.capabilityEnabled(capabilities, "publicGallery")) {
+      this.setData({ error: "当前版本未开启公开作品", publicWorks: [] });
+      return;
+    }
     this.loadGallery();
   },
 
@@ -23,6 +28,11 @@ Page({
   },
 
   async loadGallery() {
+    const capabilities = await api.getCapabilities();
+    if (!api.capabilityEnabled(capabilities, "publicGallery")) {
+      this.setData({ error: "当前版本未开启公开作品", publicWorks: [], loading: false });
+      return;
+    }
     this.setData({ loading: true, error: "" });
     try {
       const data = await api.getPublicGallery();

@@ -34,7 +34,7 @@ import {
 } from "./asset-storage.js";
 import { runtimePaths } from "./runtime.js";
 import { assets, generationOutputs, generationRecords } from "./schema.js";
-import { attachGenerationToCharge, reserveGenerationCharge } from "./billing.js";
+import { attachGenerationToCharge, refundGenerationCharge, reserveGenerationCharge } from "./billing.js";
 import { getEcommerceGenerationConcurrencyConfig, withEcommerceGenerationSlot } from "./ecommerce-generation-concurrency.js";
 import { getActiveStorageConfig } from "./storage-config.js";
 
@@ -111,26 +111,32 @@ export async function runTextToImageGeneration(
   billing?: GenerationBillingOptions
 ): Promise<GenerationResponse> {
   const charge = billing?.charge ?? (billing?.skipCharge ? undefined : await reserveGenerationCharge({ tenant, imageCount: input.count }));
-  const taskConcurrency = await resolveTaskConcurrency();
-  const outputs = await mapWithConcurrency(
-    Array.from({ length: input.count }, (_, index) => index),
-    taskConcurrency,
-    async () => generateSingleOutput(tenant, input, provider, signal)
-  );
+  try {
+    const taskConcurrency = await resolveTaskConcurrency();
+    const outputs = await mapWithConcurrency(
+      Array.from({ length: input.count }, (_, index) => index),
+      taskConcurrency,
+      async () => generateSingleOutput(tenant, input, provider, signal)
+    );
 
-  const record = await saveGenerationRecord(
-    tenant,
-    {
-      ...input,
-      mode: "generate"
-    },
-    outputs
-  );
-  await attachGenerationToCharge(charge?.transactionId, record.id);
+    const record = await saveGenerationRecord(
+      tenant,
+      {
+        ...input,
+        mode: "generate"
+      },
+      outputs
+    );
+    await attachGenerationToCharge(charge?.transactionId, record.id);
+    await refundFailedGenerationOutputs(tenant, charge, record.id, countFailedBillableOutputs(outputs, input.count), record.error);
 
-  return {
-    record
-  };
+    return {
+      record
+    };
+  } catch (error) {
+    await refundFailedGenerationOutputs(tenant, charge, undefined, input.count, errorToMessage(error));
+    throw error;
+  }
 }
 
 export async function runTextToImageGenerationWithFallback(
@@ -152,30 +158,36 @@ export async function runReferenceImageGeneration(
 ): Promise<GenerationResponse> {
   const persistedInput = await ensureReferenceAssetForEdit(tenant, input, signal);
   const charge = billing?.charge ?? (billing?.skipCharge ? undefined : await reserveGenerationCharge({ tenant, imageCount: input.count }));
-  const taskConcurrency = await resolveTaskConcurrency();
-  const outputs = await mapWithConcurrency(
-    Array.from({ length: input.count }, (_, index) => index),
-    taskConcurrency,
-    async () => editSingleOutput(tenant, persistedInput, provider, signal)
-  );
-  const persistedOutputs = billing?.createComparisonCollage
-    ? await appendComparisonCollageOutputs(tenant, persistedInput, outputs, signal)
-    : outputs;
+  try {
+    const taskConcurrency = await resolveTaskConcurrency();
+    const outputs = await mapWithConcurrency(
+      Array.from({ length: input.count }, (_, index) => index),
+      taskConcurrency,
+      async () => editSingleOutput(tenant, persistedInput, provider, signal)
+    );
+    const persistedOutputs = billing?.createComparisonCollage
+      ? await appendComparisonCollageOutputs(tenant, persistedInput, outputs, signal)
+      : outputs;
 
-  const record = await saveGenerationRecord(
-    tenant,
-    {
-      ...persistedInput,
-      mode: "edit",
-      referenceMaskDataUrl: persistedInput.referenceImage.maskDataUrl
-    },
-    persistedOutputs
-  );
-  await attachGenerationToCharge(charge?.transactionId, record.id);
+    const record = await saveGenerationRecord(
+      tenant,
+      {
+        ...persistedInput,
+        mode: "edit",
+        referenceMaskDataUrl: persistedInput.referenceImage.maskDataUrl
+      },
+      persistedOutputs
+    );
+    await attachGenerationToCharge(charge?.transactionId, record.id);
+    await refundFailedGenerationOutputs(tenant, charge, record.id, countFailedBillableOutputs(outputs, input.count), record.error);
 
-  return {
-    record
-  };
+    return {
+      record
+    };
+  } catch (error) {
+    await refundFailedGenerationOutputs(tenant, charge, undefined, input.count, errorToMessage(error));
+    throw error;
+  }
 }
 
 export async function runReferenceImageGenerationWithFallback(
@@ -798,6 +810,33 @@ async function saveGenerationRecord(
 
 function firstSuccessfulProviderResult(outputs: BatchOutputResult[]): ProviderResult | undefined {
   return outputs.find((output) => output.status === "succeeded" && output.providerResult)?.providerResult;
+}
+
+function countFailedBillableOutputs(outputs: BatchOutputResult[], imageCount: number): number {
+  return Math.min(imageCount, outputs.filter((output) => output.status === "failed").length);
+}
+
+async function refundFailedGenerationOutputs(
+  tenant: RequestTenant,
+  charge: ReservedGenerationCharge | undefined,
+  generationId: string | undefined,
+  failedImageCount: number,
+  reason?: string
+): Promise<void> {
+  if (!charge || failedImageCount < 1) {
+    return;
+  }
+  try {
+    await refundGenerationCharge({
+      tenant,
+      transactionId: charge.transactionId,
+      generationId,
+      failedImageCount,
+      reason
+    });
+  } catch (error) {
+    console.warn(`[billing] failed to refund generation charge transactionId=${charge.transactionId}`, error);
+  }
 }
 
 function resolveGenerationStatus(successCount: number, failureCount: number): GenerationStatus {

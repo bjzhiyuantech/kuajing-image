@@ -1,5 +1,6 @@
 services:
   app:
+    image: ${APP_IMAGE:-kuajing-image/app:saas}
     build:
       context: .
       dockerfile: Dockerfile
@@ -14,6 +15,8 @@ services:
       - path: .env.apns
         required: false
     environment:
+      DEPLOYMENT_PROFILE: ${DEPLOYMENT_PROFILE:-saas}
+      DEPLOYMENT_TARGET: ${DEPLOYMENT_TARGET:-managed-cloud}
       HOST: 0.0.0.0
       PORT: ${PORT:-8787}
       DATA_DIR: /app/data

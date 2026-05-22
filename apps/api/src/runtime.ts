@@ -93,7 +93,7 @@ export const appleIapRuntimeConfig = {
   issuerId: emptyToUndefined(process.env.APPLE_IAP_ISSUER_ID),
   keyId: emptyToUndefined(process.env.APPLE_IAP_KEY_ID),
   privateKey: emptyToUndefined(process.env.APPLE_IAP_PRIVATE_KEY),
-  productPrefix: emptyToUndefined(process.env.APPLE_IAP_PRODUCT_PREFIX) ?? "com.neimou.shangtuai.plan.",
+  productPrefix: emptyToUndefined(process.env.APPLE_IAP_PRODUCT_PREFIX) ?? "shangtuai_",
   productIds: parseStringMap(process.env.APPLE_IAP_PRODUCT_IDS_JSON)
 };
 
@@ -120,14 +120,19 @@ export const apnsRuntimeConfig = {
 };
 
 export const extensionReleaseRuntimeConfig = {
+  localApiBaseUrl: emptyToUndefined(process.env.EXTENSION_LOCAL_API_BASE_URL) ?? "http://127.0.0.1:8787",
   devApiBaseUrl: emptyToUndefined(process.env.EXTENSION_DEV_API_BASE_URL) ?? "https://dev.neimou.com",
   prodApiBaseUrl: emptyToUndefined(process.env.EXTENSION_PROD_API_BASE_URL) ?? "https://ai.neimou.com",
+  localVersion: emptyToUndefined(process.env.EXTENSION_LOCAL_VERSION) ?? "",
   devVersion: emptyToUndefined(process.env.EXTENSION_DEV_VERSION) ?? "",
   prodVersion: emptyToUndefined(process.env.EXTENSION_PROD_VERSION) ?? "",
+  localDownloadUrl: emptyToUndefined(process.env.EXTENSION_LOCAL_DOWNLOAD_URL),
   devDownloadUrl: emptyToUndefined(process.env.EXTENSION_DEV_DOWNLOAD_URL),
   prodDownloadUrl: emptyToUndefined(process.env.EXTENSION_PROD_DOWNLOAD_URL),
+  localLatestDownloadUrl: emptyToUndefined(process.env.EXTENSION_LOCAL_LATEST_DOWNLOAD_URL),
   devLatestDownloadUrl: emptyToUndefined(process.env.EXTENSION_DEV_LATEST_DOWNLOAD_URL),
   prodLatestDownloadUrl: emptyToUndefined(process.env.EXTENSION_PROD_LATEST_DOWNLOAD_URL),
+  localInstallHelpUrl: emptyToUndefined(process.env.EXTENSION_LOCAL_INSTALL_HELP_URL) ?? "/install-help.html",
   devInstallHelpUrl: emptyToUndefined(process.env.EXTENSION_DEV_INSTALL_HELP_URL) ?? "/install-help.html",
   prodInstallHelpUrl: emptyToUndefined(process.env.EXTENSION_PROD_INSTALL_HELP_URL) ?? "/install-help.html"
 };

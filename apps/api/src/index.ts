@@ -53,6 +53,7 @@ import {
   type AdminUsersResponse,
   type CategoryKitPlannerConfigResponse,
   type EcommerceGenerationConcurrencyConfigResponse,
+  type SaveAppleIapConfigRequest,
   type SaveAlipayConfigRequest,
   type SaveAppReleaseConfigRequest,
   type SaveBillingSettingsRequest,
@@ -81,6 +82,7 @@ import {
   type EcommerceProductBrief,
   type EcommerceSceneTemplateId,
   type EcommerceTextLanguage,
+  type DeploymentCapabilities,
   type BrandOverlayPlacement,
   type GenerationCount,
   type ImageQuality,
@@ -98,21 +100,26 @@ import {
 } from "./contracts.js";
 import { closeDatabase, ensureTenant, initializeDatabase } from "./database.js";
 import { db } from "./database.js";
+import { getDeploymentProfile } from "./deployment-profile.js";
 import {
   BillingError,
   createRechargeOrder,
   adjustUserBalance,
+  getAppleIapConfig,
   getBillingSummary,
   getAlipayConfig,
   getBillingSettings,
   handleAlipayNotify,
+  handleAppleServerNotification,
   listAdminBillingOrders,
   listAdminBillingTransactions,
   listUserBillingOrders,
   listUserBillingTransactions,
   purchasePlan,
   attachGenerationToCharge,
+  refundGenerationCharge,
   reserveGenerationCharge,
+  saveAppleIapConfig,
   saveAlipayConfig,
   saveBillingSettings,
   verifyAppleInAppPurchase
@@ -243,6 +250,7 @@ const MAX_PROJECT_SNAPSHOT_BYTES = 100 * 1024 * 1024;
 const MAX_PROJECT_NAME_LENGTH = 120;
 const MAX_PLAN_NAME_LENGTH = 120;
 const MAX_PLAN_DESCRIPTION_LENGTH = 1000;
+const MAX_PLAN_VALID_DAYS = 3650;
 const MAX_CURRENCY_LENGTH = 16;
 const DEFAULT_ADMIN_PLAN_ID = "free";
 const DEFAULT_ADMIN_STORAGE_QUOTA_BYTES = 1024 * 1024 * 1024;
@@ -290,6 +298,7 @@ interface EcommerceBatchJob {
   totalScenes: number;
   completedScenes: number;
   records: EcommerceBatchGenerateResponse["records"];
+  charge?: ReservedGenerationCharge;
 }
 
 const runningEcommerceBatchJobs = new Map<string, EcommerceBatchJob>();
@@ -348,6 +357,7 @@ app.get("/api/health", (c) =>
 app.get("/api/config", async (c) => {
   const models = await getConfiguredImageModelNames();
   const configuredModel = models[0];
+  const deployment = getDeploymentProfile();
   const config: AppConfig = {
     model: configuredModel,
     models,
@@ -356,23 +366,52 @@ app.get("/api/config", async (c) => {
     qualities: IMAGE_QUALITIES,
     outputFormats: OUTPUT_FORMATS,
     counts: GENERATION_COUNTS,
-    notifications: await getNotificationClientConfig()
+    notifications: await getNotificationClientConfig(),
+    deployment
   };
 
   return c.json(config);
 });
 
-app.get("/api/extension-release", async (c) => c.json(await getExtensionReleaseConfig()));
+app.get("/api/deployment-profile", (c) => c.json(getDeploymentProfile()));
 
-app.get("/api/app-release", async (c) => c.json(await getAppReleaseConfig()));
+app.get("/api/extension-release", async (c) => {
+  const disabled = requireCapability(c, "extension");
+  if (disabled) {
+    return disabled;
+  }
+
+  return c.json(await getExtensionReleaseConfig());
+});
+
+app.get("/api/app-release", async (c) => {
+  const disabled = requireCapability(c, "mobileApp");
+  if (disabled) {
+    return disabled;
+  }
+
+  return c.json(await getAppReleaseConfig());
+});
 
 app.get("/api/help", async (c) => c.json(await getHelpCenter()));
 
 app.get("/api/public/demo-canvas", async (c) => c.json(await getDemoCanvasConfig()));
 
-app.get("/api/public/gallery", async (c) => c.json(await getPublicGalleryImages()));
+app.get("/api/public/gallery", async (c) => {
+  const disabled = requireCapability(c, "publicGallery");
+  if (disabled) {
+    return disabled;
+  }
+
+  return c.json(await getPublicGalleryImages());
+});
 
 app.get("/api/public/assets/:id/preview", async (c) => {
+  const disabled = requireCapability(c, "publicGallery");
+  if (disabled) {
+    return disabled;
+  }
+
   const parsedWidth = parsePreviewWidth(c.req.query("width"));
   if (!parsedWidth.ok) {
     return c.json(errorResponse(parsedWidth.code, parsedWidth.message), 400);
@@ -399,6 +438,11 @@ app.get("/api/public/assets/:id/preview", async (c) => {
 });
 
 app.get("/api/public/assets/:id", async (c) => {
+  const disabled = requireCapability(c, "publicGallery");
+  if (disabled) {
+    return disabled;
+  }
+
   const tenant = await getPublicGalleryAssetTenant(c.req.param("id"));
   if (!tenant) {
     return c.json(errorResponse("not_found", "找不到公开展示的图像资源。"), 404);
@@ -420,6 +464,11 @@ app.get("/api/public/assets/:id", async (c) => {
 });
 
 app.get("/api/photoshop/packages/:packageId/:fileName", async (c) => {
+  const disabled = requireCapability(c, "photoshopPackage");
+  if (disabled) {
+    return disabled;
+  }
+
   const file = await readPhotoshopPackageFile(c.req.param("packageId"), c.req.param("fileName"), c.req.query("token"));
   if (!file) {
     return c.json(errorResponse("not_found", "找不到 Photoshop 工作流文件，或访问链接已过期。"), 404);
@@ -653,7 +702,13 @@ app.post("/api/auth/wechat/miniapp/bind", async (c) => {
 });
 
 app.use("/api/*", async (c, next) => {
-  if (new URL(c.req.url).pathname === "/api/billing/alipay/notify") {
+  const path = new URL(c.req.url).pathname;
+  const disabled = await requireCapabilityForPath(c, path);
+  if (disabled) {
+    return disabled;
+  }
+
+  if (path === "/api/billing/alipay/notify" || path === "/api/billing/apple-iap/notifications") {
     await next();
     return;
   }
@@ -661,7 +716,6 @@ app.use("/api/*", async (c, next) => {
   const session = (await getAuthSession(c.req.raw.headers)) ?? (await getAssetQueryTokenSession(c));
   if (session) {
     authSessions.set(c, session);
-    const path = new URL(c.req.url).pathname;
     if (!session.user.phone && !canAccessWithoutPhoneVerification(path)) {
       return c.json(errorResponse("phone_verification_required", "请先完成手机号验证后再使用账户权益。"), 403);
     }
@@ -992,6 +1046,11 @@ app.post("/api/images/prompt/optimize", async (c) => {
 });
 
 app.post("/api/photoshop/packages", async (c) => {
+  const disabled = requireCapability(c, "photoshopPackage");
+  if (disabled) {
+    return disabled;
+  }
+
   const payload = await readJson(c.req.raw);
   if (!payload.ok) {
     return c.json(payload.error, 400);
@@ -1019,6 +1078,11 @@ app.post("/api/photoshop/packages", async (c) => {
 });
 
 app.post("/api/videos/seedance", async (c) => {
+  const disabled = requireCapability(c, "seedanceVideo");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -1043,6 +1107,11 @@ app.post("/api/videos/seedance", async (c) => {
 });
 
 app.post("/api/videos/seedance/storyboard-plan", async (c) => {
+  const disabled = requireCapability(c, "seedanceVideo");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -1079,6 +1148,10 @@ app.post("/api/ecommerce/images/batch-generate", async (c) => {
   if (!parsed.ok) {
     return c.json(parsed.error, 400);
   }
+  const disabled = requireEcommerceBatchCapabilities(c, parsed.value);
+  if (disabled) {
+    return disabled;
+  }
 
   const providerConfigs = await getActiveImageModelConfigs();
   if (providerConfigs.length === 0) {
@@ -1102,7 +1175,7 @@ app.post("/api/ecommerce/images/batch-generate", async (c) => {
     now
   });
 
-  let charge: ReservedGenerationCharge;
+  let charge: ReservedGenerationCharge | undefined;
   try {
     charge = await reserveGenerationCharge({
       tenant,
@@ -1110,6 +1183,7 @@ app.post("/api/ecommerce/images/batch-generate", async (c) => {
     });
     await attachGenerationToCharge(charge.transactionId, jobId);
   } catch (error) {
+    await refundPendingGenerationCharge(tenant, charge, jobId, getEcommerceBatchSceneCount(input) * input.countPerScene, errorToMessage(error));
     await updateEcommerceBatchJob(tenant, jobId, {
       status: "failed",
       message: errorToMessage(error),
@@ -1134,7 +1208,8 @@ app.post("/api/ecommerce/images/batch-generate", async (c) => {
     providerConfigs,
     totalScenes: getEcommerceBatchSceneCount(input),
     completedScenes: 0,
-    records: []
+    records: [],
+    charge
   };
   runningEcommerceBatchJobs.set(job.jobId, job);
   void runEcommerceBatchJob(job.jobId);
@@ -1143,6 +1218,11 @@ app.post("/api/ecommerce/images/batch-generate", async (c) => {
 });
 
 app.post("/api/ecommerce/images/category-kit-prepare", async (c) => {
+  const disabled = requireCapability(c, "categoryKit");
+  if (disabled) {
+    return disabled;
+  }
+
   const payload = await readJson(c.req.raw);
   if (!payload.ok) {
     return c.json(payload.error, 400);
@@ -1176,6 +1256,11 @@ app.post("/api/ecommerce/images/category-kit-prepare", async (c) => {
 });
 
 app.post("/api/ecommerce/images/category-kit-plan", async (c) => {
+  const disabled = requireCapability(c, "categoryKit");
+  if (disabled) {
+    return disabled;
+  }
+
   const payload = await readJson(c.req.raw);
   if (!payload.ok) {
     return c.json(payload.error, 400);
@@ -1241,6 +1326,11 @@ app.post("/api/ecommerce/images/category-kit-plan", async (c) => {
 });
 
 app.post("/api/ecommerce/images/category-kit-generate", async (c) => {
+  const disabled = requireCapability(c, "categoryKit");
+  if (disabled) {
+    return disabled;
+  }
+
   const payload = await readJson(c.req.raw);
   if (!payload.ok) {
     return c.json(payload.error, 400);
@@ -1363,14 +1453,29 @@ app.post("/api/notifications/devices", async (c) => {
 });
 
 app.get("/api/billing/transactions", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
   return c.json(await listUserBillingTransactions(await requestTenant(c), parseListLimit(c.req.query("limit"))));
 });
 
 app.get("/api/billing/orders", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
   return c.json(await listUserBillingOrders(await requestTenant(c), parseListLimit(c.req.query("limit"))));
 });
 
 app.get("/api/billing/summary", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
   return c.json(await getBillingSummary(await requestTenant(c)));
 });
 
@@ -1387,10 +1492,20 @@ app.post("/api/redemption-codes/redeem", async (c) => {
 });
 
 app.get("/api/billing/invoice/applications", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
   return c.json(await getInvoiceApplications(await requestTenant(c)));
 });
 
 app.post("/api/billing/invoice/applications", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
   const payload = await readJson(c.req.raw);
   if (!payload.ok) {
     return c.json(payload.error, 400);
@@ -1403,11 +1518,21 @@ app.post("/api/billing/invoice/applications", async (c) => {
 });
 
 app.get("/api/referral/summary", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
   const origin = new URL(c.req.url).origin;
   return c.json(await getInviteSummary((await requestTenant(c)).userId, origin));
 });
 
 app.post("/api/billing/recharge", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
   const payload = await readJson(c.req.raw);
   if (!payload.ok) {
     return c.json(payload.error, 400);
@@ -1420,6 +1545,11 @@ app.post("/api/billing/recharge", async (c) => {
 });
 
 app.post("/api/billing/plans/:planId/purchase", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
   const payload = await readJson(c.req.raw);
   if (!payload.ok) {
     return c.json(payload.error, 400);
@@ -1433,6 +1563,15 @@ app.post("/api/billing/plans/:planId/purchase", async (c) => {
 });
 
 app.post("/api/billing/apple-iap/verify", async (c) => {
+  const billingDisabled = requireCapability(c, "billing");
+  if (billingDisabled) {
+    return billingDisabled;
+  }
+  const appleIapDisabled = requireCapability(c, "appleIap");
+  if (appleIapDisabled) {
+    return appleIapDisabled;
+  }
+
   const payload = await readJson(c.req.raw);
   if (!payload.ok) {
     return c.json(payload.error, 400);
@@ -1444,7 +1583,29 @@ app.post("/api/billing/apple-iap/verify", async (c) => {
   return c.json(await verifyAppleInAppPurchase(await requestTenant(c), parsed.value), 201);
 });
 
+app.post("/api/billing/apple-iap/notifications", async (c) => {
+  const billingDisabled = requireCapability(c, "billing");
+  if (billingDisabled) {
+    return billingDisabled;
+  }
+  const appleIapDisabled = requireCapability(c, "appleIap");
+  if (appleIapDisabled) {
+    return appleIapDisabled;
+  }
+
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+  return c.json(await handleAppleServerNotification(payload.value));
+});
+
 app.post("/api/billing/alipay/notify", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
   const form = await c.req.parseBody();
   const payload: Record<string, string> = {};
   for (const [key, value] of Object.entries(form)) {
@@ -1684,6 +1845,11 @@ app.get("/api/admin/plans", async (c) => {
 });
 
 app.get("/api/admin/billing/settings", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -1722,6 +1888,11 @@ app.post("/api/admin/redemption-codes", async (c) => {
 });
 
 app.put("/api/admin/billing/settings", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -1741,6 +1912,11 @@ app.put("/api/admin/billing/settings", async (c) => {
 });
 
 app.get("/api/admin/extension-release", async (c) => {
+  const disabled = requireCapability(c, "extension");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -1750,6 +1926,11 @@ app.get("/api/admin/extension-release", async (c) => {
 });
 
 app.put("/api/admin/extension-release", async (c) => {
+  const disabled = requireCapability(c, "extension");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -1769,6 +1950,11 @@ app.put("/api/admin/extension-release", async (c) => {
 });
 
 app.get("/api/admin/app-release", async (c) => {
+  const disabled = requireCapability(c, "mobileApp");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -1778,6 +1964,11 @@ app.get("/api/admin/app-release", async (c) => {
 });
 
 app.put("/api/admin/app-release", async (c) => {
+  const disabled = requireCapability(c, "mobileApp");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -1862,6 +2053,11 @@ app.put("/api/admin/image-models", async (c) => {
 });
 
 app.get("/api/admin/ecommerce/category-kit-planner", async (c) => {
+  const disabled = requireCapability(c, "categoryKit");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -1871,6 +2067,11 @@ app.get("/api/admin/ecommerce/category-kit-planner", async (c) => {
 });
 
 app.put("/api/admin/ecommerce/category-kit-planner", async (c) => {
+  const disabled = requireCapability(c, "categoryKit");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -1890,6 +2091,11 @@ app.put("/api/admin/ecommerce/category-kit-planner", async (c) => {
 });
 
 app.get("/api/admin/ecommerce/category-kit-strategies", async (c) => {
+  const disabled = requireCapability(c, "categoryKit");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -1899,6 +2105,11 @@ app.get("/api/admin/ecommerce/category-kit-strategies", async (c) => {
 });
 
 app.get("/api/admin/ecommerce/category-strategies", async (c) => {
+  const disabled = requireCapability(c, "categoryKit");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -1908,6 +2119,11 @@ app.get("/api/admin/ecommerce/category-strategies", async (c) => {
 });
 
 app.get("/api/admin/ecommerce/category-kit-strategies/:strategyId", async (c) => {
+  const disabled = requireCapability(c, "categoryKit");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -1917,6 +2133,11 @@ app.get("/api/admin/ecommerce/category-kit-strategies/:strategyId", async (c) =>
 });
 
 app.get("/api/admin/ecommerce/category-strategies/:strategyId", async (c) => {
+  const disabled = requireCapability(c, "categoryKit");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -1926,6 +2147,11 @@ app.get("/api/admin/ecommerce/category-strategies/:strategyId", async (c) => {
 });
 
 app.post("/api/admin/ecommerce/category-kit-strategies", async (c) => {
+  const disabled = requireCapability(c, "categoryKit");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -1944,6 +2170,11 @@ app.post("/api/admin/ecommerce/category-kit-strategies", async (c) => {
 });
 
 app.post("/api/admin/ecommerce/category-strategies", async (c) => {
+  const disabled = requireCapability(c, "categoryKit");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -1962,6 +2193,11 @@ app.post("/api/admin/ecommerce/category-strategies", async (c) => {
 });
 
 app.put("/api/admin/ecommerce/category-kit-strategies/:strategyId", async (c) => {
+  const disabled = requireCapability(c, "categoryKit");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -1980,6 +2216,11 @@ app.put("/api/admin/ecommerce/category-kit-strategies/:strategyId", async (c) =>
 });
 
 app.put("/api/admin/ecommerce/category-strategies/:strategyId", async (c) => {
+  const disabled = requireCapability(c, "categoryKit");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -1998,6 +2239,11 @@ app.put("/api/admin/ecommerce/category-strategies/:strategyId", async (c) => {
 });
 
 app.delete("/api/admin/ecommerce/category-kit-strategies/:strategyId", async (c) => {
+  const disabled = requireCapability(c, "categoryKit");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -2007,6 +2253,11 @@ app.delete("/api/admin/ecommerce/category-kit-strategies/:strategyId", async (c)
 });
 
 app.delete("/api/admin/ecommerce/category-strategies/:strategyId", async (c) => {
+  const disabled = requireCapability(c, "categoryKit");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -2016,6 +2267,11 @@ app.delete("/api/admin/ecommerce/category-strategies/:strategyId", async (c) => 
 });
 
 app.get("/api/admin/video/seedance", async (c) => {
+  const disabled = requireCapability(c, "seedanceVideo");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -2025,6 +2281,11 @@ app.get("/api/admin/video/seedance", async (c) => {
 });
 
 app.put("/api/admin/video/seedance", async (c) => {
+  const disabled = requireCapability(c, "seedanceVideo");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -2100,6 +2361,11 @@ app.put("/api/admin/ecommerce/concurrency", async (c) => {
 });
 
 app.get("/api/admin/payment/alipay", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -2109,6 +2375,11 @@ app.get("/api/admin/payment/alipay", async (c) => {
 });
 
 app.put("/api/admin/payment/alipay", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -2125,6 +2396,44 @@ app.put("/api/admin/payment/alipay", async (c) => {
   }
 
   return c.json(await saveAlipayConfig(parsed.value));
+});
+
+app.get("/api/admin/payment/apple-iap", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return c.json(await getAppleIapConfig());
+});
+
+app.put("/api/admin/payment/apple-iap", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+
+  const parsed = parseAppleIapConfigPayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  return c.json(await saveAppleIapConfig(parsed.value));
 });
 
 app.get("/api/admin/email/smtp", async (c) => {
@@ -2220,6 +2529,11 @@ app.put("/api/admin/auth/wechat/miniapp", async (c) => {
 });
 
 app.get("/api/admin/billing/transactions", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -2229,6 +2543,11 @@ app.get("/api/admin/billing/transactions", async (c) => {
 });
 
 app.get("/api/admin/billing/orders", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -2238,6 +2557,11 @@ app.get("/api/admin/billing/orders", async (c) => {
 });
 
 app.get("/api/admin/billing/invoice/applications", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -2247,6 +2571,11 @@ app.get("/api/admin/billing/invoice/applications", async (c) => {
 });
 
 app.put("/api/admin/billing/invoice/applications/:applicationId", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
     return unauthorized;
@@ -2289,8 +2618,11 @@ app.post("/api/admin/plans", async (c) => {
     description: planValues.description,
     imageQuota: planValues.imageQuota ?? 0,
     storageQuotaBytes: planValues.storageQuotaBytes ?? 0,
+    validDays: planValues.validDays ?? 30,
     priceCents: planValues.priceCents ?? 0,
     currency: planValues.currency ?? "CNY",
+    appleProductId: planValues.appleProductId,
+    appleIapEnabled: planValues.appleIapEnabled ?? 0,
     enabled: planValues.enabled ?? 1,
     sortOrder: planValues.sortOrder ?? 0,
     benefitsJson: planValues.benefitsJson,
@@ -2422,7 +2754,7 @@ app.put("/api/admin/users/:userId/plan", async (c) => {
     .update(users)
     .set({
       planId: plan.id,
-      planExpiresAt: plan.id === "free" ? null : planExpiryFrom(now),
+      planExpiresAt: plan.id === "free" ? null : planExpiryFrom(now, Number(plan.validDays ?? 30)),
       quotaTotal,
       storageQuotaBytes,
       updatedAt: now.toISOString()
@@ -2622,6 +2954,7 @@ async function runEcommerceBatchJob(jobId: string): Promise<void> {
         tenant: job.tenant,
         imageCount: plan.imagePlan.length
       });
+      job.charge = charge;
       await attachGenerationToCharge(charge.transactionId, job.jobId);
       await updateEcommerceBatchJob(job.tenant, job.jobId, {
         message: `后台文本模型已规划 ${plan.imagePlan.length} 张图，服务端开始按队列并发生成。`
@@ -2720,16 +3053,19 @@ async function runEcommerceBatchJob(jobId: string): Promise<void> {
                 { skipCharge: true, createComparisonCollage: job.input.createComparisonCollage === true }
               )
             : await runTextToImageGenerationWithFallback(job.tenant, generationInput, job.providerConfigs, undefined, { skipCharge: true });
-          records[sceneItem.index] = response.record;
+          records[sceneItem.index] = {
+            ...response.record,
+            ecommerceBatchIndex: sceneItem.index * Math.max(1, job.input.countPerScene ?? 1)
+          };
         } catch (error) {
           records[sceneItem.index] = failedEcommerceSceneRecord(job.input, sceneItem, errorToMessage(error));
         } finally {
           job.completedScenes += 1;
           job.records = records.flatMap((record) => (record ? [record] : []));
-          const failedCount = job.records.filter((record) => record.status === "failed").length;
+          const failedImageCount = countFailedEcommerceImages(job, false);
           await updateEcommerceBatchJob(job.tenant, job.jobId, {
             status: "running",
-            message: `服务端并发生成中：${job.completedScenes}/${job.totalScenes} 个场景完成，${failedCount} 个失败。`,
+            message: `服务端并发生成中：${job.completedScenes}/${job.totalScenes} 个场景完成，${failedImageCount} 张失败。`,
             completedScenes: job.completedScenes,
             records: job.records
           });
@@ -2737,14 +3073,16 @@ async function runEcommerceBatchJob(jobId: string): Promise<void> {
       }
     );
 
+    const failedImageCount = countFailedEcommerceImages(job, false);
     const failedCount = job.records.filter((record) => record.status === "failed").length;
-    const succeededCount = job.records.length - failedCount;
-    const finishedStatus = succeededCount > 0 && failedCount > 0 ? "partial" : succeededCount > 0 ? "succeeded" : "failed";
+    const succeededCount = job.records.filter((record) => record.status === "succeeded" || record.status === "partial").length;
+    const finishedStatus = succeededCount > 0 && failedImageCount > 0 ? "partial" : succeededCount > 0 ? "succeeded" : "failed";
+    await refundFailedEcommerceImages(job, "批量生成完成后返还失败图片额度。");
     await updateEcommerceBatchJob(job.tenant, job.jobId, {
       status: finishedStatus,
       message:
-        succeededCount > 0 && failedCount > 0
-          ? `批量生成部分完成：${succeededCount} 个场景成功，${failedCount} 个失败。`
+        succeededCount > 0 && failedImageCount > 0
+          ? `批量生成部分完成：${succeededCount} 个场景有结果，${failedImageCount} 张失败。`
           : succeededCount > 0
             ? `批量生成完成：${succeededCount} 个场景成功。`
             : "批量生成失败，请检查上游图像接口或稍后重试。",
@@ -2768,6 +3106,7 @@ async function runEcommerceBatchJob(jobId: string): Promise<void> {
       message: errorToMessage(error)
     });
     const message = errorToMessage(error);
+    await refundFailedEcommerceImages(job, message, true);
     await updateEcommerceBatchJob(job.tenant, job.jobId, {
       status: "failed",
       message: `批量任务失败：${message}`,
@@ -2814,6 +3153,69 @@ async function notifyEcommerceJobFinished(input: {
   } catch (error) {
     console.warn(`[notifications] failed to create ecommerce completion notification jobId=${input.jobId}`, error);
   }
+}
+
+async function refundFailedEcommerceImages(job: EcommerceBatchJob, reason?: string, includeUnfinished = false): Promise<void> {
+  if (!job.charge) {
+    return;
+  }
+
+  const failedImageCount = countFailedEcommerceImages(job, includeUnfinished);
+  if (failedImageCount < 1) {
+    return;
+  }
+
+  try {
+    await refundGenerationCharge({
+      tenant: job.tenant,
+      transactionId: job.charge.transactionId,
+      generationId: job.jobId,
+      failedImageCount,
+      reason
+    });
+  } catch (error) {
+    console.warn(`[billing] failed to refund ecommerce generation charge jobId=${job.jobId}`, error);
+  }
+}
+
+async function refundPendingGenerationCharge(
+  tenant: RequestTenant,
+  charge: ReservedGenerationCharge | undefined,
+  generationId: string,
+  imageCount: number,
+  reason?: string
+): Promise<void> {
+  if (!charge || imageCount < 1) {
+    return;
+  }
+  try {
+    await refundGenerationCharge({
+      tenant,
+      transactionId: charge.transactionId,
+      generationId,
+      failedImageCount: imageCount,
+      reason
+    });
+  } catch (error) {
+    console.warn(`[billing] failed to refund pending generation charge transactionId=${charge.transactionId}`, error);
+  }
+}
+
+function countFailedEcommerceImages(job: EcommerceBatchJob, includeUnfinished: boolean): number {
+  const failedFromRecords = job.records.reduce((total, record) => {
+    const count = typeof record.count === "number" && record.count > 0 ? record.count : Math.max(1, record.outputs?.length ?? 1);
+    if (record.outputs?.length) {
+      return total + record.outputs.filter((output) => output.status === "failed").length;
+    }
+    return record.status === "failed" ? total + count : total;
+  }, 0);
+  if (!includeUnfinished) {
+    return failedFromRecords;
+  }
+
+  const completedRecordCount = Math.min(job.totalScenes, job.records.length);
+  const unfinishedScenes = Math.max(0, job.totalScenes - completedRecordCount);
+  return failedFromRecords + unfinishedScenes * Math.max(1, job.input.countPerScene ?? 1);
 }
 
 function logEcommerceCategoryKit(event: string, details: Record<string, unknown>): void {
@@ -2898,14 +3300,13 @@ function failedEcommerceSceneRecord(
     count: input.countPerScene ?? 1,
     status: "failed",
     error: message,
+    ecommerceBatchIndex: sceneItem.index * Math.max(1, input.countPerScene ?? 1),
     createdAt: new Date().toISOString(),
-    outputs: [
-      {
-        id: randomUUID(),
-        status: "failed",
-        error: message
-      }
-    ]
+    outputs: Array.from({ length: Math.max(1, input.countPerScene ?? 1) }, () => ({
+      id: randomUUID(),
+      status: "failed" as const,
+      error: message
+    }))
   };
 }
 
@@ -2952,6 +3353,59 @@ function errorResponse(code: string, message: string): ErrorResponseBody {
   };
 }
 
+function requireCapability(c: Context, capability: keyof DeploymentCapabilities): Response | undefined {
+  const enabled = getDeploymentProfile().capabilities[capability];
+  if (enabled === false) {
+    return c.json(errorResponse("feature_disabled", `当前部署版本未开放 ${capability} 能力。`), 403);
+  }
+  return undefined;
+}
+
+async function requireCapabilityForPath(c: Context, path: string): Promise<Response | undefined> {
+  if (path === "/api/ecommerce/images/batch-generate") {
+    return requireEcommerceBatchCapabilitiesForRequest(c);
+  }
+  if (path === "/api/billing/apple-iap/verify" || path === "/api/billing/apple-iap/notifications") {
+    return requireCapability(c, "billing") ?? requireCapability(c, "appleIap");
+  }
+  for (const rule of PATH_CAPABILITY_RULES) {
+    if (path === rule.path || (rule.prefix && path.startsWith(rule.prefix))) {
+      return requireCapability(c, rule.capability);
+    }
+  }
+  return undefined;
+}
+
+async function requireEcommerceBatchCapabilitiesForRequest(c: Context): Promise<Response | undefined> {
+  if (c.req.method !== "POST") {
+    return undefined;
+  }
+  try {
+    const payload = await c.req.raw.clone().json();
+    const parsed = parseEcommerceBatchPayload(payload);
+    if (!parsed.ok) {
+      return undefined;
+    }
+    return requireEcommerceBatchCapabilities(c, parsed.value);
+  } catch {
+    return undefined;
+  }
+}
+
+function requireEcommerceBatchCapabilities(c: Context, input: ResolvedEcommerceBatchGenerateRequest): Response | undefined {
+  if (!ecommerceBatchUsesCategoryKit(input)) {
+    return undefined;
+  }
+  return requireCapability(c, "categoryKit");
+}
+
+function ecommerceBatchUsesCategoryKit(input: Pick<ResolvedEcommerceBatchGenerateRequest, "sceneTemplateIds">): boolean {
+  return input.sceneTemplateIds.some((sceneTemplateId) => {
+    const template = ECOMMERCE_SCENE_TEMPLATES.find((item) => item.id === sceneTemplateId);
+    return template?.mode === "category-kit" || template?.mode === "single-poster";
+  });
+}
+
 function downloadFileName(fileName: string): string {
   return fileName.replace(/[^a-zA-Z0-9._-]/gu, "_");
 }
@@ -2962,6 +3416,25 @@ interface ErrorResponseBody {
     message: string;
   };
 }
+
+const PATH_CAPABILITY_RULES: Array<{ path?: string; prefix?: string; capability: keyof DeploymentCapabilities }> = [
+  { path: "/api/extension-release", capability: "extension" },
+  { prefix: "/api/admin/extension-release", capability: "extension" },
+  { path: "/api/app-release", capability: "mobileApp" },
+  { prefix: "/api/admin/app-release", capability: "mobileApp" },
+  { path: "/api/public/gallery", capability: "publicGallery" },
+  { prefix: "/api/public/assets/", capability: "publicGallery" },
+  { prefix: "/api/photoshop/packages", capability: "photoshopPackage" },
+  { prefix: "/api/videos/seedance", capability: "seedanceVideo" },
+  { prefix: "/api/admin/video/seedance", capability: "seedanceVideo" },
+  { prefix: "/api/ecommerce/images/category-kit", capability: "categoryKit" },
+  { prefix: "/api/admin/ecommerce/category-kit", capability: "categoryKit" },
+  { prefix: "/api/admin/ecommerce/category-strategies", capability: "categoryKit" },
+  { prefix: "/api/billing/", capability: "billing" },
+  { prefix: "/api/admin/billing/", capability: "billing" },
+  { prefix: "/api/admin/payment/alipay", capability: "billing" },
+  { path: "/api/referral/summary", capability: "billing" }
+];
 
 type ParseResult<T> =
   | {
@@ -2978,8 +3451,11 @@ type PlanMutation = Partial<{
   description: string | null;
   imageQuota: number;
   storageQuotaBytes: number;
+  validDays: number;
   priceCents: number;
   currency: string;
+  appleProductId: string | null;
+  appleIapEnabled: number;
   enabled: number;
   sortOrder: number;
   benefitsJson: string | null;
@@ -3360,8 +3836,14 @@ function toPlan(plan: typeof subscriptionPlans.$inferSelect): Plan {
     description: plan.description ?? undefined,
     imageQuota: Number(plan.imageQuota ?? 0),
     storageQuotaBytes: Number(plan.storageQuotaBytes ?? 0),
+    validDays: Number(plan.validDays ?? 30),
     priceCents: Number(plan.priceCents ?? 0),
     currency: plan.currency,
+    appleProductId: plan.appleProductId ?? undefined,
+    appleIapEnabled: Number(plan.appleIapEnabled ?? 0) === 1,
+    appleIapVisible: Number(plan.appleIapEnabled ?? 0) === 1,
+    appleStoreEnabled: Number(plan.appleIapEnabled ?? 0) === 1,
+    iosEnabled: Number(plan.appleIapEnabled ?? 0) === 1,
     enabled: Number(plan.enabled ?? 0) === 1,
     sortOrder: Number(plan.sortOrder ?? 0),
     benefits: parseJsonValue(plan.benefitsJson),
@@ -3742,6 +4224,7 @@ function parsePlanPayload(input: unknown, requireName: boolean): ParseResult<Pla
   const numberFields = [
     ["imageQuota", "image_quota", "生图额度必须是非负整数。"],
     ["storageQuotaBytes", "storage_quota_bytes", "存储额度必须是非负整数。"],
+    ["validDays", "valid_days", "有效天数必须是非负整数。"],
     ["priceCents", "price_cents", "价格必须是非负整数。"],
     ["sortOrder", "sort_order", "排序值必须是非负整数。"]
   ] as const;
@@ -3759,6 +4242,13 @@ function parsePlanPayload(input: unknown, requireName: boolean): ParseResult<Pla
     }
   }
 
+  if (value.validDays !== undefined && (value.validDays < 1 || value.validDays > MAX_PLAN_VALID_DAYS)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_plan_valid_days", `套餐有效天数必须在 1-${MAX_PLAN_VALID_DAYS} 天之间。`)
+    };
+  }
+
   if (Object.hasOwn(input, "currency")) {
     const currency = parseLimitedString(input.currency, MAX_CURRENCY_LENGTH)?.toUpperCase();
     if (!currency) {
@@ -3770,6 +4260,31 @@ function parsePlanPayload(input: unknown, requireName: boolean): ParseResult<Pla
     value.currency = currency;
   } else if (requireName) {
     value.currency = "CNY";
+  }
+
+  if (Object.hasOwn(input, "appleProductId") || Object.hasOwn(input, "apple_product_id")) {
+    const rawAppleProductId = Object.hasOwn(input, "appleProductId") ? input.appleProductId : input.apple_product_id;
+    const appleProductId = parseNullableLimitedString(rawAppleProductId, 255);
+    if (appleProductId === undefined) {
+      return {
+        ok: false,
+        error: errorResponse("invalid_apple_product_id", "Apple 商品 ID 不能超过 255 个字符。")
+      };
+    }
+    value.appleProductId = appleProductId;
+  }
+
+  if (Object.hasOwn(input, "appleIapEnabled") || Object.hasOwn(input, "apple_iap_enabled") || Object.hasOwn(input, "appleStoreEnabled") || Object.hasOwn(input, "iosEnabled")) {
+    const rawAppleIapEnabled = input.appleIapEnabled ?? input.apple_iap_enabled ?? input.appleStoreEnabled ?? input.iosEnabled;
+    if (typeof rawAppleIapEnabled !== "boolean") {
+      return {
+        ok: false,
+        error: errorResponse("invalid_apple_iap_enabled", "Apple 商店上架开关必须是布尔值。")
+      };
+    }
+    value.appleIapEnabled = rawAppleIapEnabled ? 1 : 0;
+  } else if (requireName) {
+    value.appleIapEnabled = 0;
   }
 
   if (Object.hasOwn(input, "enabled")) {
@@ -3795,6 +4310,7 @@ function parsePlanPayload(input: unknown, requireName: boolean): ParseResult<Pla
   if (requireName) {
     value.imageQuota ??= 0;
     value.storageQuotaBytes ??= 0;
+    value.validDays ??= 30;
     value.priceCents ??= 0;
     value.sortOrder ??= 0;
   }
@@ -4861,6 +5377,36 @@ function parseAlipayConfigPayload(input: unknown): ParseResult<SaveAlipayConfigR
       returnUrl: stringValue(input.returnUrl),
       gateway: stringValue(input.gateway),
       signType: stringValue(input.signType)
+    }
+  };
+}
+
+function parseAppleIapConfigPayload(input: unknown): ParseResult<SaveAppleIapConfigRequest> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_apple_iap_config", "Apple 内购配置内容必须是 JSON 对象。")
+    };
+  }
+
+  if (typeof input.enabled !== "boolean") {
+    return {
+      ok: false,
+      error: errorResponse("invalid_apple_iap_config", "enabled 必须是布尔值。")
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      enabled: input.enabled,
+      bundleId: stringValue(input.bundleId),
+      issuerId: stringValue(input.issuerId),
+      keyId: stringValue(input.keyId),
+      privateKey: stringValue(input.privateKey),
+      preservePrivateKey: input.preservePrivateKey === true,
+      productPrefix: stringValue(input.productPrefix),
+      productIdsJson: stringValue(input.productIdsJson)
     }
   };
 }

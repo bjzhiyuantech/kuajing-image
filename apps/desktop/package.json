@@ -1,0 +1,68 @@
+{
+  "name": "@gpt-image-canvas/desktop",
+  "version": "0.1.1",
+  "description": "Desktop controller for Shangtu AI standalone deployment.",
+  "author": "Shangtu AI",
+  "private": true,
+  "type": "commonjs",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "corepack pnpm build && electron .",
+    "dist": "corepack pnpm build && electron-builder --publish=never",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "electron": "^39.2.7",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.shangtuai.standalone",
+    "productName": "Shangtu AI Standalone",
+    "asar": true,
+    "directories": {
+      "output": "../../dist/desktop"
+    },
+    "files": [
+      "dist/**/*",
+      "renderer/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../../dist/standalone/shangtu-ai-standalone",
+        "to": "standalone",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "artifactName": "shangtu-ai-standalone-${version}-${os}-${arch}.${ext}",
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "identity": null
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "zip"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "tar.gz"
+      ],
+      "category": "Graphics"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false
+    }
+  }
+}
