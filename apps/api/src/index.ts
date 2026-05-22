@@ -2347,6 +2347,44 @@ app.put("/api/admin/plans/:planId", async (c) => {
   return c.json({ plan: await getPlanOrThrow(planId) });
 });
 
+app.delete("/api/admin/plans/:planId", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const planId = c.req.param("planId");
+  const existing = await getPlanOrUndefined(planId);
+  if (!existing) {
+    return c.json(errorResponse("not_found", "套餐不存在。"), 404);
+  }
+  if (planId === DEFAULT_ADMIN_PLAN_ID) {
+    return c.json(errorResponse("protected_plan", "默认套餐不能删除。"), 409);
+  }
+
+  const defaultPlan = await getPlanOrUndefined(DEFAULT_ADMIN_PLAN_ID);
+  if (!defaultPlan) {
+    return c.json(errorResponse("default_plan_missing", "默认套餐不存在，暂时不能删除套餐。"), 409);
+  }
+
+  const updatedAt = new Date().toISOString();
+  await db.transaction(async (tx) => {
+    await tx
+      .update(users)
+      .set({
+        planId: defaultPlan.id,
+        planExpiresAt: null,
+        quotaTotal: Number(defaultPlan.imageQuota ?? 0),
+        storageQuotaBytes: Number(defaultPlan.storageQuotaBytes ?? 0),
+        updatedAt
+      })
+      .where(eq(users.planId, planId));
+    await tx.delete(subscriptionPlans).where(eq(subscriptionPlans.id, planId));
+  });
+
+  return c.json({ ok: true });
+});
+
 app.put("/api/admin/users/:userId/plan", async (c) => {
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {

@@ -2004,6 +2004,31 @@ export function AdminPage() {
     }
   }
 
+  async function deletePlan(plan: AdminPlanRow): Promise<void> {
+    if (!window.confirm(`确定删除套餐「${plan.name || plan.id}」吗？使用该套餐的用户会自动回到 Free 套餐。`)) {
+      return;
+    }
+
+    const savingId = `${DELETE_PLAN_SAVE_PREFIX}${plan.id}`;
+    setSavingPlanId(savingId);
+    setError("");
+    setNotice("");
+    try {
+      const response = await authFetch(`/api/admin/plans/${encodeURIComponent(plan.id)}`, {
+        method: "DELETE"
+      });
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "套餐删除失败。"));
+      }
+      setNotice("套餐已删除。");
+      await loadAdminData({ preserveNotice: true });
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "套餐删除失败。");
+    } finally {
+      setSavingPlanId("");
+    }
+  }
+
   async function saveUserQuota(user: AdminUserRow): Promise<void> {
     const draft = userDrafts[user.id] ?? userToQuotaForm(user);
     setSavingUserId(user.id);
@@ -3683,7 +3708,9 @@ export function AdminPage() {
                 </tr>
               </thead>
               <tbody>
-                {draftRows.map((row) => (
+                {draftRows.map((row) => {
+                  const plan = row.isNew ? undefined : plans.find((item) => item.id === row.id);
+                  return (
                   <tr key={row.id}>
                     <td>
                       <input
@@ -3775,13 +3802,28 @@ export function AdminPage() {
                       />
                     </td>
                     <td>
-                      <button className="admin-icon-button" disabled={savingPlanId === row.id} type="button" onClick={() => void savePlan(row.id)}>
-                        {savingPlanId === row.id ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : row.isNew ? <Plus className="size-4" aria-hidden="true" /> : <Save className="size-4" aria-hidden="true" />}
-                        <span>{row.isNew ? "新增" : "保存"}</span>
-                      </button>
+                      <div className="admin-plan-actions">
+                        <button className="admin-icon-button" disabled={Boolean(savingPlanId)} type="button" onClick={() => void savePlan(row.id)}>
+                          {savingPlanId === row.id ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : row.isNew ? <Plus className="size-4" aria-hidden="true" /> : <Save className="size-4" aria-hidden="true" />}
+                          <span>{row.isNew ? "新增" : "保存"}</span>
+                        </button>
+                        {plan && plan.id !== DEFAULT_ADMIN_PLAN_ID ? (
+                          <button
+                            className="admin-icon-button admin-icon-button--danger"
+                            disabled={Boolean(savingPlanId)}
+                            type="button"
+                            onClick={() => void deletePlan(plan)}
+                            title="删除套餐"
+                          >
+                            {savingPlanId === `${DELETE_PLAN_SAVE_PREFIX}${row.id}` ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <X className="size-4" aria-hidden="true" />}
+                            <span>删除</span>
+                          </button>
+                        ) : null}
+                      </div>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -6549,6 +6591,8 @@ function demoOutputFormatValue(value: unknown): OutputFormat {
 }
 
 const NEW_PLAN_ID = "__new_plan__";
+const DEFAULT_ADMIN_PLAN_ID = "free";
+const DELETE_PLAN_SAVE_PREFIX = "__delete_plan__:";
 
 function createBillingSettingsForm(): BillingSettingsFormState {
   return {
