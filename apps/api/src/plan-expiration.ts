@@ -6,11 +6,16 @@ import { billingTransactions, redemptionCodeRedemptions, subscriptionPlans, user
 const DEFAULT_PLAN_ID = "free";
 const DEFAULT_CURRENCY = "CNY";
 const DEFAULT_STORAGE_QUOTA_BYTES = 1024 * 1024 * 1024;
+const DEFAULT_PLAN_VALID_DAYS = 30;
 
-export function planExpiryFrom(base: Date = new Date()): string {
+export function planExpiryFrom(base: Date = new Date(), validDays?: number | null): string {
   const expiresAt = new Date(base);
-  expiresAt.setMonth(expiresAt.getMonth() + 1);
+  expiresAt.setDate(expiresAt.getDate() + normalizePlanValidDays(validDays));
   return expiresAt.toISOString();
+}
+
+export function normalizePlanValidDays(validDays?: number | null): number {
+  return typeof validDays === "number" && Number.isSafeInteger(validDays) && validDays > 0 ? validDays : DEFAULT_PLAN_VALID_DAYS;
 }
 
 export async function ensureUserPlanCurrent(userId: string): Promise<void> {

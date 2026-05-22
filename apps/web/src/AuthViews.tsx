@@ -1812,6 +1812,7 @@ export function AdminPage() {
   const [extensionRelease, setExtensionRelease] = useState<ExtensionReleaseFormState>(createExtensionReleaseForm());
   const [appRelease, setAppRelease] = useState<AppReleaseFormState>(createAppReleaseForm());
   const [alipaySettings, setAlipaySettings] = useState<AlipayFormState>(createAlipayForm());
+  const [appleIapSettings, setAppleIapSettings] = useState<AppleIapFormState>(createAppleIapForm());
   const [wechatMiniAppSettings, setWechatMiniAppSettings] = useState<WechatMiniAppFormState>(createWechatMiniAppForm());
   const [smtpSettings, setSmtpSettings] = useState<SmtpFormState>(createSmtpForm());
   const [aliyunSmsSettings, setAliyunSmsSettings] = useState<AliyunSmsFormState>(createAliyunSmsForm());
@@ -1863,6 +1864,7 @@ export function AdminPage() {
         extensionReleaseResponse,
         appReleaseResponse,
         alipayResponse,
+        appleIapResponse,
         wechatResponse,
         smtpResponse,
         smsResponse,
@@ -1889,6 +1891,7 @@ export function AdminPage() {
         authFetch("/api/admin/extension-release"),
         authFetch("/api/admin/app-release"),
         authFetch("/api/admin/payment/alipay"),
+        authFetch("/api/admin/payment/apple-iap"),
         authFetch("/api/admin/auth/wechat/miniapp"),
         authFetch("/api/admin/email/smtp"),
         authFetch("/api/admin/sms/aliyun"),
@@ -1952,6 +1955,9 @@ export function AdminPage() {
       }
       if (alipayResponse.ok) {
         setAlipaySettings(parseAlipayForm(await alipayResponse.json()));
+      }
+      if (appleIapResponse.ok) {
+        setAppleIapSettings(parseAppleIapForm(await appleIapResponse.json()));
       }
       if (wechatResponse.ok) {
         setWechatMiniAppSettings(parseWechatMiniAppForm(await wechatResponse.json()));
@@ -2035,20 +2041,84 @@ export function AdminPage() {
     setError("");
     setNotice("");
     try {
-      const isNewPlan = planId === NEW_PLAN_ID;
-      const response = await authFetch(isNewPlan ? "/api/admin/plans" : `/api/admin/plans/${encodeURIComponent(planId)}`, {
-        method: isNewPlan ? "POST" : "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(planFormToPayload(draft))
-      });
-      if (!response.ok) {
-        throw new Error(await readApiError(response, "套餐保存失败。"));
-      }
+      await persistPlan(planId, draft);
       setNotice("套餐已保存。");
-      setNewPlan(createEmptyPlanForm());
+      if (planId === NEW_PLAN_ID) {
+        setNewPlan(createEmptyPlanForm());
+      }
       await loadAdminData({ preserveNotice: true });
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "套餐保存失败。");
+    } finally {
+      setSavingPlanId("");
+    }
+  }
+
+  async function persistPlan(planId: string, draft: PlanFormState): Promise<void> {
+    const isNewPlan = planId === NEW_PLAN_ID;
+    const response = await authFetch(isNewPlan ? "/api/admin/plans" : `/api/admin/plans/${encodeURIComponent(planId)}`, {
+      method: isNewPlan ? "POST" : "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(planFormToPayload(draft))
+    });
+    if (!response.ok) {
+      throw new Error(await readApiError(response, "套餐保存失败。"));
+    }
+  }
+
+  async function deletePlan(plan: AdminPlanRow): Promise<void> {
+    if (!window.confirm(`确定删除套餐「${plan.name || plan.id}」吗？使用该套餐的用户会自动回到 Free 套餐。`)) {
+      return;
+    }
+
+    const savingId = `${DELETE_PLAN_SAVE_PREFIX}${plan.id}`;
+    setSavingPlanId(savingId);
+    setError("");
+    setNotice("");
+    try {
+      const response = await authFetch(`/api/admin/plans/${encodeURIComponent(plan.id)}`, {
+        method: "DELETE"
+      });
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "套餐删除失败。"));
+      }
+      setNotice("套餐已删除。");
+      await loadAdminData({ preserveNotice: true });
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "套餐删除失败。");
+    } finally {
+      setSavingPlanId("");
+    }
+  }
+
+  async function saveAllPlans(): Promise<void> {
+    const planRows = [
+      ...plans.map((plan) => ({ id: plan.id, form: planDrafts[plan.id] ?? planToForm(plan), isNew: false })),
+      { id: NEW_PLAN_ID, form: newPlan, isNew: true }
+    ];
+    const rowsToSave = planRows.filter((row) => hasPlanDraftName(row.form));
+    if (rowsToSave.length === 0) {
+      setNotice("没有需要保存的套餐。");
+      return;
+    }
+
+    setSavingPlanId(ALL_PLANS_SAVE_ID);
+    setError("");
+    setNotice("");
+    try {
+      for (const row of rowsToSave) {
+        try {
+          await persistPlan(row.id, row.form);
+        } catch (rowError) {
+          const rowLabel = row.form.name.trim() || (row.isNew ? "新套餐" : row.id);
+          throw new Error(`${rowLabel} 保存失败：${rowError instanceof Error ? rowError.message : "套餐保存失败。"}`);
+        }
+      }
+      setNotice(rowsToSave.some((row) => row.isNew) ? "全部套餐已保存，新套餐已新增。" : "全部套餐已保存。");
+      setNewPlan(createEmptyPlanForm());
+      await loadAdminData({ preserveNotice: true });
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "全部套餐保存失败。");
     } finally {
       setSavingPlanId("");
     }
@@ -2691,6 +2761,37 @@ export function AdminPage() {
       await loadAdminData({ preserveNotice: true });
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "支付宝配置保存失败。");
+    } finally {
+      setSavingBilling("");
+    }
+  }
+
+  async function saveAppleIapSettings(): Promise<void> {
+    setSavingBilling("apple-iap");
+    setError("");
+    setNotice("");
+    try {
+      const response = await authFetch("/api/admin/payment/apple-iap", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          enabled: appleIapSettings.enabled,
+          bundleId: appleIapSettings.bundleId,
+          issuerId: appleIapSettings.issuerId,
+          keyId: appleIapSettings.keyId,
+          privateKey: appleIapSettings.privateKey,
+          preservePrivateKey: !appleIapSettings.privateKey.trim() && appleIapSettings.privateKeySaved,
+          productPrefix: appleIapSettings.productPrefix,
+          productIdsJson: appleIapSettings.productIdsJson
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "Apple 内购配置保存失败。"));
+      }
+      setNotice("Apple 内购配置已保存。");
+      await loadAdminData({ preserveNotice: true });
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Apple 内购配置保存失败。");
     } finally {
       setSavingBilling("");
     }
@@ -3410,6 +3511,42 @@ export function AdminPage() {
             <div className="admin-form-panel">
               <div className="admin-form-panel__title-row">
                 <div>
+                  <p className="settings-eyebrow">Apple</p>
+                  <h3>Apple 内购</h3>
+                </div>
+                <label className="admin-switch">
+                  <input
+                    checked={appleIapSettings.enabled}
+                    type="checkbox"
+                    onChange={(event) => setAppleIapSettings({ ...appleIapSettings, enabled: event.target.checked })}
+                  />
+                  <span>{appleIapSettings.enabled ? "启用" : "关闭"}</span>
+                </label>
+              </div>
+              <p className="admin-table-card__note">用于服务端校验 Apple 交易并开通套餐权益；商品是否在 iOS 展示仍由套餐管理里的 Apple 商品 ID 和 iOS 内购开关控制。</p>
+              <div className="admin-form-grid admin-form-grid--two">
+                <label><span>Bundle ID</span><input className="admin-input" value={appleIapSettings.bundleId} onChange={(event) => setAppleIapSettings({ ...appleIapSettings, bundleId: event.target.value })} /></label>
+                <label><span>Issuer ID</span><input className="admin-input" value={appleIapSettings.issuerId} onChange={(event) => setAppleIapSettings({ ...appleIapSettings, issuerId: event.target.value })} /></label>
+                <label><span>Key ID</span><input className="admin-input" value={appleIapSettings.keyId} onChange={(event) => setAppleIapSettings({ ...appleIapSettings, keyId: event.target.value })} /></label>
+                <label><span>商品前缀</span><input className="admin-input" value={appleIapSettings.productPrefix} onChange={(event) => setAppleIapSettings({ ...appleIapSettings, productPrefix: event.target.value })} /></label>
+              </div>
+              <label>
+                <span>In-App Purchase 私钥 {appleIapSettings.privateKeySaved ? "（已保存，留空不覆盖）" : ""}</span>
+                <textarea className="admin-textarea admin-secret-textarea" value={appleIapSettings.privateKey} onChange={(event) => setAppleIapSettings({ ...appleIapSettings, privateKey: event.target.value })} />
+              </label>
+              <label>
+                <span>套餐商品映射 JSON</span>
+                <textarea className="admin-textarea admin-secret-textarea" value={appleIapSettings.productIdsJson} onChange={(event) => setAppleIapSettings({ ...appleIapSettings, productIdsJson: event.target.value })} />
+              </label>
+              <button className="secondary-action h-10" disabled={savingBilling === "apple-iap"} type="button" onClick={() => void saveAppleIapSettings()}>
+                {savingBilling === "apple-iap" ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <CreditCard className="size-4" aria-hidden="true" />}
+                保存 Apple 内购
+              </button>
+            </div>
+
+            <div className="admin-form-panel">
+              <div className="admin-form-panel__title-row">
+                <div>
                   <p className="settings-eyebrow">SMS</p>
                   <h3>阿里云短信验证码</h3>
                 </div>
@@ -3714,10 +3851,17 @@ export function AdminPage() {
 
         {activeTab === "plans" ? (
         <section className="admin-table-card" aria-labelledby="plans-table-title">
-          <div className="admin-table-card__title">
-            <Package className="size-4" aria-hidden="true" />
-            <h2 id="plans-table-title">套餐管理</h2>
+          <div className="admin-table-card__title admin-table-card__title--split">
+            <div className="admin-table-card__title-main">
+              <Package className="size-4" aria-hidden="true" />
+              <h2 id="plans-table-title">套餐管理</h2>
+            </div>
+            <button className="primary-action h-10 admin-plans-save-all" disabled={Boolean(savingPlanId)} type="button" onClick={() => void saveAllPlans()}>
+              {savingPlanId === ALL_PLANS_SAVE_ID ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Save className="size-4" aria-hidden="true" />}
+              保存全部套餐
+            </button>
           </div>
+          <p className="admin-table-card__note">iOS 只展示已填写 Apple 商品 ID 且勾选“iOS 内购”的套餐；商品 ID 需要与 App Store Connect 完全一致，例如 shangtuai_starter。</p>
           <div className="admin-table-wrap">
             <table className="admin-table admin-edit-table">
               <thead>
@@ -3725,7 +3869,10 @@ export function AdminPage() {
                   <th>名称</th>
                   <th>生图额度</th>
                   <th>存图空间</th>
+                  <th>有效天数</th>
                   <th>价格</th>
+                  <th>Apple 商品 ID</th>
+                  <th>iOS 内购</th>
                   <th>启用</th>
                   <th>排序</th>
                   <th>权益</th>
@@ -3733,7 +3880,9 @@ export function AdminPage() {
                 </tr>
               </thead>
               <tbody>
-                {draftRows.map((row) => (
+                {draftRows.map((row) => {
+                  const plan = row.isNew ? undefined : plans.find((item) => item.id === row.id);
+                  return (
                   <tr key={row.id}>
                     <td>
                       <input
@@ -3775,6 +3924,19 @@ export function AdminPage() {
                     </td>
                     <td>
                       <input
+                        className="admin-input admin-input--narrow"
+                        inputMode="numeric"
+                        placeholder="30"
+                        value={row.form.validDays}
+                        onChange={(event) =>
+                          row.isNew
+                            ? setNewPlan({ ...newPlan, validDays: event.target.value })
+                            : setPlanDrafts((drafts) => ({ ...drafts, [row.id]: { ...row.form, validDays: event.target.value } }))
+                        }
+                      />
+                    </td>
+                    <td>
+                      <input
                         className="admin-input"
                         inputMode="decimal"
                         placeholder="0"
@@ -3785,6 +3947,31 @@ export function AdminPage() {
                             : setPlanDrafts((drafts) => ({ ...drafts, [row.id]: { ...row.form, price: event.target.value } }))
                         }
                       />
+                    </td>
+                    <td>
+                      <input
+                        className="admin-input"
+                        placeholder="shangtuai_starter"
+                        value={row.form.appleProductId}
+                        onChange={(event) =>
+                          row.isNew
+                            ? setNewPlan({ ...newPlan, appleProductId: event.target.value })
+                            : setPlanDrafts((drafts) => ({ ...drafts, [row.id]: { ...row.form, appleProductId: event.target.value } }))
+                        }
+                      />
+                    </td>
+                    <td>
+                      <label className="admin-checkbox" title="勾选后 iOS App 会展示该套餐，并用 Apple 商品 ID 向 StoreKit 请求商品。">
+                        <input
+                          checked={row.form.appleIapEnabled}
+                          type="checkbox"
+                          onChange={(event) =>
+                            row.isNew
+                              ? setNewPlan({ ...newPlan, appleIapEnabled: event.target.checked })
+                              : setPlanDrafts((drafts) => ({ ...drafts, [row.id]: { ...row.form, appleIapEnabled: event.target.checked } }))
+                          }
+                        />
+                      </label>
                     </td>
                     <td>
                       <label className="admin-checkbox">
@@ -3825,13 +4012,28 @@ export function AdminPage() {
                       />
                     </td>
                     <td>
-                      <button className="admin-icon-button" disabled={savingPlanId === row.id} type="button" onClick={() => void savePlan(row.id)}>
-                        {savingPlanId === row.id ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : row.isNew ? <Plus className="size-4" aria-hidden="true" /> : <Save className="size-4" aria-hidden="true" />}
-                        <span>{row.isNew ? "新增" : "保存"}</span>
-                      </button>
+                      <div className="admin-plan-actions">
+                        <button className="admin-icon-button" disabled={Boolean(savingPlanId)} type="button" onClick={() => void savePlan(row.id)}>
+                          {savingPlanId === row.id ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : row.isNew ? <Plus className="size-4" aria-hidden="true" /> : <Save className="size-4" aria-hidden="true" />}
+                          <span>{row.isNew ? "新增" : "保存"}</span>
+                        </button>
+                        {plan && plan.id !== DEFAULT_ADMIN_PLAN_ID ? (
+                          <button
+                            className="admin-icon-button admin-icon-button--danger"
+                            disabled={Boolean(savingPlanId)}
+                            type="button"
+                            onClick={() => void deletePlan(plan)}
+                            title="删除套餐"
+                          >
+                            {savingPlanId === `${DELETE_PLAN_SAVE_PREFIX}${row.id}` ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <X className="size-4" aria-hidden="true" />}
+                            <span>删除</span>
+                          </button>
+                        ) : null}
+                      </div>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -4957,6 +5159,7 @@ interface BillingPlan {
   description?: string;
   imageQuota: number;
   storageQuotaBytes: number;
+  validDays: number;
   priceCents: number;
   currency: string;
   enabled: boolean;
@@ -4991,8 +5194,11 @@ interface AdminPlanRow {
   name: string;
   quotaTotal?: number;
   storageQuotaBytes?: number;
+  validDays?: number;
   priceCents?: number;
   currency: string;
+  appleProductId?: string;
+  appleIapEnabled: boolean;
   enabled: boolean;
   sortOrder: number;
   features: string[];
@@ -5002,8 +5208,11 @@ interface PlanFormState {
   name: string;
   quotaTotal: string;
   storageQuotaGb: string;
+  validDays: string;
   price: string;
   currency: string;
+  appleProductId: string;
+  appleIapEnabled: boolean;
   enabled: boolean;
   sortOrder: string;
   featuresText: string;
@@ -5181,6 +5390,17 @@ interface AlipayFormState {
   returnUrl: string;
   gateway: string;
   signType: string;
+}
+
+interface AppleIapFormState {
+  enabled: boolean;
+  bundleId: string;
+  issuerId: string;
+  keyId: string;
+  privateKey: string;
+  privateKeySaved: boolean;
+  productPrefix: string;
+  productIdsJson: string;
 }
 
 interface WechatMiniAppFormState {
@@ -5378,6 +5598,7 @@ function parseBillingPlans(value: unknown): BillingPlan[] {
       description: "",
       imageQuota: plan.quotaTotal ?? 0,
       storageQuotaBytes: plan.storageQuotaBytes ?? 0,
+      validDays: plan.validDays ?? 30,
       priceCents: plan.priceCents ?? 0,
       currency: plan.currency,
       enabled: plan.enabled,
@@ -5649,8 +5870,11 @@ function parsePlans(value: unknown): AdminPlanRow[] {
       name: stringFrom(item.name) || stringFrom(item.title) || "未命名套餐",
       quotaTotal: numberFrom(item.quota_total ?? item.quotaTotal ?? item.imageQuota ?? item.generationQuota),
       storageQuotaBytes: numberFrom(item.storage_quota_bytes ?? item.storageQuotaBytes ?? item.storageBytes),
+      validDays: numberFrom(item.valid_days ?? item.validDays ?? item.durationDays),
       priceCents: numberFrom(item.price_cents ?? item.priceCents ?? item.amountCents),
       currency: stringFrom(item.currency) || "CNY",
+      appleProductId: stringFrom(item.appleProductId ?? item.apple_product_id),
+      appleIapEnabled: booleanFrom(item.appleIapEnabled ?? item.apple_iap_enabled ?? item.appleIapVisible ?? item.appleStoreEnabled ?? item.iosEnabled, false),
       enabled: booleanFrom(item.enabled ?? item.isEnabled ?? item.active, true),
       sortOrder: numberFrom(item.sort_order ?? item.sortOrder ?? item.order) ?? index,
       features: features.length > 0 ? features : stringArrayFrom(item.features ?? item.benefits)
@@ -6380,6 +6604,21 @@ function parseAlipayForm(value: unknown): AlipayFormState {
   };
 }
 
+function parseAppleIapForm(value: unknown): AppleIapFormState {
+  const appleIap = firstRecord(value, "appleIap") ?? (isRecord(value) ? value : {});
+  const privateKey = isRecord(appleIap.privateKey) ? appleIap.privateKey : {};
+  return {
+    enabled: booleanFrom(appleIap.enabled, false),
+    bundleId: stringFrom(appleIap.bundleId) || "com.neimou.shangtuai",
+    issuerId: stringFrom(appleIap.issuerId),
+    keyId: stringFrom(appleIap.keyId),
+    privateKey: "",
+    privateKeySaved: booleanFrom(privateKey.hasSecret, false),
+    productPrefix: stringFrom(appleIap.productPrefix) || "shangtuai_",
+    productIdsJson: stringFrom(appleIap.productIdsJson) || "{\"starter\":\"shangtuai_starter\"}"
+  };
+}
+
 function parseWechatMiniAppForm(value: unknown): WechatMiniAppFormState {
   const wechat = firstRecord(value, "wechatMiniApp") ?? (isRecord(value) ? value : {});
   const appSecret = isRecord(wechat.appSecret) ? wechat.appSecret : {};
@@ -6599,6 +6838,9 @@ function demoOutputFormatValue(value: unknown): OutputFormat {
 }
 
 const NEW_PLAN_ID = "__new_plan__";
+const DEFAULT_ADMIN_PLAN_ID = "free";
+const ALL_PLANS_SAVE_ID = "__all_plans__";
+const DELETE_PLAN_SAVE_PREFIX = "__delete_plan__:";
 
 function createBillingSettingsForm(): BillingSettingsFormState {
   return {
@@ -6770,6 +7012,19 @@ function createAlipayForm(): AlipayFormState {
   };
 }
 
+function createAppleIapForm(): AppleIapFormState {
+  return {
+    enabled: false,
+    bundleId: "com.neimou.shangtuai",
+    issuerId: "",
+    keyId: "",
+    privateKey: "",
+    privateKeySaved: false,
+    productPrefix: "shangtuai_",
+    productIdsJson: "{\"starter\":\"shangtuai_starter\"}"
+  };
+}
+
 function createWechatMiniAppForm(): WechatMiniAppFormState {
   return {
     enabled: false,
@@ -6816,6 +7071,7 @@ const fallbackBillingPlans: BillingPlan[] = [
     description: "适合轻量试用和少量商品图制作。",
     imageQuota: 100,
     storageQuotaBytes: 5 * 1024 ** 3,
+    validDays: 30,
     priceCents: 9900,
     currency: "CNY",
     enabled: true,
@@ -6827,6 +7083,7 @@ const fallbackBillingPlans: BillingPlan[] = [
     description: "适合日常商品图批量生成。",
     imageQuota: 500,
     storageQuotaBytes: 30 * 1024 ** 3,
+    validDays: 30,
     priceCents: 39900,
     currency: "CNY",
     enabled: true,
@@ -6839,8 +7096,11 @@ function createEmptyPlanForm(): PlanFormState {
     name: "",
     quotaTotal: "",
     storageQuotaGb: "",
+    validDays: "30",
     price: "",
     currency: "CNY",
+    appleProductId: "",
+    appleIapEnabled: false,
     enabled: true,
     sortOrder: "0",
     featuresText: ""
@@ -6855,13 +7115,20 @@ function createEmptyAdminForm(): AdminUserFormState {
   };
 }
 
+function hasPlanDraftName(form: PlanFormState): boolean {
+  return form.name.trim() !== "";
+}
+
 function planToForm(plan: AdminPlanRow): PlanFormState {
   return {
     name: plan.name,
     quotaTotal: stringFromNumber(plan.quotaTotal),
     storageQuotaGb: bytesToGbInput(plan.storageQuotaBytes),
+    validDays: stringFromNumber(plan.validDays ?? 30),
     price: plan.priceCents === undefined ? "" : String(plan.priceCents / 100),
     currency: plan.currency || "CNY",
+    appleProductId: plan.appleProductId || "",
+    appleIapEnabled: plan.appleIapEnabled,
     enabled: plan.enabled,
     sortOrder: String(plan.sortOrder),
     featuresText: plan.features.join("\n")
@@ -6870,12 +7137,16 @@ function planToForm(plan: AdminPlanRow): PlanFormState {
 
 function planFormToPayload(form: PlanFormState): Record<string, unknown> {
   const features = splitLines(form.featuresText);
+  const validDays = nullableNumber(form.validDays);
   return {
     name: form.name.trim(),
     imageQuota: nullableNumber(form.quotaTotal) ?? 0,
     storageQuotaBytes: gbToBytes(form.storageQuotaGb),
+    validDays: validDays && validDays > 0 ? validDays : 30,
     priceCents: moneyToCents(form.price),
     currency: form.currency || "CNY",
+    appleProductId: form.appleProductId.trim(),
+    appleIapEnabled: form.appleIapEnabled,
     enabled: form.enabled,
     sortOrder: nullableNumber(form.sortOrder) ?? 0,
     features,
@@ -6948,6 +7219,7 @@ function roleLabel(role: string): string {
 
 function billingTypeLabel(type: string): string {
   if (type === "generation") return "生图扣费";
+  if (type === "generation_refund") return "失败返还";
   if (type === "admin_adjustment") return "后台调整";
   if (type === "recharge") return "充值";
   if (type === "plan_purchase") return "套餐购买";

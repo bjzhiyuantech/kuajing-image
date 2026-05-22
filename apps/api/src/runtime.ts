@@ -93,7 +93,7 @@ export const appleIapRuntimeConfig = {
   issuerId: emptyToUndefined(process.env.APPLE_IAP_ISSUER_ID),
   keyId: emptyToUndefined(process.env.APPLE_IAP_KEY_ID),
   privateKey: emptyToUndefined(process.env.APPLE_IAP_PRIVATE_KEY),
-  productPrefix: emptyToUndefined(process.env.APPLE_IAP_PRODUCT_PREFIX) ?? "com.neimou.shangtuai.plan.",
+  productPrefix: emptyToUndefined(process.env.APPLE_IAP_PRODUCT_PREFIX) ?? "shangtuai_",
   productIds: parseStringMap(process.env.APPLE_IAP_PRODUCT_IDS_JSON)
 };
 

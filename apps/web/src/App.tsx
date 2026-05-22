@@ -117,6 +117,7 @@ import { AgreementPage } from "./AgreementPage";
 import { HelpCenterPage } from "./HelpCenter";
 import { PrivacyPolicyPage } from "./PrivacyPolicyPage";
 import { SeedanceVideoPanel } from "./SeedanceVideoPanel";
+import { SupportPage } from "./SupportPage";
 import {
   authFetch,
   clearStoredAuthToken,
@@ -8857,6 +8858,14 @@ export function App() {
     return (
       <div className="app-root">
         <AgreementPage />
+      </div>
+    );
+  }
+
+  if (publicPath === "/support") {
+    return (
+      <div className="app-root">
+        <SupportPage />
       </div>
     );
   }

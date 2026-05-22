@@ -2,6 +2,7 @@ import { createHash, createSign, createVerify, randomUUID } from "node:crypto";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import type { RequestTenant } from "./auth-context.js";
 import type {
+  AdminAppleIapConfigResponse,
   AdminAlipayConfigResponse,
   AdminBillingSettingsResponse,
   BillingOrder,
@@ -14,6 +15,7 @@ import type {
   CreateAlipayRechargeRequest,
   CreatePaymentResponse,
   PurchasePlanRequest,
+  SaveAppleIapConfigRequest,
   SaveAlipayConfigRequest,
   SaveBillingSettingsRequest,
   VerifyAppleInAppPurchaseRequest
@@ -27,8 +29,10 @@ import { getSystemSetting, saveSystemSetting } from "./system-settings.js";
 
 const BILLING_SETTINGS_KEY = "billing.imageUnitPrice";
 const ALIPAY_SETTINGS_KEY = "payment.alipay";
+const APPLE_IAP_SETTINGS_KEY = "payment.appleIap";
 const DEFAULT_CURRENCY = "CNY";
 const DEFAULT_ALIPAY_GATEWAY = "https://openapi.alipay.com/gateway.do";
+const DEFAULT_APPLE_IAP_BUNDLE_ID = "com.neimou.shangtuai";
 const ALIPAY_NOTIFY_SUCCESS = "success";
 const APPLE_IAP_PRODUCTION_API = "https://api.storekit.apple.com";
 const APPLE_IAP_SANDBOX_API = "https://api.storekit-sandbox.apple.com";
@@ -99,6 +103,41 @@ export async function saveAlipayConfig(input: SaveAlipayConfigRequest): Promise<
 
   await saveSetting(ALIPAY_SETTINGS_KEY, value);
   return getAlipayConfig();
+}
+
+export async function getAppleIapConfig(): Promise<AdminAppleIapConfigResponse> {
+  const row = await getSetting(APPLE_IAP_SETTINGS_KEY);
+  return {
+    appleIap: toAppleIapConfigView(parseRecord(row?.valueJson), row?.updatedAt)
+  };
+}
+
+export async function saveAppleIapConfig(input: SaveAppleIapConfigRequest): Promise<AdminAppleIapConfigResponse> {
+  const existing = parseRecord((await getSetting(APPLE_IAP_SETTINGS_KEY))?.valueJson);
+  const productIdsJson = limitedString(input.productIdsJson, 20_000) ?? stringValue(existing.productIdsJson) ?? "";
+  if (productIdsJson) {
+    parseAppleProductIdsJson(productIdsJson);
+  }
+
+  const value = {
+    enabled: input.enabled === true,
+    bundleId: limitedString(input.bundleId, 255) ?? stringValue(existing.bundleId) ?? appleIapRuntimeConfig.bundleId ?? DEFAULT_APPLE_IAP_BUNDLE_ID,
+    issuerId: limitedString(input.issuerId, 255) ?? stringValue(existing.issuerId) ?? appleIapRuntimeConfig.issuerId ?? "",
+    keyId: limitedString(input.keyId, 255) ?? stringValue(existing.keyId) ?? appleIapRuntimeConfig.keyId ?? "",
+    privateKey:
+      input.preservePrivateKey === true
+        ? stringValue(existing.privateKey) ?? appleIapRuntimeConfig.privateKey ?? ""
+        : limitedString(input.privateKey, 20_000) ?? "",
+    productPrefix: limitedString(input.productPrefix, 128) ?? stringValue(existing.productPrefix) ?? appleIapRuntimeConfig.productPrefix,
+    productIdsJson
+  };
+
+  if (value.enabled && (!value.bundleId || !value.issuerId || !value.keyId || !value.privateKey)) {
+    throw new BillingError("invalid_apple_iap_config", "启用 Apple 内购时需要配置 Bundle ID、Issuer ID、Key ID 和私钥。");
+  }
+
+  await saveSetting(APPLE_IAP_SETTINGS_KEY, value);
+  return getAppleIapConfig();
 }
 
 export async function getBillingSummary(tenant: RequestTenant): Promise<BillingSummaryResponse> {
@@ -226,7 +265,7 @@ export async function purchasePlan(
     imageQuota: Number(plan.imageQuota ?? 0),
     storageQuotaBytes: Number(plan.storageQuotaBytes ?? 0),
     returnUrl: input.returnUrl,
-    metadata: { planName: plan.name }
+    metadata: { planName: plan.name, planValidDays: Number(plan.validDays ?? 30) }
   });
   const paymentUrl = buildAlipayPagePayUrl(alipay, order, input.returnUrl);
   await db.update(billingOrders).set({ paymentUrl, updatedAt: new Date().toISOString() }).where(eq(billingOrders.id, order.id));
@@ -256,14 +295,22 @@ export async function verifyAppleInAppPurchase(
   if (!plan || Number(plan.enabled ?? 0) !== 1) {
     throw new BillingError("plan_not_found", "套餐不存在或已停用。", 404);
   }
+  if (Number(plan.appleIapEnabled ?? 0) !== 1) {
+    throw new BillingError("apple_iap_plan_not_enabled", "该套餐未开启 Apple 内购。", 400);
+  }
 
-  const expectedProductId = appleProductIdForPlan(plan.id);
+  const appleIapConfig = await getRawAppleIapConfig();
+  ensureAppleIapEnabled(appleIapConfig);
+  const expectedProductId = appleProductIdForPlanRow(plan, appleIapConfig);
+  if (!expectedProductId) {
+    throw new BillingError("apple_iap_product_not_configured", "该套餐未配置 Apple 商品 ID。", 400);
+  }
   if (input.productId !== expectedProductId) {
     throw new BillingError("invalid_apple_iap_product", "Apple 内购商品与套餐不匹配。", 400);
   }
 
-  const appleTransaction = await fetchAppleTransactionInfo(transactionId, input.environment);
-  if (appleTransaction.bundleId !== appleIapRuntimeConfig.bundleId) {
+  const appleTransaction = await fetchAppleTransactionInfo(appleIapConfig, transactionId, input.environment);
+  if (appleTransaction.bundleId !== appleIapConfig.bundleId) {
     throw new BillingError("invalid_apple_iap_bundle", "Apple 内购 Bundle ID 不匹配。", 400);
   }
   if (appleTransaction.productId !== expectedProductId) {
@@ -276,7 +323,8 @@ export async function verifyAppleInAppPurchase(
     throw new BillingError("revoked_apple_iap_transaction", "这笔 Apple 内购交易已撤销。", 409);
   }
 
-  const outTradeNo = createAppleOutTradeNo(transactionId);
+  const originalTransactionId = appleTransaction.originalTransactionId || input.originalTransactionId;
+  const outTradeNo = createAppleOutTradeNo(originalTransactionId || transactionId);
   const existingOrder = await getBillingOrderByOutTradeNo(outTradeNo);
   if (existingOrder) {
     if (existingOrder.userId !== tenant.userId) {
@@ -287,6 +335,8 @@ export async function verifyAppleInAppPurchase(
         providerTradeNo: appleTransaction.transactionId,
         notifyPayload: {
           environment: appleTransaction.environment,
+          expiresAt: appleTransaction.expiresAt,
+          expiresDate: appleTransaction.expiresDate,
           originalTransactionId: appleTransaction.originalTransactionId,
           productId: appleTransaction.productId,
           signedTransactionInfo: appleTransaction.signedTransactionInfo,
@@ -302,12 +352,14 @@ export async function verifyAppleInAppPurchase(
         message: "Apple 内购已验证，套餐权益已生效。"
       };
     }
+    await syncAppleSubscriptionEntitlement(existingOrder, plan, appleTransaction);
+    const savedOrder = await getBillingOrderById(existingOrder.id);
     return {
-      order: existingOrder,
-      orderId: existingOrder.id,
-      outTradeNo: existingOrder.outTradeNo,
+      order: savedOrder,
+      orderId: savedOrder.id,
+      outTradeNo: savedOrder.outTradeNo,
       status: "paid",
-      message: "Apple 内购已验证，套餐权益已生效。"
+      message: "Apple 内购已验证，套餐权益已同步。"
     };
   }
 
@@ -325,8 +377,11 @@ export async function verifyAppleInAppPurchase(
     metadata: {
       appAccountToken: input.appAccountToken,
       environment: appleTransaction.environment,
+      expiresAt: appleTransaction.expiresAt,
+      expiresDate: appleTransaction.expiresDate,
       originalTransactionId: input.originalTransactionId ?? appleTransaction.originalTransactionId,
       planName: plan.name,
+      planValidDays: Number(plan.validDays ?? 30),
       productId: expectedProductId,
       purchaseToken: input.purchaseToken
     }
@@ -336,6 +391,8 @@ export async function verifyAppleInAppPurchase(
     providerTradeNo: appleTransaction.transactionId,
     notifyPayload: {
       environment: appleTransaction.environment,
+      expiresAt: appleTransaction.expiresAt,
+      expiresDate: appleTransaction.expiresDate,
       originalTransactionId: appleTransaction.originalTransactionId,
       productId: appleTransaction.productId,
       signedTransactionInfo: appleTransaction.signedTransactionInfo,
@@ -416,6 +473,79 @@ export async function handleAlipayNotify(input: Record<string, string>): Promise
   return ALIPAY_NOTIFY_SUCCESS;
 }
 
+export async function handleAppleServerNotification(input: unknown): Promise<{ ok: true }> {
+  const signedPayload = isRecord(input) ? stringValue(input.signedPayload) : undefined;
+  if (!signedPayload) {
+    throw new BillingError("invalid_apple_iap_notification", "Apple 通知缺少 signedPayload。", 400);
+  }
+
+  const notificationPayload = decodeJwsPayload(signedPayload);
+  const data = isRecord(notificationPayload.data) ? notificationPayload.data : {};
+  const signedTransactionInfo = stringValue(data.signedTransactionInfo);
+  if (!signedTransactionInfo) {
+    return { ok: true };
+  }
+
+  const transactionPayload = decodeJwsPayload(signedTransactionInfo);
+  const transactionId = stringValue(transactionPayload.transactionId);
+  const originalTransactionId = stringValue(transactionPayload.originalTransactionId);
+  const productId = stringValue(transactionPayload.productId);
+  const bundleId = stringValue(transactionPayload.bundleId);
+  const expiresDate = timestampMillisValue(transactionPayload.expiresDate);
+  const revocationDate = timestampMillisValue(transactionPayload.revocationDate);
+  if (!transactionId || !productId || !bundleId) {
+    throw new BillingError("invalid_apple_iap_notification", "Apple 通知交易信息不完整。", 400);
+  }
+
+  const appleIapConfig = await getRawAppleIapConfig();
+  ensureAppleIapEnabled(appleIapConfig);
+  if (bundleId !== appleIapConfig.bundleId) {
+    throw new BillingError("invalid_apple_iap_bundle", "Apple 通知 Bundle ID 不匹配。", 400);
+  }
+  if (!expiresDate && !revocationDate) {
+    return { ok: true };
+  }
+
+  const plan = await findPlanByAppleProductId(productId, appleIapConfig);
+  if (!plan) {
+    throw new BillingError("apple_iap_plan_not_found", "Apple 通知未匹配到套餐。", 404);
+  }
+
+  const [order] = await db
+    .select()
+    .from(billingOrders)
+    .where(eq(billingOrders.outTradeNo, createAppleOutTradeNo(originalTransactionId || transactionId)))
+    .limit(1);
+  if (!order) {
+    return { ok: true };
+  }
+
+  const now = new Date().toISOString();
+  const [user] = await db.select().from(users).where(eq(users.id, order.userId)).limit(1);
+  const expiresAt = pickPreferredPlanExpiresAt(
+    expiresDate ? new Date(expiresDate).toISOString() : undefined,
+    user?.planExpiresAt ?? undefined,
+    revocationDate ? new Date(revocationDate).toISOString() : undefined
+  );
+  if (!expiresAt) {
+    return { ok: true };
+  }
+  await db
+    .update(users)
+    .set({
+      planId: plan.id,
+      planExpiresAt: expiresAt,
+      quotaTotal: Number(plan.imageQuota ?? 0),
+      quotaUsed: 0,
+      storageQuotaBytes: Number(plan.storageQuotaBytes ?? 0),
+      currency: plan.currency || DEFAULT_CURRENCY,
+      updatedAt: now
+    })
+    .where(eq(users.id, order.userId));
+
+  return { ok: true };
+}
+
 export async function reserveGenerationCharge(input: {
   tenant: RequestTenant;
   imageCount: number;
@@ -486,6 +616,146 @@ export async function reserveGenerationCharge(input: {
     });
 
     return { transactionId, quotaConsumed, amountCents };
+  });
+}
+
+export async function refundGenerationCharge(input: {
+  tenant: RequestTenant;
+  transactionId?: string;
+  generationId?: string;
+  failedImageCount: number;
+  reason?: string;
+}): Promise<void> {
+  const failedImageCount = nonNegativeInteger(input.failedImageCount);
+  if (!failedImageCount || failedImageCount < 1 || (!input.transactionId && !input.generationId)) {
+    return;
+  }
+
+  await db.transaction(async (tx) => {
+    const [source] = input.transactionId
+      ? await tx
+          .select()
+          .from(billingTransactions)
+          .where(and(
+            eq(billingTransactions.id, input.transactionId),
+            eq(billingTransactions.userId, input.tenant.userId),
+            eq(billingTransactions.type, "generation")
+          ))
+          .limit(1)
+          .for("update")
+      : await tx
+          .select()
+          .from(billingTransactions)
+          .where(and(
+            eq(billingTransactions.relatedId, input.generationId ?? ""),
+            eq(billingTransactions.userId, input.tenant.userId),
+            eq(billingTransactions.type, "generation")
+          ))
+          .limit(1)
+          .for("update");
+    if (!source) {
+      return;
+    }
+
+    const imageCount = Math.max(0, Number(source.imageCount ?? 0));
+    const targetFailedCount = Math.min(failedImageCount, imageCount);
+    if (targetFailedCount < 1) {
+      return;
+    }
+
+    const quotaConsumed = Math.max(0, Number(source.quotaConsumed ?? 0));
+    const unitPriceCents = Math.max(0, Number(source.unitPriceCents ?? 0));
+    const chargedAmountCents = Math.max(0, -Number(source.amountCents ?? 0));
+    const chargedBalanceImageCount = unitPriceCents > 0
+      ? Math.min(Math.max(0, imageCount - quotaConsumed), Math.ceil(chargedAmountCents / unitPriceCents))
+      : 0;
+    const succeededImageCount = Math.max(0, imageCount - targetFailedCount);
+    const targetQuotaConsumed = Math.min(quotaConsumed, succeededImageCount);
+    const targetBalanceImageCount = Math.max(0, succeededImageCount - targetQuotaConsumed);
+    const targetQuotaRefundCount = Math.max(0, quotaConsumed - targetQuotaConsumed);
+    const targetBalanceRefundCents = Math.min(
+      chargedAmountCents,
+      Math.max(0, chargedBalanceImageCount - targetBalanceImageCount) * unitPriceCents
+    );
+
+    const refundRelatedId = input.generationId ?? source.relatedId ?? source.id;
+    const existingRefunds = await tx
+      .select()
+      .from(billingTransactions)
+      .where(and(
+        eq(billingTransactions.userId, source.userId),
+        eq(billingTransactions.type, "generation_refund"),
+        eq(billingTransactions.relatedId, refundRelatedId)
+      ))
+      .for("update");
+    const alreadyRefundedQuota = existingRefunds.reduce((total, row) => total + Math.max(0, Number(row.quotaCount ?? 0)), 0);
+    const alreadyRefundedCents = existingRefunds.reduce((total, row) => total + Math.max(0, Number(row.amountCents ?? 0)), 0);
+    const alreadyRefundedImages = existingRefunds.reduce((total, row) => total + Math.max(0, Number(row.imageCount ?? 0)), 0);
+    const quotaRefundCount = Math.max(0, targetQuotaRefundCount - alreadyRefundedQuota);
+    const balanceRefundCents = Math.max(0, targetBalanceRefundCents - alreadyRefundedCents);
+    const refundImageCount = Math.max(0, targetFailedCount - alreadyRefundedImages);
+    if (quotaRefundCount < 1 && balanceRefundCents < 1) {
+      return;
+    }
+
+    const [user] = await tx.select().from(users).where(eq(users.id, source.userId)).limit(1).for("update");
+    if (!user) {
+      return;
+    }
+
+    const quotaBefore = Number(user.quotaUsed ?? 0);
+    const quotaAfter = Math.max(0, quotaBefore - quotaRefundCount);
+    const actualQuotaRefundCount = Math.max(0, quotaBefore - quotaAfter);
+    const balanceBefore = Number(user.balanceCents ?? 0);
+    const balanceAfter = balanceBefore + balanceRefundCents;
+    if (actualQuotaRefundCount < 1 && balanceRefundCents < 1) {
+      return;
+    }
+
+    const now = new Date().toISOString();
+    await tx
+      .update(users)
+      .set({
+        quotaUsed: quotaAfter,
+        balanceCents: balanceAfter,
+        updatedAt: now
+      })
+      .where(eq(users.id, user.id));
+
+    const refundParts = [
+      actualQuotaRefundCount > 0 ? `返还 ${actualQuotaRefundCount} 张额度` : "",
+      balanceRefundCents > 0 ? `退回 ${formatMoney(balanceRefundCents, source.currency || user.currency || DEFAULT_CURRENCY)}` : ""
+    ].filter(Boolean);
+    await tx.insert(billingTransactions).values({
+      id: randomUUID(),
+      userId: user.id,
+      workspaceId: source.workspaceId,
+      type: "generation_refund",
+      title: "图像生成失败返还",
+      status: "succeeded",
+      currency: source.currency || user.currency || DEFAULT_CURRENCY,
+      amountCents: balanceRefundCents,
+      balanceBeforeCents: balanceBefore,
+      balanceAfterCents: balanceAfter,
+      quotaBefore,
+      quotaAfter,
+      quotaConsumed: -actualQuotaRefundCount,
+      imageCount: refundImageCount || actualQuotaRefundCount + (unitPriceCents > 0 ? Math.floor(balanceRefundCents / unitPriceCents) : 0),
+      quotaCount: actualQuotaRefundCount,
+      unitPriceCents,
+      relatedId: refundRelatedId,
+      note: [`失败 ${targetFailedCount} 张`, ...refundParts].join("，"),
+      createdByUserId: source.createdByUserId ?? user.id,
+      metadataJson: JSON.stringify({
+        sourceTransactionId: source.id,
+        failedImageCount: targetFailedCount,
+        refundedImageCount: refundImageCount,
+        quotaRefundCount: actualQuotaRefundCount,
+        balanceRefundCents,
+        reason: input.reason?.slice(0, 500)
+      }),
+      createdAt: now
+    });
   });
 }
 
@@ -597,7 +867,7 @@ async function applyPlanPurchaseByBalance(tenant: RequestTenant, plan: typeof su
       .update(users)
       .set({
         planId: plan.id,
-        planExpiresAt: planExpiryFrom(),
+        planExpiresAt: planExpiryFrom(new Date(now), Number(plan.validDays ?? 30)),
         quotaTotal: Number(plan.imageQuota ?? 0),
         quotaUsed: 0,
         storageQuotaBytes: Number(plan.storageQuotaBytes ?? 0),
@@ -628,7 +898,7 @@ async function applyPlanPurchaseByBalance(tenant: RequestTenant, plan: typeof su
       relatedId: null,
       note: "余额购买套餐",
       createdByUserId: user.id,
-      metadataJson: JSON.stringify({ planId: plan.id, storageQuotaBytes: Number(plan.storageQuotaBytes ?? 0) }),
+      metadataJson: JSON.stringify({ planId: plan.id, storageQuotaBytes: Number(plan.storageQuotaBytes ?? 0), planValidDays: Number(plan.validDays ?? 30) }),
       createdAt: now
     });
   });
@@ -668,6 +938,10 @@ async function applyPaidOrder(
     let balanceAfter = balanceBefore;
     let quotaAfter = quotaBefore;
     const now = new Date().toISOString();
+    const orderMetadata = {
+      ...parseRecord(order.metadataJson ?? undefined),
+      ...input.notifyPayload
+    };
 
     if (order.type === "recharge") {
       balanceAfter = balanceBefore + Number(order.amountCents ?? 0);
@@ -686,7 +960,7 @@ async function applyPaidOrder(
         .update(users)
         .set({
           planId: order.planId,
-          planExpiresAt: planExpiryFrom(),
+          planExpiresAt: appleTransactionExpiresAt(orderMetadata) ?? planExpiryFrom(new Date(now), Number(orderMetadata.planValidDays ?? 30)),
           quotaTotal: Number(order.imageQuota ?? 0),
           quotaUsed: 0,
           storageQuotaBytes: Number(order.storageQuotaBytes ?? 0),
@@ -767,6 +1041,47 @@ async function settleUserRedemptionGrants(tx: BillingTransactionClient, userId: 
     .update(redemptionCodeRedemptions)
     .set({ settledAt })
     .where(and(eq(redemptionCodeRedemptions.userId, userId), isNull(redemptionCodeRedemptions.settledAt)));
+}
+
+async function syncAppleSubscriptionEntitlement(
+  order: BillingOrder,
+  plan: typeof subscriptionPlans.$inferSelect,
+  appleTransaction: AppleTransactionInfo
+): Promise<void> {
+  const [user] = await db.select().from(users).where(eq(users.id, order.userId ?? "")).limit(1);
+  const revocationAt = appleTransaction.revocationDate ? new Date(appleTransaction.revocationDate).toISOString() : undefined;
+  const expiresAt = pickPreferredPlanExpiresAt(appleTransaction.expiresAt, user?.planExpiresAt ?? undefined, revocationAt);
+  if (!expiresAt) {
+    return;
+  }
+  const now = new Date().toISOString();
+  await db
+    .update(users)
+    .set({
+      planId: plan.id,
+      planExpiresAt: expiresAt,
+      quotaTotal: Number(plan.imageQuota ?? 0),
+      quotaUsed: 0,
+      storageQuotaBytes: Number(plan.storageQuotaBytes ?? 0),
+      currency: plan.currency || DEFAULT_CURRENCY,
+      updatedAt: now
+    })
+    .where(eq(users.id, order.userId ?? ""));
+  await db
+    .update(billingOrders)
+    .set({
+      providerTradeNo: appleTransaction.transactionId,
+      notifyJson: JSON.stringify({
+        environment: appleTransaction.environment,
+        expiresAt: appleTransaction.expiresAt,
+        expiresDate: appleTransaction.expiresDate,
+        originalTransactionId: appleTransaction.originalTransactionId,
+        productId: appleTransaction.productId,
+        transactionId: appleTransaction.transactionId
+      }),
+      updatedAt: now
+    })
+    .where(eq(billingOrders.id, order.id));
 }
 
 async function markOrderNotify(outTradeNo: string, payload: Record<string, string>, tradeStatus: string): Promise<void> {
@@ -893,15 +1208,23 @@ function toBillingOrder(row: typeof billingOrders.$inferSelect, userEmail?: stri
 }
 
 function toBillingPlan(plan: typeof subscriptionPlans.$inferSelect): BillingPlan {
+  const appleIapEnabled = Number(plan.appleIapEnabled ?? 0) === 1;
+  const appleProductId = plan.appleProductId ?? (appleIapEnabled ? appleProductIdForPlan(plan.id) : undefined);
+
   return {
     id: plan.id,
     name: plan.name,
     description: plan.description ?? undefined,
     imageQuota: Number(plan.imageQuota ?? 0),
     storageQuotaBytes: Number(plan.storageQuotaBytes ?? 0),
+    validDays: Number(plan.validDays ?? 30),
     priceCents: Number(plan.priceCents ?? 0),
     currency: plan.currency,
-    appleProductId: appleProductIdForPlan(plan.id),
+    appleProductId,
+    appleIapEnabled,
+    appleIapVisible: appleIapEnabled,
+    appleStoreEnabled: appleIapEnabled,
+    iosEnabled: appleIapEnabled,
     enabled: Number(plan.enabled ?? 0) === 1,
     sortOrder: Number(plan.sortOrder ?? 0),
     benefits: parseJsonValue(plan.benefitsJson),
@@ -936,9 +1259,47 @@ function getRawAlipayConfig(): Promise<Record<string, unknown>> {
   return getSetting(ALIPAY_SETTINGS_KEY).then((row) => parseRecord(row?.valueJson));
 }
 
+async function getRawAppleIapConfig(): Promise<AppleIapServerConfig> {
+  const row = await getSetting(APPLE_IAP_SETTINGS_KEY);
+  const value = parseRecord(row?.valueJson);
+  const productIdsJson = stringValue(value.productIdsJson) ?? "";
+  const productIds = productIdsJson ? parseAppleProductIdsJson(productIdsJson) : appleIapRuntimeConfig.productIds;
+  const bundleId = stringValue(value.bundleId) ?? appleIapRuntimeConfig.bundleId ?? DEFAULT_APPLE_IAP_BUNDLE_ID;
+  const issuerId = stringValue(value.issuerId) ?? appleIapRuntimeConfig.issuerId ?? "";
+  const keyId = stringValue(value.keyId) ?? appleIapRuntimeConfig.keyId ?? "";
+  const privateKey = stringValue(value.privateKey) ?? appleIapRuntimeConfig.privateKey ?? "";
+  const hasRuntimeConfig = Boolean(appleIapRuntimeConfig.issuerId && appleIapRuntimeConfig.keyId && appleIapRuntimeConfig.privateKey);
+
+  return {
+    enabled: value.enabled === true || (!row && hasRuntimeConfig),
+    bundleId,
+    issuerId,
+    keyId,
+    privateKey,
+    productPrefix: stringValue(value.productPrefix) ?? appleIapRuntimeConfig.productPrefix,
+    productIds,
+    productIdsJson
+  };
+}
+
+function toAppleIapConfigView(value: Record<string, unknown>, updatedAt?: string): AdminAppleIapConfigResponse["appleIap"] {
+  return {
+    enabled: value.enabled === true,
+    bundleId: stringValue(value.bundleId) ?? appleIapRuntimeConfig.bundleId ?? DEFAULT_APPLE_IAP_BUNDLE_ID,
+    issuerId: stringValue(value.issuerId) ?? appleIapRuntimeConfig.issuerId ?? "",
+    keyId: stringValue(value.keyId) ?? appleIapRuntimeConfig.keyId ?? "",
+    privateKey: maskSecret(stringValue(value.privateKey) ?? appleIapRuntimeConfig.privateKey),
+    productPrefix: stringValue(value.productPrefix) ?? appleIapRuntimeConfig.productPrefix,
+    productIdsJson: stringValue(value.productIdsJson) ?? "",
+    updatedAt
+  };
+}
+
 interface AppleTransactionInfo {
   bundleId: string;
   environment?: string;
+  expiresAt?: string;
+  expiresDate?: number;
   originalTransactionId?: string;
   productId: string;
   revocationDate?: number;
@@ -950,14 +1311,33 @@ function appleProductIdForPlan(planId: string): string {
   return appleIapRuntimeConfig.productIds[planId] || `${appleIapRuntimeConfig.productPrefix}${planId}`;
 }
 
-async function fetchAppleTransactionInfo(transactionId: string, environment?: string): Promise<AppleTransactionInfo> {
-  ensureAppleIapConfigured();
+function appleProductIdForPlanRow(plan: typeof subscriptionPlans.$inferSelect, config?: AppleIapServerConfig): string | undefined {
+  return plan.appleProductId || config?.productIds[plan.id] || (config ? `${config.productPrefix}${plan.id}` : appleProductIdForPlan(plan.id));
+}
+
+async function findPlanByAppleProductId(productId: string, config: AppleIapServerConfig): Promise<(typeof subscriptionPlans.$inferSelect) | undefined> {
+  const rows = await db.select().from(subscriptionPlans);
+  return rows.find((plan) => appleProductIdForPlanRow(plan, config) === productId);
+}
+
+interface AppleIapServerConfig {
+  enabled: boolean;
+  bundleId: string;
+  issuerId: string;
+  keyId: string;
+  privateKey: string;
+  productPrefix: string;
+  productIds: Record<string, string>;
+  productIdsJson: string;
+}
+
+async function fetchAppleTransactionInfo(config: AppleIapServerConfig, transactionId: string, environment?: string): Promise<AppleTransactionInfo> {
   const preferredBaseUrls = environment === "Sandbox" ? [APPLE_IAP_SANDBOX_API, APPLE_IAP_PRODUCTION_API] : [APPLE_IAP_PRODUCTION_API, APPLE_IAP_SANDBOX_API];
   let lastError: unknown;
 
   for (const baseUrl of preferredBaseUrls) {
     try {
-      return await fetchAppleTransactionInfoFromBaseUrl(baseUrl, transactionId);
+      return await fetchAppleTransactionInfoFromBaseUrl(config, baseUrl, transactionId);
     } catch (error) {
       lastError = error;
     }
@@ -969,8 +1349,8 @@ async function fetchAppleTransactionInfo(transactionId: string, environment?: st
   throw new BillingError("apple_iap_verification_failed", "Apple 内购交易校验失败。", 502);
 }
 
-async function fetchAppleTransactionInfoFromBaseUrl(baseUrl: string, transactionId: string): Promise<AppleTransactionInfo> {
-  const jwt = createAppleServerApiJwt();
+async function fetchAppleTransactionInfoFromBaseUrl(config: AppleIapServerConfig, baseUrl: string, transactionId: string): Promise<AppleTransactionInfo> {
+  const jwt = createAppleServerApiJwt(config);
   const response = await fetch(`${baseUrl}/inApps/v1/transactions/${encodeURIComponent(transactionId)}`, {
     headers: {
       Authorization: `Bearer ${jwt}`
@@ -991,6 +1371,7 @@ async function fetchAppleTransactionInfoFromBaseUrl(baseUrl: string, transaction
   const bundleId = stringValue(payload.bundleId);
   const productId = stringValue(payload.productId);
   const signedTransactionId = stringValue(payload.transactionId);
+  const expiresDate = timestampMillisValue(payload.expiresDate);
   if (!bundleId || !productId || !signedTransactionId) {
     throw new BillingError("apple_iap_verification_failed", "Apple 交易信息不完整。", 502);
   }
@@ -998,6 +1379,8 @@ async function fetchAppleTransactionInfoFromBaseUrl(baseUrl: string, transaction
   return {
     bundleId,
     environment: stringValue(payload.environment),
+    expiresAt: expiresDate ? new Date(expiresDate).toISOString() : undefined,
+    expiresDate,
     originalTransactionId: stringValue(payload.originalTransactionId),
     productId,
     revocationDate: typeof payload.revocationDate === "number" ? payload.revocationDate : undefined,
@@ -1006,31 +1389,34 @@ async function fetchAppleTransactionInfoFromBaseUrl(baseUrl: string, transaction
   };
 }
 
-function ensureAppleIapConfigured(): void {
-  if (!appleIapRuntimeConfig.bundleId || !appleIapRuntimeConfig.issuerId || !appleIapRuntimeConfig.keyId || !appleIapRuntimeConfig.privateKey) {
+function ensureAppleIapEnabled(config: AppleIapServerConfig): void {
+  if (!config.enabled) {
+    throw new BillingError("apple_iap_not_enabled", "Apple 内购服务端配置未启用。", 500);
+  }
+  if (!config.bundleId || !config.issuerId || !config.keyId || !config.privateKey) {
     throw new BillingError("apple_iap_not_configured", "Apple 内购服务端配置不完整。", 500);
   }
 }
 
-function createAppleServerApiJwt(): string {
+function createAppleServerApiJwt(config: AppleIapServerConfig): string {
   const now = Math.floor(Date.now() / 1000);
   const header = base64UrlJson({
     alg: "ES256",
-    kid: appleIapRuntimeConfig.keyId,
+    kid: config.keyId,
     typ: "JWT"
   });
   const payload = base64UrlJson({
     aud: APPLE_IAP_AUDIENCE,
-    bid: appleIapRuntimeConfig.bundleId,
+    bid: config.bundleId,
     exp: now + 300,
     iat: now,
-    iss: appleIapRuntimeConfig.issuerId
+    iss: config.issuerId
   });
   const signingInput = `${header}.${payload}`;
   const signer = createSign("SHA256");
   signer.update(signingInput, "utf8");
   signer.end();
-  const signature = signer.sign({ key: normalizePrivateKey(appleIapRuntimeConfig.privateKey || ""), dsaEncoding: "ieee-p1363" });
+  const signature = signer.sign({ key: normalizePrivateKey(config.privateKey), dsaEncoding: "ieee-p1363" });
   return `${signingInput}.${signature.toString("base64url")}`;
 }
 
@@ -1053,6 +1439,27 @@ function parseJsonRecord(value: string): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+function parseAppleProductIdsJson(value: string): Record<string, string> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value) as unknown;
+  } catch {
+    throw new BillingError("invalid_apple_iap_config", "Apple 商品映射必须是合法 JSON。");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new BillingError("invalid_apple_iap_config", "Apple 商品映射必须是 JSON 对象。");
+  }
+  const entries = Object.entries(parsed as Record<string, unknown>).flatMap(([key, item]) => {
+    const planId = key.trim();
+    const productId = stringValue(item);
+    return planId && productId ? [[planId, productId] as const] : [];
+  });
+  if (Object.keys(parsed).length !== entries.length) {
+    throw new BillingError("invalid_apple_iap_config", "Apple 商品映射必须是 {\"套餐ID\":\"商品ID\"} 格式。");
+  }
+  return Object.fromEntries(entries);
 }
 
 function ensureAlipayEnabled(config: Record<string, unknown>): void {
@@ -1194,8 +1601,47 @@ function parseRecord(valueJson: string | undefined): Record<string, unknown> {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
 function nonNegativeInteger(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+function timestampMillisValue(value: unknown): number | undefined {
+  const timestamp = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : Number.NaN;
+  return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : undefined;
+}
+
+function appleTransactionExpiresAt(metadata: Record<string, unknown>): string | undefined {
+  const expiresAt = stringValue(metadata.expiresAt);
+  if (expiresAt && Number.isFinite(new Date(expiresAt).getTime())) {
+    return expiresAt;
+  }
+  const expiresDate = timestampMillisValue(metadata.expiresDate);
+  return expiresDate ? new Date(expiresDate).toISOString() : undefined;
+}
+
+function pickPreferredPlanExpiresAt(nextExpiresAt?: string, currentExpiresAt?: string, revocationAt?: string): string | undefined {
+  if (revocationAt) {
+    return revocationAt;
+  }
+  if (!nextExpiresAt) {
+    return currentExpiresAt;
+  }
+  if (!currentExpiresAt) {
+    return nextExpiresAt;
+  }
+  const nextTime = new Date(nextExpiresAt).getTime();
+  const currentTime = new Date(currentExpiresAt).getTime();
+  if (!Number.isFinite(nextTime)) {
+    return currentExpiresAt;
+  }
+  if (!Number.isFinite(currentTime)) {
+    return nextExpiresAt;
+  }
+  return currentTime > nextTime ? currentExpiresAt : nextExpiresAt;
 }
 
 function stringValue(value: unknown): string | undefined {

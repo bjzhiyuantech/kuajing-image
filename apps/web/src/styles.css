@@ -582,6 +582,307 @@ body {
   }
 }
 
+.support-page {
+  min-height: 100%;
+  overflow: auto;
+  background:
+    linear-gradient(180deg, rgb(15 118 110 / 0.08), transparent 24rem),
+    #f8fafc;
+  color: #101828;
+  padding: 36px 0 64px;
+}
+
+.support-hero,
+.support-section,
+.support-final {
+  width: min(1120px, calc(100% - 32px));
+  margin: 0 auto;
+}
+
+.support-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(18rem, 0.38fr);
+  align-items: end;
+  gap: clamp(1.5rem, 4vw, 3rem);
+  border: 1px solid #dbe7e2;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: clamp(28px, 5vw, 56px);
+  box-shadow: 0 22px 60px rgb(15 23 42 / 0.08);
+}
+
+.support-hero__copy {
+  display: grid;
+  min-width: 0;
+  gap: 1rem;
+}
+
+.support-hero__brand {
+  color: #0f766e;
+  font-size: 0.95rem;
+  font-weight: 900;
+  text-decoration: none;
+}
+
+.support-eyebrow {
+  margin: 0;
+  color: #0f766e;
+  font-size: 0.78rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.support-hero h1,
+.support-section h2,
+.support-section h3,
+.support-final h2,
+.support-hero p,
+.support-section p,
+.support-final p {
+  margin: 0;
+  letter-spacing: 0;
+}
+
+.support-hero h1 {
+  max-width: 12em;
+  color: #0f172a;
+  font-size: clamp(2.25rem, 5vw, 4.25rem);
+  font-weight: 950;
+  line-height: 1.05;
+}
+
+.support-hero p {
+  max-width: 46rem;
+  color: #475467;
+  font-size: 1.06rem;
+  font-weight: 650;
+  line-height: 1.8;
+}
+
+.support-hero__meta {
+  display: grid;
+  gap: 0.8rem;
+  margin: 0;
+}
+
+.support-hero__meta div {
+  border: 1px solid #dbe7e2;
+  border-radius: 8px;
+  background: #f8fffc;
+  padding: 1rem;
+}
+
+.support-hero__meta dt {
+  color: #667085;
+  font-size: 0.78rem;
+  font-weight: 850;
+}
+
+.support-hero__meta dd {
+  margin: 0.35rem 0 0;
+  color: #111827;
+  font-size: 0.96rem;
+  font-weight: 850;
+  line-height: 1.55;
+}
+
+.support-section {
+  margin-top: 1rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: clamp(22px, 4vw, 34px);
+}
+
+.support-section__heading {
+  display: grid;
+  gap: 0.45rem;
+  margin-bottom: 1rem;
+}
+
+.support-section h2,
+.support-final h2 {
+  color: #111827;
+  font-size: clamp(1.28rem, 2.3vw, 1.8rem);
+  font-weight: 950;
+  line-height: 1.25;
+}
+
+.support-contact-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.support-contact-card {
+  display: grid;
+  align-content: start;
+  gap: 0.8rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #f9fafb;
+  padding: 1rem;
+}
+
+.support-contact-card__icon,
+.support-guide__title span {
+  display: inline-flex;
+  width: 2.4rem;
+  height: 2.4rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.support-contact-card h3,
+.support-guide h3 {
+  color: #111827;
+  font-size: 1rem;
+  font-weight: 900;
+  line-height: 1.4;
+}
+
+.support-contact-card p,
+.support-guide p,
+.support-faq p,
+.support-final p {
+  color: #475467;
+  font-size: 0.96rem;
+  font-weight: 550;
+  line-height: 1.8;
+}
+
+.support-contact-card a,
+.support-final a {
+  display: inline-flex;
+  width: fit-content;
+  min-height: 2.45rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  border: 1px solid #0f766e;
+  border-radius: 8px;
+  background: #0f766e;
+  color: #ffffff;
+  font-size: 0.9rem;
+  font-weight: 900;
+  line-height: 1;
+  padding: 0 0.85rem;
+  text-decoration: none;
+}
+
+.support-contact-card a:hover,
+.support-final a:hover {
+  background: #115e59;
+}
+
+.support-guide-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.support-guide {
+  display: grid;
+  gap: 0.75rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 1rem;
+}
+
+.support-guide__title {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.support-faq-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.support-faq {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #f9fafb;
+}
+
+.support-faq summary {
+  display: flex;
+  min-height: 3.5rem;
+  align-items: center;
+  gap: 0.75rem;
+  color: #111827;
+  cursor: pointer;
+  font-size: 0.98rem;
+  font-weight: 900;
+  line-height: 1.45;
+  list-style: none;
+  padding: 0.9rem 1rem;
+}
+
+.support-faq summary::-webkit-details-marker {
+  display: none;
+}
+
+.support-faq summary svg {
+  flex: none;
+  color: #0f766e;
+}
+
+.support-faq p {
+  border-top: 1px solid #e5e7eb;
+  padding: 1rem;
+}
+
+.support-final {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  border: 1px solid #bfe4d7;
+  border-radius: 8px;
+  background: #ecfdf5;
+  padding: clamp(22px, 4vw, 34px);
+}
+
+@media (max-width: 860px) {
+  .support-hero,
+  .support-contact-grid,
+  .support-guide-list {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .support-page {
+    padding: 20px 0 40px;
+  }
+
+  .support-hero,
+  .support-section,
+  .support-final {
+    width: min(100% - 20px, 1120px);
+  }
+
+  .support-hero,
+  .support-section,
+  .support-final {
+    padding: 22px;
+  }
+
+  .support-hero p,
+  .support-contact-card p,
+  .support-guide p,
+  .support-faq p,
+  .support-final p {
+    font-size: 0.94rem;
+  }
+}
+
 .auth-workspace,
 .home-page,
 .account-page,
@@ -2347,6 +2648,35 @@ body {
   margin-bottom: 0.8rem;
 }
 
+.admin-table-card__title--split {
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.admin-table-card__title-main {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.admin-table-card__note {
+  margin: -0.35rem 0 0.85rem;
+  color: var(--muted-ink);
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+.admin-plans-save-all {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  padding: 0 0.9rem;
+  white-space: nowrap;
+}
+
 .admin-table-wrap {
   overflow-x: auto;
 }
@@ -2707,7 +3037,13 @@ body {
 }
 
 .admin-edit-table {
-  min-width: 980px;
+  min-width: 1060px;
+}
+
+.admin-plan-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
 }
 
 .admin-billing-card {
@@ -3048,6 +3384,16 @@ body {
 .admin-icon-button:hover:not(:disabled) {
   border-color: #94a3b8;
   background: #f8fafc;
+}
+
+.admin-icon-button--danger {
+  border-color: #fecaca;
+  color: #b42318;
+}
+
+.admin-icon-button--danger:hover:not(:disabled) {
+  border-color: #fca5a5;
+  background: #fff1f2;
 }
 
 .admin-icon-button:disabled {

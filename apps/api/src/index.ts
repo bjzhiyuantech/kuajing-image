@@ -53,6 +53,7 @@ import {
   type AdminUsersResponse,
   type CategoryKitPlannerConfigResponse,
   type EcommerceGenerationConcurrencyConfigResponse,
+  type SaveAppleIapConfigRequest,
   type SaveAlipayConfigRequest,
   type SaveAppReleaseConfigRequest,
   type SaveBillingSettingsRequest,
@@ -104,17 +105,21 @@ import {
   BillingError,
   createRechargeOrder,
   adjustUserBalance,
+  getAppleIapConfig,
   getBillingSummary,
   getAlipayConfig,
   getBillingSettings,
   handleAlipayNotify,
+  handleAppleServerNotification,
   listAdminBillingOrders,
   listAdminBillingTransactions,
   listUserBillingOrders,
   listUserBillingTransactions,
   purchasePlan,
   attachGenerationToCharge,
+  refundGenerationCharge,
   reserveGenerationCharge,
+  saveAppleIapConfig,
   saveAlipayConfig,
   saveBillingSettings,
   verifyAppleInAppPurchase
@@ -245,6 +250,7 @@ const MAX_PROJECT_SNAPSHOT_BYTES = 100 * 1024 * 1024;
 const MAX_PROJECT_NAME_LENGTH = 120;
 const MAX_PLAN_NAME_LENGTH = 120;
 const MAX_PLAN_DESCRIPTION_LENGTH = 1000;
+const MAX_PLAN_VALID_DAYS = 3650;
 const MAX_CURRENCY_LENGTH = 16;
 const DEFAULT_ADMIN_PLAN_ID = "free";
 const DEFAULT_ADMIN_STORAGE_QUOTA_BYTES = 1024 * 1024 * 1024;
@@ -292,6 +298,7 @@ interface EcommerceBatchJob {
   totalScenes: number;
   completedScenes: number;
   records: EcommerceBatchGenerateResponse["records"];
+  charge?: ReservedGenerationCharge;
 }
 
 const runningEcommerceBatchJobs = new Map<string, EcommerceBatchJob>();
@@ -701,7 +708,7 @@ app.use("/api/*", async (c, next) => {
     return disabled;
   }
 
-  if (path === "/api/billing/alipay/notify") {
+  if (path === "/api/billing/alipay/notify" || path === "/api/billing/apple-iap/notifications") {
     await next();
     return;
   }
@@ -1168,7 +1175,7 @@ app.post("/api/ecommerce/images/batch-generate", async (c) => {
     now
   });
 
-  let charge: ReservedGenerationCharge;
+  let charge: ReservedGenerationCharge | undefined;
   try {
     charge = await reserveGenerationCharge({
       tenant,
@@ -1176,6 +1183,7 @@ app.post("/api/ecommerce/images/batch-generate", async (c) => {
     });
     await attachGenerationToCharge(charge.transactionId, jobId);
   } catch (error) {
+    await refundPendingGenerationCharge(tenant, charge, jobId, getEcommerceBatchSceneCount(input) * input.countPerScene, errorToMessage(error));
     await updateEcommerceBatchJob(tenant, jobId, {
       status: "failed",
       message: errorToMessage(error),
@@ -1200,7 +1208,8 @@ app.post("/api/ecommerce/images/batch-generate", async (c) => {
     providerConfigs,
     totalScenes: getEcommerceBatchSceneCount(input),
     completedScenes: 0,
-    records: []
+    records: [],
+    charge
   };
   runningEcommerceBatchJobs.set(job.jobId, job);
   void runEcommerceBatchJob(job.jobId);
@@ -1572,6 +1581,23 @@ app.post("/api/billing/apple-iap/verify", async (c) => {
     return c.json(parsed.error, 400);
   }
   return c.json(await verifyAppleInAppPurchase(await requestTenant(c), parsed.value), 201);
+});
+
+app.post("/api/billing/apple-iap/notifications", async (c) => {
+  const billingDisabled = requireCapability(c, "billing");
+  if (billingDisabled) {
+    return billingDisabled;
+  }
+  const appleIapDisabled = requireCapability(c, "appleIap");
+  if (appleIapDisabled) {
+    return appleIapDisabled;
+  }
+
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+  return c.json(await handleAppleServerNotification(payload.value));
 });
 
 app.post("/api/billing/alipay/notify", async (c) => {
@@ -2372,6 +2398,44 @@ app.put("/api/admin/payment/alipay", async (c) => {
   return c.json(await saveAlipayConfig(parsed.value));
 });
 
+app.get("/api/admin/payment/apple-iap", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  return c.json(await getAppleIapConfig());
+});
+
+app.put("/api/admin/payment/apple-iap", async (c) => {
+  const disabled = requireCapability(c, "billing");
+  if (disabled) {
+    return disabled;
+  }
+
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const payload = await readJson(c.req.raw);
+  if (!payload.ok) {
+    return c.json(payload.error, 400);
+  }
+
+  const parsed = parseAppleIapConfigPayload(payload.value);
+  if (!parsed.ok) {
+    return c.json(parsed.error, 400);
+  }
+
+  return c.json(await saveAppleIapConfig(parsed.value));
+});
+
 app.get("/api/admin/email/smtp", async (c) => {
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
@@ -2554,8 +2618,11 @@ app.post("/api/admin/plans", async (c) => {
     description: planValues.description,
     imageQuota: planValues.imageQuota ?? 0,
     storageQuotaBytes: planValues.storageQuotaBytes ?? 0,
+    validDays: planValues.validDays ?? 30,
     priceCents: planValues.priceCents ?? 0,
     currency: planValues.currency ?? "CNY",
+    appleProductId: planValues.appleProductId,
+    appleIapEnabled: planValues.appleIapEnabled ?? 0,
     enabled: planValues.enabled ?? 1,
     sortOrder: planValues.sortOrder ?? 0,
     benefitsJson: planValues.benefitsJson,
@@ -2612,6 +2679,44 @@ app.put("/api/admin/plans/:planId", async (c) => {
   return c.json({ plan: await getPlanOrThrow(planId) });
 });
 
+app.delete("/api/admin/plans/:planId", async (c) => {
+  const unauthorized = await requireAdminRoute(c);
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const planId = c.req.param("planId");
+  const existing = await getPlanOrUndefined(planId);
+  if (!existing) {
+    return c.json(errorResponse("not_found", "套餐不存在。"), 404);
+  }
+  if (planId === DEFAULT_ADMIN_PLAN_ID) {
+    return c.json(errorResponse("protected_plan", "默认套餐不能删除。"), 409);
+  }
+
+  const defaultPlan = await getPlanOrUndefined(DEFAULT_ADMIN_PLAN_ID);
+  if (!defaultPlan) {
+    return c.json(errorResponse("default_plan_missing", "默认套餐不存在，暂时不能删除套餐。"), 409);
+  }
+
+  const updatedAt = new Date().toISOString();
+  await db.transaction(async (tx) => {
+    await tx
+      .update(users)
+      .set({
+        planId: defaultPlan.id,
+        planExpiresAt: null,
+        quotaTotal: Number(defaultPlan.imageQuota ?? 0),
+        storageQuotaBytes: Number(defaultPlan.storageQuotaBytes ?? 0),
+        updatedAt
+      })
+      .where(eq(users.planId, planId));
+    await tx.delete(subscriptionPlans).where(eq(subscriptionPlans.id, planId));
+  });
+
+  return c.json({ ok: true });
+});
+
 app.put("/api/admin/users/:userId/plan", async (c) => {
   const unauthorized = await requireAdminRoute(c);
   if (unauthorized) {
@@ -2649,7 +2754,7 @@ app.put("/api/admin/users/:userId/plan", async (c) => {
     .update(users)
     .set({
       planId: plan.id,
-      planExpiresAt: plan.id === "free" ? null : planExpiryFrom(now),
+      planExpiresAt: plan.id === "free" ? null : planExpiryFrom(now, Number(plan.validDays ?? 30)),
       quotaTotal,
       storageQuotaBytes,
       updatedAt: now.toISOString()
@@ -2849,6 +2954,7 @@ async function runEcommerceBatchJob(jobId: string): Promise<void> {
         tenant: job.tenant,
         imageCount: plan.imagePlan.length
       });
+      job.charge = charge;
       await attachGenerationToCharge(charge.transactionId, job.jobId);
       await updateEcommerceBatchJob(job.tenant, job.jobId, {
         message: `后台文本模型已规划 ${plan.imagePlan.length} 张图，服务端开始按队列并发生成。`
@@ -2956,10 +3062,10 @@ async function runEcommerceBatchJob(jobId: string): Promise<void> {
         } finally {
           job.completedScenes += 1;
           job.records = records.flatMap((record) => (record ? [record] : []));
-          const failedCount = job.records.filter((record) => record.status === "failed").length;
+          const failedImageCount = countFailedEcommerceImages(job, false);
           await updateEcommerceBatchJob(job.tenant, job.jobId, {
             status: "running",
-            message: `服务端并发生成中：${job.completedScenes}/${job.totalScenes} 个场景完成，${failedCount} 个失败。`,
+            message: `服务端并发生成中：${job.completedScenes}/${job.totalScenes} 个场景完成，${failedImageCount} 张失败。`,
             completedScenes: job.completedScenes,
             records: job.records
           });
@@ -2967,14 +3073,16 @@ async function runEcommerceBatchJob(jobId: string): Promise<void> {
       }
     );
 
+    const failedImageCount = countFailedEcommerceImages(job, false);
     const failedCount = job.records.filter((record) => record.status === "failed").length;
-    const succeededCount = job.records.length - failedCount;
-    const finishedStatus = succeededCount > 0 && failedCount > 0 ? "partial" : succeededCount > 0 ? "succeeded" : "failed";
+    const succeededCount = job.records.filter((record) => record.status === "succeeded" || record.status === "partial").length;
+    const finishedStatus = succeededCount > 0 && failedImageCount > 0 ? "partial" : succeededCount > 0 ? "succeeded" : "failed";
+    await refundFailedEcommerceImages(job, "批量生成完成后返还失败图片额度。");
     await updateEcommerceBatchJob(job.tenant, job.jobId, {
       status: finishedStatus,
       message:
-        succeededCount > 0 && failedCount > 0
-          ? `批量生成部分完成：${succeededCount} 个场景成功，${failedCount} 个失败。`
+        succeededCount > 0 && failedImageCount > 0
+          ? `批量生成部分完成：${succeededCount} 个场景有结果，${failedImageCount} 张失败。`
           : succeededCount > 0
             ? `批量生成完成：${succeededCount} 个场景成功。`
             : "批量生成失败，请检查上游图像接口或稍后重试。",
@@ -2998,6 +3106,7 @@ async function runEcommerceBatchJob(jobId: string): Promise<void> {
       message: errorToMessage(error)
     });
     const message = errorToMessage(error);
+    await refundFailedEcommerceImages(job, message, true);
     await updateEcommerceBatchJob(job.tenant, job.jobId, {
       status: "failed",
       message: `批量任务失败：${message}`,
@@ -3044,6 +3153,69 @@ async function notifyEcommerceJobFinished(input: {
   } catch (error) {
     console.warn(`[notifications] failed to create ecommerce completion notification jobId=${input.jobId}`, error);
   }
+}
+
+async function refundFailedEcommerceImages(job: EcommerceBatchJob, reason?: string, includeUnfinished = false): Promise<void> {
+  if (!job.charge) {
+    return;
+  }
+
+  const failedImageCount = countFailedEcommerceImages(job, includeUnfinished);
+  if (failedImageCount < 1) {
+    return;
+  }
+
+  try {
+    await refundGenerationCharge({
+      tenant: job.tenant,
+      transactionId: job.charge.transactionId,
+      generationId: job.jobId,
+      failedImageCount,
+      reason
+    });
+  } catch (error) {
+    console.warn(`[billing] failed to refund ecommerce generation charge jobId=${job.jobId}`, error);
+  }
+}
+
+async function refundPendingGenerationCharge(
+  tenant: RequestTenant,
+  charge: ReservedGenerationCharge | undefined,
+  generationId: string,
+  imageCount: number,
+  reason?: string
+): Promise<void> {
+  if (!charge || imageCount < 1) {
+    return;
+  }
+  try {
+    await refundGenerationCharge({
+      tenant,
+      transactionId: charge.transactionId,
+      generationId,
+      failedImageCount: imageCount,
+      reason
+    });
+  } catch (error) {
+    console.warn(`[billing] failed to refund pending generation charge transactionId=${charge.transactionId}`, error);
+  }
+}
+
+function countFailedEcommerceImages(job: EcommerceBatchJob, includeUnfinished: boolean): number {
+  const failedFromRecords = job.records.reduce((total, record) => {
+    const count = typeof record.count === "number" && record.count > 0 ? record.count : Math.max(1, record.outputs?.length ?? 1);
+    if (record.outputs?.length) {
+      return total + record.outputs.filter((output) => output.status === "failed").length;
+    }
+    return record.status === "failed" ? total + count : total;
+  }, 0);
+  if (!includeUnfinished) {
+    return failedFromRecords;
+  }
+
+  const completedRecordCount = Math.min(job.totalScenes, job.records.length);
+  const unfinishedScenes = Math.max(0, job.totalScenes - completedRecordCount);
+  return failedFromRecords + unfinishedScenes * Math.max(1, job.input.countPerScene ?? 1);
 }
 
 function logEcommerceCategoryKit(event: string, details: Record<string, unknown>): void {
@@ -3193,7 +3365,7 @@ async function requireCapabilityForPath(c: Context, path: string): Promise<Respo
   if (path === "/api/ecommerce/images/batch-generate") {
     return requireEcommerceBatchCapabilitiesForRequest(c);
   }
-  if (path === "/api/billing/apple-iap/verify") {
+  if (path === "/api/billing/apple-iap/verify" || path === "/api/billing/apple-iap/notifications") {
     return requireCapability(c, "billing") ?? requireCapability(c, "appleIap");
   }
   for (const rule of PATH_CAPABILITY_RULES) {
@@ -3279,8 +3451,11 @@ type PlanMutation = Partial<{
   description: string | null;
   imageQuota: number;
   storageQuotaBytes: number;
+  validDays: number;
   priceCents: number;
   currency: string;
+  appleProductId: string | null;
+  appleIapEnabled: number;
   enabled: number;
   sortOrder: number;
   benefitsJson: string | null;
@@ -3661,8 +3836,14 @@ function toPlan(plan: typeof subscriptionPlans.$inferSelect): Plan {
     description: plan.description ?? undefined,
     imageQuota: Number(plan.imageQuota ?? 0),
     storageQuotaBytes: Number(plan.storageQuotaBytes ?? 0),
+    validDays: Number(plan.validDays ?? 30),
     priceCents: Number(plan.priceCents ?? 0),
     currency: plan.currency,
+    appleProductId: plan.appleProductId ?? undefined,
+    appleIapEnabled: Number(plan.appleIapEnabled ?? 0) === 1,
+    appleIapVisible: Number(plan.appleIapEnabled ?? 0) === 1,
+    appleStoreEnabled: Number(plan.appleIapEnabled ?? 0) === 1,
+    iosEnabled: Number(plan.appleIapEnabled ?? 0) === 1,
     enabled: Number(plan.enabled ?? 0) === 1,
     sortOrder: Number(plan.sortOrder ?? 0),
     benefits: parseJsonValue(plan.benefitsJson),
@@ -4043,6 +4224,7 @@ function parsePlanPayload(input: unknown, requireName: boolean): ParseResult<Pla
   const numberFields = [
     ["imageQuota", "image_quota", "生图额度必须是非负整数。"],
     ["storageQuotaBytes", "storage_quota_bytes", "存储额度必须是非负整数。"],
+    ["validDays", "valid_days", "有效天数必须是非负整数。"],
     ["priceCents", "price_cents", "价格必须是非负整数。"],
     ["sortOrder", "sort_order", "排序值必须是非负整数。"]
   ] as const;
@@ -4060,6 +4242,13 @@ function parsePlanPayload(input: unknown, requireName: boolean): ParseResult<Pla
     }
   }
 
+  if (value.validDays !== undefined && (value.validDays < 1 || value.validDays > MAX_PLAN_VALID_DAYS)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_plan_valid_days", `套餐有效天数必须在 1-${MAX_PLAN_VALID_DAYS} 天之间。`)
+    };
+  }
+
   if (Object.hasOwn(input, "currency")) {
     const currency = parseLimitedString(input.currency, MAX_CURRENCY_LENGTH)?.toUpperCase();
     if (!currency) {
@@ -4071,6 +4260,31 @@ function parsePlanPayload(input: unknown, requireName: boolean): ParseResult<Pla
     value.currency = currency;
   } else if (requireName) {
     value.currency = "CNY";
+  }
+
+  if (Object.hasOwn(input, "appleProductId") || Object.hasOwn(input, "apple_product_id")) {
+    const rawAppleProductId = Object.hasOwn(input, "appleProductId") ? input.appleProductId : input.apple_product_id;
+    const appleProductId = parseNullableLimitedString(rawAppleProductId, 255);
+    if (appleProductId === undefined) {
+      return {
+        ok: false,
+        error: errorResponse("invalid_apple_product_id", "Apple 商品 ID 不能超过 255 个字符。")
+      };
+    }
+    value.appleProductId = appleProductId;
+  }
+
+  if (Object.hasOwn(input, "appleIapEnabled") || Object.hasOwn(input, "apple_iap_enabled") || Object.hasOwn(input, "appleStoreEnabled") || Object.hasOwn(input, "iosEnabled")) {
+    const rawAppleIapEnabled = input.appleIapEnabled ?? input.apple_iap_enabled ?? input.appleStoreEnabled ?? input.iosEnabled;
+    if (typeof rawAppleIapEnabled !== "boolean") {
+      return {
+        ok: false,
+        error: errorResponse("invalid_apple_iap_enabled", "Apple 商店上架开关必须是布尔值。")
+      };
+    }
+    value.appleIapEnabled = rawAppleIapEnabled ? 1 : 0;
+  } else if (requireName) {
+    value.appleIapEnabled = 0;
   }
 
   if (Object.hasOwn(input, "enabled")) {
@@ -4096,6 +4310,7 @@ function parsePlanPayload(input: unknown, requireName: boolean): ParseResult<Pla
   if (requireName) {
     value.imageQuota ??= 0;
     value.storageQuotaBytes ??= 0;
+    value.validDays ??= 30;
     value.priceCents ??= 0;
     value.sortOrder ??= 0;
   }
@@ -5162,6 +5377,36 @@ function parseAlipayConfigPayload(input: unknown): ParseResult<SaveAlipayConfigR
       returnUrl: stringValue(input.returnUrl),
       gateway: stringValue(input.gateway),
       signType: stringValue(input.signType)
+    }
+  };
+}
+
+function parseAppleIapConfigPayload(input: unknown): ParseResult<SaveAppleIapConfigRequest> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_apple_iap_config", "Apple 内购配置内容必须是 JSON 对象。")
+    };
+  }
+
+  if (typeof input.enabled !== "boolean") {
+    return {
+      ok: false,
+      error: errorResponse("invalid_apple_iap_config", "enabled 必须是布尔值。")
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      enabled: input.enabled,
+      bundleId: stringValue(input.bundleId),
+      issuerId: stringValue(input.issuerId),
+      keyId: stringValue(input.keyId),
+      privateKey: stringValue(input.privateKey),
+      preservePrivateKey: input.preservePrivateKey === true,
+      productPrefix: stringValue(input.productPrefix),
+      productIdsJson: stringValue(input.productIdsJson)
     }
   };
 }

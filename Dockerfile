@@ -33,7 +33,9 @@ RUN if [ -n "$NPM_CONFIG_REGISTRY" ]; then pnpm config set registry "$NPM_CONFIG
 
 COPY . .
 
-RUN pnpm build
+RUN pnpm --filter @gpt-image-canvas/shared build \
+  && pnpm --filter @gpt-image-canvas/web build \
+  && pnpm --filter @gpt-image-canvas/api build
 
 FROM base AS runner
 

@@ -1252,9 +1252,14 @@ export interface Plan {
   description?: string;
   imageQuota: number;
   storageQuotaBytes: number;
+  validDays: number;
   priceCents: number;
   currency: string;
   appleProductId?: string;
+  appleIapEnabled?: boolean;
+  appleIapVisible?: boolean;
+  appleStoreEnabled?: boolean;
+  iosEnabled?: boolean;
   enabled: boolean;
   sortOrder: number;
   benefits?: unknown;
@@ -1497,6 +1502,32 @@ export interface SaveAlipayConfigRequest {
   returnUrl?: string;
   gateway?: string;
   signType?: "RSA2" | "RSA" | string;
+}
+
+export interface AppleIapConfigView {
+  enabled: boolean;
+  bundleId: string;
+  issuerId: string;
+  keyId: string;
+  privateKey: MaskedSecret;
+  productPrefix: string;
+  productIdsJson: string;
+  updatedAt?: string;
+}
+
+export interface AdminAppleIapConfigResponse {
+  appleIap: AppleIapConfigView;
+}
+
+export interface SaveAppleIapConfigRequest {
+  enabled: boolean;
+  bundleId?: string;
+  issuerId?: string;
+  keyId?: string;
+  privateKey?: string;
+  preservePrivateKey?: boolean;
+  productPrefix?: string;
+  productIdsJson?: string;
 }
 
 export interface AdminAdjustBalanceRequest {

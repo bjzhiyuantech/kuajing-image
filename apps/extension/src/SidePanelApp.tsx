@@ -93,6 +93,7 @@ const MOCK_BILLING_PLANS: BillingPlan[] = [
     description: "适合少量商品图优化。",
     imageQuota: 120,
     storageQuotaBytes: 2 * 1024 * 1024 * 1024,
+    validDays: 30,
     priceCents: 9900,
     currency: "CNY",
     enabled: true,
@@ -107,6 +108,7 @@ const MOCK_BILLING_PLANS: BillingPlan[] = [
     description: "适合稳定上新和多店铺运营。",
     imageQuota: 600,
     storageQuotaBytes: 10 * 1024 * 1024 * 1024,
+    validDays: 30,
     priceCents: 39900,
     currency: "CNY",
     enabled: true,
@@ -1150,6 +1152,7 @@ function normalizePlan(value: unknown, index = 0): BillingPlan | null {
     description: firstString(source, ["description", "desc", "subtitle"]),
     imageQuota: firstNumber(source, ["imageQuota", "quotaTotal", "quota", "generationQuota"]) ?? 0,
     storageQuotaBytes: firstNumber(source, ["storageQuotaBytes", "storageQuota", "storageBytes"]) ?? 0,
+    validDays: firstNumber(source, ["validDays", "valid_days", "durationDays"]) ?? 30,
     priceCents: firstNumber(source, ["priceCents", "amountCents", "price"]) ?? 0,
     currency: firstString(source, ["currency"]) ?? "CNY",
     enabled: source.enabled === undefined ? true : Boolean(source.enabled),
@@ -1494,6 +1497,7 @@ function planBenefits(plan: BillingPlan): string[] {
 
 function billingTransactionLabel(type: string): string {
   if (type === "generation") return "生图扣费";
+  if (type === "generation_refund") return "失败返还";
   if (type === "admin_adjustment") return "后台调整";
   if (type === "recharge") return "充值";
   if (type === "plan_purchase") return "套餐购买";
