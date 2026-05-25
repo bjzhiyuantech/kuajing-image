@@ -1,5 +1,9 @@
 import { readFileSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { resolve } from "node:path";
+
+const require = createRequire(import.meta.url);
+const serviceDomains = require("../../../config/service-domains.json");
 
 loadDotEnv(resolve("../..", ".env"));
 loadDotEnv(resolve(".env"));
@@ -16,7 +20,7 @@ const apiBaseUrl =
     : buildTarget === "dev"
       ? process.env.EXTENSION_DEV_API_BASE_URL
       : process.env.EXTENSION_PROD_API_BASE_URL) ||
-  (buildTarget === "local" ? "http://127.0.0.1:8787" : buildTarget === "dev" ? "https://dev.neimou.com" : "https://ai.neimou.com");
+  (buildTarget === "local" ? serviceDomains.localApiBaseUrl : buildTarget === "dev" ? serviceDomains.devApiBaseUrl : serviceDomains.prodApiBaseUrl);
 const extensionName =
   process.env.VITE_EXTENSION_NAME ||
   (buildTarget === "local"

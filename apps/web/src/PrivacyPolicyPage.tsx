@@ -1,7 +1,9 @@
 import { useEffect } from "react";
+import serviceDomains from "../../../config/service-domains.json";
 import { BRAND_NAME } from "./Brand";
 
 const effectiveDate = "2026-05-16";
+const SUPPORT_URL = `${serviceDomains.prodApiBaseUrl}/support`;
 
 const summaryItems = [
   "我们仅为提供账号登录、图片生成、任务管理、额度/订单、开票和客服支持等服务处理必要信息。",
@@ -83,7 +85,7 @@ const policySections = [
     title: "十、政策更新与联系",
     paragraphs: [
       "我们可能根据服务变化、法律法规或平台规则更新本隐私政策，并在 App、网页端或相关页面展示更新后的版本。重大变更会以适当方式提示你。",
-      `如你对本隐私政策或个人信息处理有疑问，可在 ${BRAND_NAME} App 内通过“我的 - 联系我们”添加企业微信客服，或访问 https://ai.neimou.com/ 获取支持入口。`
+      `如你对本隐私政策或个人信息处理有疑问，可在 ${BRAND_NAME} App 内通过“我的 - 联系我们”添加企业微信客服，或访问 ${SUPPORT_URL} 获取支持入口。`
     ]
   }
 ] as const;

@@ -1,4 +1,5 @@
 import { mkdirSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { config as loadDotEnv } from "dotenv";
@@ -6,6 +7,12 @@ import { config as loadDotEnv } from "dotenv";
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolve(moduleDir, "..");
 const repoRoot = resolve(packageRoot, "../..");
+const require = createRequire(import.meta.url);
+const serviceDomains = require("../../../config/service-domains.json") as {
+  localApiBaseUrl: string;
+  devApiBaseUrl: string;
+  prodApiBaseUrl: string;
+};
 
 for (const envPath of [resolve(repoRoot, ".env"), resolve(packageRoot, ".env"), resolve(process.cwd(), ".env")]) {
   loadDotEnv({ path: envPath, quiet: true });
@@ -120,9 +127,9 @@ export const apnsRuntimeConfig = {
 };
 
 export const extensionReleaseRuntimeConfig = {
-  localApiBaseUrl: emptyToUndefined(process.env.EXTENSION_LOCAL_API_BASE_URL) ?? "http://127.0.0.1:8787",
-  devApiBaseUrl: emptyToUndefined(process.env.EXTENSION_DEV_API_BASE_URL) ?? "https://dev.neimou.com",
-  prodApiBaseUrl: emptyToUndefined(process.env.EXTENSION_PROD_API_BASE_URL) ?? "https://ai.neimou.com",
+  localApiBaseUrl: emptyToUndefined(process.env.EXTENSION_LOCAL_API_BASE_URL) ?? serviceDomains.localApiBaseUrl,
+  devApiBaseUrl: emptyToUndefined(process.env.EXTENSION_DEV_API_BASE_URL) ?? serviceDomains.devApiBaseUrl,
+  prodApiBaseUrl: emptyToUndefined(process.env.EXTENSION_PROD_API_BASE_URL) ?? serviceDomains.prodApiBaseUrl,
   localVersion: emptyToUndefined(process.env.EXTENSION_LOCAL_VERSION) ?? "",
   devVersion: emptyToUndefined(process.env.EXTENSION_DEV_VERSION) ?? "",
   prodVersion: emptyToUndefined(process.env.EXTENSION_PROD_VERSION) ?? "",

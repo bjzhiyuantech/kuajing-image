@@ -123,7 +123,7 @@ pnpm --filter @gpt-image-canvas/extension build:prod
 构建产物：
 
 - `apps/extension/dist-dev`：插件名称为“商图AI助手 Dev”，默认 API 为 `https://dev.neimou.com`。
-- `apps/extension/dist-prod`：插件名称为“商图AI助手”，默认 API 为 `https://imagen.neimou.com`。
+- `apps/extension/dist-prod`：插件名称为“商图AI助手”，默认 API 为 `https://shangtu.tech`。
 
 Chrome/Edge 中打开扩展管理页，启用开发者模式后，分别“加载已解压的扩展程序”并选择对应目录即可。
 
@@ -363,7 +363,7 @@ PUBLIC_PORT=80
 如果外部 Nginx 配了两个域名，推荐这样代理：
 
 ```text
-imagen.neimou.com -> 127.0.0.1:8787
+shangtu.tech -> 127.0.0.1:8787
 dev.neimou.com    -> 127.0.0.1:8790
 ```
 

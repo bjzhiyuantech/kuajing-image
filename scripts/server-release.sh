@@ -13,10 +13,12 @@ COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.server-bluegreen.yml}"
 DOWNLOADS_DIR="${DOWNLOADS_DIR:-downloads}"
 ACTIVE_FILE="${ACTIVE_FILE:-deploy/bluegreen/active}"
 DEV_UPSTREAM_FILE="${DEV_UPSTREAM_FILE:-deploy/nginx/dev-upstream.conf}"
-PROD_BASE_URL="${PROD_BASE_URL:-https://ai.neimou.com}"
-DEV_BASE_URL="${DEV_BASE_URL:-https://dev.neimou.com}"
-
 ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+DEFAULT_PROD_BASE_URL="$(cd "$ROOT_DIR" && node -p "require('./config/service-domains.json').prodApiBaseUrl" 2>/dev/null || printf 'https://shangtu.tech')"
+DEFAULT_DEV_BASE_URL="$(cd "$ROOT_DIR" && node -p "require('./config/service-domains.json').devApiBaseUrl" 2>/dev/null || printf 'https://dev.neimou.com')"
+PROD_BASE_URL="${PROD_BASE_URL:-$DEFAULT_PROD_BASE_URL}"
+DEV_BASE_URL="${DEV_BASE_URL:-$DEFAULT_DEV_BASE_URL}"
+
 cd "$ROOT_DIR"
 
 require_command() {

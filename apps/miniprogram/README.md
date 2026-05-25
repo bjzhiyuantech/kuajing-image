@@ -20,7 +20,7 @@ apps/miniprogram
 
 ```text
 开发版/体验版：https://dev.neimou.com
-正式版：https://ai.neimou.com
+正式版：https://shangtu.tech
 ```
 
 如需本地联调，可以临时在 `app.js` 中把 `apiBaseUrl` 改成 `http://127.0.0.1:8787`，并在微信开发者工具详情/本地设置中打开“不校验合法域名、web-view、TLS 版本以及 HTTPS 证书”。

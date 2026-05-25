@@ -1,6 +1,14 @@
+import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import react from "@vitejs/plugin-react";
 import { defineConfig, loadEnv } from "vite";
+
+const require = createRequire(import.meta.url);
+const serviceDomains = require("../../config/service-domains.json") as {
+  localApiBaseUrl: string;
+  devApiBaseUrl: string;
+  prodApiBaseUrl: string;
+};
 
 function extensionApiBaseUrl(): string {
   const rawTarget = process.env.EXTENSION_BUILD_TARGET;
@@ -13,10 +21,10 @@ function extensionApiBaseUrl(): string {
         ? process.env.EXTENSION_DEV_API_BASE_URL || process.env.VITE_EXTENSION_API_BASE_URL
         : process.env.EXTENSION_PROD_API_BASE_URL || process.env.VITE_EXTENSION_API_BASE_URL;
   return target === "local"
-    ? processBaseUrl || env.EXTENSION_LOCAL_API_BASE_URL || "http://127.0.0.1:8787"
+    ? processBaseUrl || env.EXTENSION_LOCAL_API_BASE_URL || serviceDomains.localApiBaseUrl
     : target === "dev"
-      ? processBaseUrl || env.EXTENSION_DEV_API_BASE_URL || "https://dev.neimou.com"
-      : processBaseUrl || env.EXTENSION_PROD_API_BASE_URL || "https://ai.neimou.com";
+      ? processBaseUrl || env.EXTENSION_DEV_API_BASE_URL || serviceDomains.devApiBaseUrl
+      : processBaseUrl || env.EXTENSION_PROD_API_BASE_URL || serviceDomains.prodApiBaseUrl;
 }
 
 export default defineConfig({

@@ -1,0 +1,5 @@
+{
+  "localApiBaseUrl": "http://127.0.0.1:8787",
+  "devApiBaseUrl": "https://dev.neimou.com",
+  "prodApiBaseUrl": "https://shangtu.tech"
+}

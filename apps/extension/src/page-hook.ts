@@ -1,3 +1,5 @@
+import serviceDomains from "../../../config/service-domains.json";
+
 (() => {
 const IMAGE_URL_PATTERN = /(?:https?:)?\/\/[^"'()<>\s\\]+?\.(?:jpg|jpeg|png|webp|gif|bmp|avif)(?:[._!-][^"'()<>\s\\?]*)?(?:\?[^"'()<>\s\\]*)?/giu;
 const IMAGE_REQUEST_URL_PATTERN =
@@ -52,12 +54,26 @@ const PROPERTY_LABELS = new Set([
   "颜色分类",
   "SKU"
 ]);
-const OWN_WEB_APP_HOSTS = new Set(["ai.neimou.com", "dev.neimou.com", "localhost", "127.0.0.1", "0.0.0.0"]);
+const OWN_WEB_APP_HOSTS = new Set([
+  hostFromBaseUrl(serviceDomains.prodApiBaseUrl),
+  hostFromBaseUrl(serviceDomains.devApiBaseUrl),
+  "localhost",
+  "127.0.0.1",
+  "0.0.0.0"
+]);
 const MAX_TEXT_INSPECTION_LENGTH = 160_000;
 
 function shouldSkipPageCapture(): boolean {
   const host = window.location.hostname.toLowerCase();
   return OWN_WEB_APP_HOSTS.has(host);
+}
+
+function hostFromBaseUrl(value: string): string {
+  try {
+    return new URL(value).hostname.toLowerCase();
+  } catch {
+    return value.replace(/^https?:\/\//iu, "").replace(/\/.*$/u, "").toLowerCase();
+  }
 }
 
 if (shouldSkipPageCapture()) {

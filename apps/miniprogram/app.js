@@ -1,9 +1,11 @@
+const { DEV_API_BASE_URL, PROD_API_BASE_URL } = require("./utils/service-domains");
+
 function resolveDefaultApiBaseUrl() {
   try {
     const envVersion = wx.getAccountInfoSync().miniProgram.envVersion;
-    return envVersion === "release" ? "https://ai.neimou.com" : "https://dev.neimou.com";
+    return envVersion === "release" ? PROD_API_BASE_URL : DEV_API_BASE_URL;
   } catch (error) {
-    return "https://dev.neimou.com";
+    return DEV_API_BASE_URL;
   }
 }
 

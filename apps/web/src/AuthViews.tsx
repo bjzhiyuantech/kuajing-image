@@ -40,6 +40,7 @@ import {
 import type React from "react";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import QRCode from "qrcode";
+import serviceDomains from "../../../config/service-domains.json";
 import { PHONE_VERIFICATION_REQUIRED_CODE, PHONE_VERIFICATION_REQUIRED_MESSAGE, authFetch, getStoredAuthToken, readApiError, readApiErrorDetail, type AuthSession, type AuthUser } from "./authClient";
 import { BRAND_TAGLINE, BrandMark, BrandName } from "./Brand";
 import { AdminHelpPanel } from "./HelpCenter";
@@ -92,6 +93,8 @@ const adminTabs: Array<{ id: AdminTab; label: string }> = [
 ];
 
 const DEFAULT_ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
+const DEV_API_BASE_URL = serviceDomains.devApiBaseUrl;
+const PROD_API_BASE_URL = serviceDomains.prodApiBaseUrl;
 const DEFAULT_SEEDANCE_MODEL = "doubao-seedance-2-0-fast-260128";
 const textModelModuleOptions: Array<{ id: CategoryKitPlannerModule; label: string }> = [
   { id: "prompt-optimizer", label: "提示词优化" },
@@ -6508,7 +6511,7 @@ function parseExtensionReleaseTargetForm(value: unknown, target: "dev" | "prod")
   const release = isRecord(value) ? value : {};
   const releaseNotes = Array.isArray(release.releaseNotes) ? release.releaseNotes.filter((item): item is string => typeof item === "string") : [];
   return {
-    apiBaseUrl: stringFrom(release.apiBaseUrl) || (target === "dev" ? "https://dev.neimou.com" : "https://ai.neimou.com"),
+    apiBaseUrl: stringFrom(release.apiBaseUrl) || (target === "dev" ? DEV_API_BASE_URL : PROD_API_BASE_URL),
     version: stringFrom(release.version),
     downloadUrl: stringFrom(release.downloadUrl),
     latestDownloadUrl: stringFrom(release.latestDownloadUrl),
@@ -6952,7 +6955,7 @@ function createImageModelForm(provider: ImageModelProvider, index: number): Imag
 function createExtensionReleaseForm(): ExtensionReleaseFormState {
   return {
     dev: {
-      apiBaseUrl: "https://dev.neimou.com",
+      apiBaseUrl: DEV_API_BASE_URL,
       version: "",
       downloadUrl: "",
       latestDownloadUrl: "",
@@ -6963,7 +6966,7 @@ function createExtensionReleaseForm(): ExtensionReleaseFormState {
       releaseNotesText: "优化插件体验并修复已知问题。"
     },
     prod: {
-      apiBaseUrl: "https://ai.neimou.com",
+      apiBaseUrl: PROD_API_BASE_URL,
       version: "",
       downloadUrl: "",
       latestDownloadUrl: "",

@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 import type { ChangeEvent, ClipboardEvent, FormEvent, PointerEvent } from "react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
+import serviceDomains from "../../../config/service-domains.json";
 import {
   ECOMMERCE_AUTO_CATEGORY_KIT_SCENE_IDS,
   ECOMMERCE_DETAIL_CATEGORY_KIT_SCENE_IDS,
@@ -72,7 +73,9 @@ type ReplacementReferenceItem = {
 const ACTIVE_BATCH_JOB_STORAGE_KEY = "activeBatchJob";
 const AUTH_STORAGE_KEY = "auth";
 const TASK_NOTIFICATION_STORAGE_KEY = "taskNotifications";
-const DEFAULT_API_BASE_URL = import.meta.env.VITE_EXTENSION_API_BASE_URL || "https://ai.neimou.com";
+const DEFAULT_API_BASE_URL = import.meta.env.VITE_EXTENSION_API_BASE_URL || serviceDomains.prodApiBaseUrl;
+const LOCAL_API_HOST = new URL(serviceDomains.localApiBaseUrl).host;
+const PROD_API_HOST = new URL(serviceDomains.prodApiBaseUrl).host;
 const UPDATE_DIALOG_DISMISSED_STORAGE_KEY = "dismissedExtensionUpdateDialog";
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const GALLERY_PREVIEW_TAB_STORAGE_KEY = "galleryPreviewTabsByWindow";
@@ -6372,7 +6375,7 @@ export function SidePanelApp() {
                 <div className="about-contact-grid">
                   <div>
                     <span>官网</span>
-            <strong>{extensionTarget() === "local" ? "127.0.0.1:8787" : "ai.neimou.com"}</strong>
+                    <strong>{extensionTarget() === "local" ? LOCAL_API_HOST : PROD_API_HOST}</strong>
                   </div>
                   <div>
                     <span>客服微信</span>
